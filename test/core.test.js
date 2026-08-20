@@ -16,7 +16,7 @@ test('default ownership configuration is loaded', () => {
   assert.equal(config.ownerName, 'Only Fixa Dev');
   assert.equal(config.authorName, 'Rashid Hussain');
   assert.equal(config.ownerNumber, '923448170040');
-  assert.equal(config.commandPrefix, '.');
+  assert.equal(config.commandPrefix, '!');
   assert.equal(config.botName, 'Black Clover');
 });
 
