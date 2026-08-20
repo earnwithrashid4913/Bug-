@@ -1,4 +1,4 @@
-# Black Clover
+# Black Clover ♣️
 
 A clean, configurable WhatsApp bot built with Baileys and maintained under the **Only Fixa Dev** project.
 
@@ -51,15 +51,15 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BOT_NAME` | `Black Clover` | Display name for logs and commands. |
+| `BOT_NAME` | `Black Clover ♣️` | Display name for logs and commands. |
 | `OWNER_NAME` | `Only Fixa Dev` | Global owner display name. |
 | `OWNER_NUMBER` | `923448170040` | Primary owner number; digits only. |
 | `OWNER_NUMBERS` | empty | Optional comma-separated additional owner numbers. |
 | `AUTHOR_NAME` | `Rashid Hussain` | Developer display name. |
 | `AUTHOR_NUMBER` | `923448170040` | Developer number; digits only. |
-| `OWNER_LINK` | supplied wa.me URL | Owner contact shown by `.owner`. |
-| `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `.owner` and `.menu`. |
-| `COMMAND_PREFIX` | `.` | One to four non-whitespace command characters. |
+| `OWNER_LINK` | supplied wa.me URL | Owner contact shown by `!owner`. |
+| `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
+| `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
 | `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
 | `AUTH_METHOD` | `pairing` | `pairing` or `qr`. |
 | `PAIRING_NUMBER` | unset | Required for pairing on a non-interactive host. |
@@ -80,10 +80,10 @@ For a cloud host, set a real linking phone number:
 
 ```dotenv
 AUTH_METHOD=pairing
-PAIRING_NUMBER=923448170040
+PAIRING_NUMBER=your_linking_phone_number
 ```
 
-Run `npm start`, read the pairing code from the logs, and enter it in WhatsApp. The number must include its country code and contain digits only.
+Replace `your_linking_phone_number` with the phone being linked, then run `npm start` and enter the emitted code in WhatsApp. This is a connection setting, not an owner/contact field. The number must include its country code and contain digits only.
 
 ### QR code
 
@@ -99,27 +99,27 @@ The `session/` directory contains authentication credentials and private keys. I
 
 ## Authorized-device compatibility testing
 
-Use only WhatsApp accounts and groups you own or administer. After pairing a real account, test standard WhatsApp behaviors with `.menu`, `.ping`, `.owner`, and—inside an authorized group—`.hidetag` or `.tagall`. The bot uses standard text, message edits, mentions, and supported interactive-response parsing; it does not send malformed UI payloads. Automated tests validate the command parser and supported message shapes, but a real WhatsApp pairing/message exchange must be performed by the owner.
+Use only WhatsApp accounts and groups you own or administer. After pairing a real account, test standard WhatsApp behaviors with `!menu`, `!ping`, `!owner`, and—inside an authorized group—`!hidetag` or `!tagall`. The bot uses standard text, message edits, mentions, and supported interactive-response parsing; it does not send malformed UI payloads. Automated tests validate the command parser and supported message shapes, but a real WhatsApp pairing/message exchange must be performed by the owner.
 
 ## Commands
 
-Use the configured prefix (shown below as `.`).
+Use the configured prefix (shown below as `!`).
 
 | Command | Access | Description |
 | --- | --- | --- |
-| `.menu`, `.help` | Everyone in public mode | Show command help. |
-| `.ping` | Everyone in public mode | Check command latency. |
-| `.status` | Everyone in public mode | Show basic process status. |
-| `.owner`, `.creator` | Everyone in public mode | Show configured owner/contact details. |
-| `.request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
-| `.hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
-| `.tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
-| `.idch <channel URL>` | Everyone in public mode | Look up a WhatsApp channel invite. |
-| `.public`, `.self` | Owner | Toggle command visibility. |
-| `.addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`. |
-| `.delprem <number>` | Owner | Remove premium access. |
-| `.listprem` | Owner | List active premium records. |
-| `.restart` | Owner | Exit cleanly for a host-managed restart. |
+| `!menu`, `!help` | Everyone in public mode | Show command help. |
+| `!ping` | Everyone in public mode | Check command latency. |
+| `!status` | Everyone in public mode | Show basic process status. |
+| `!owner`, `!creator` | Everyone in public mode | Show configured owner/contact details. |
+| `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
+| `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
+| `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
+| `!idch <channel URL>` | Everyone in public mode | Look up a WhatsApp channel invite. |
+| `!public`, `!self` | Owner | Toggle command visibility. |
+| `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`. |
+| `!delprem <number>` | Owner | Remove premium access. |
+| `!listprem` | Owner | List active premium records. |
+| `!restart` | Owner | Exit cleanly for a host-managed restart. |
 
 ## Local setup
 
@@ -191,7 +191,7 @@ npm install
 npm start
 ```
 
-Use a process manager/platform restart policy if you use the owner-only `.restart` command.
+Use a process manager/platform restart policy if you use the owner-only `!restart` command.
 
 ## Troubleshooting
 

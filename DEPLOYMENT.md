@@ -1,4 +1,4 @@
-# Black Clover Deployment Guide
+# Black Clover ♣️ Deployment Guide
 
 This application is a long-running WhatsApp client. It is best deployed as a **single background worker** with persistent storage. It does not provide an HTTP website, so a web-service deployment is not the appropriate default.
 
@@ -56,10 +56,10 @@ Set these values in `.env` or your host's environment-variable page:
 
 ```dotenv
 AUTH_METHOD=pairing
-PAIRING_NUMBER=923448170040
+PAIRING_NUMBER=your_linking_phone_number
 ```
 
-`PAIRING_NUMBER` is the phone that will be linked to the bot. It must be digits only, include the country code, and can be different from the global owner number.
+`PAIRING_NUMBER` is the phone that will be linked to the bot. Replace the placeholder with that device's real number; do not copy an owner/contact number here unless it is genuinely the account being linked. It must be digits only and include the country code.
 
 Start the process:
 
@@ -82,12 +82,12 @@ Run `npm start` and scan the terminal QR code. Pairing/QR login requires real Wh
 After logs report that the bot is connected, send:
 
 ```text
-.menu
-.ping
-.owner
+!menu
+!ping
+!owner
 ```
 
-Use the prefix configured by `COMMAND_PREFIX` if it is not `.`.
+Use the prefix configured by `COMMAND_PREFIX` if it is not `!`.
 
 ## 7. Deploy to Render
 
@@ -117,7 +117,7 @@ Railway discovers the application through `package.json`; `railway.toml` sets th
 
    ```dotenv
    AUTH_METHOD=pairing
-   PAIRING_NUMBER=923448170040
+   PAIRING_NUMBER=your_linking_phone_number
    AUTH_DIR=/var/data/session
    DATA_DIR=/var/data/data
    ```

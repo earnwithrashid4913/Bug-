@@ -17,23 +17,23 @@ test('default ownership configuration is loaded', () => {
   assert.equal(config.authorName, 'Rashid Hussain');
   assert.equal(config.ownerNumber, '923448170040');
   assert.equal(config.commandPrefix, '!');
-  assert.equal(config.botName, 'Black Clover');
+  assert.equal(config.botName, 'Black Clover ♣️');
 });
 
 test('command parser accepts only the configured prefix', () => {
-  assert.deepEqual(commandFromText('.addprem 923448170040 30d'), {
+  assert.deepEqual(commandFromText('!addprem 15551234567 30d'), {
     name: 'addprem',
-    args: ['923448170040', '30d'],
-    text: '923448170040 30d'
+    args: ['15551234567', '30d'],
+    text: '15551234567 30d'
   });
-  assert.equal(commandFromText('addprem 923448170040'), undefined);
+  assert.equal(commandFromText('addprem 15551234567'), undefined);
 });
 
 test('message text extraction handles standard and interactive messages', () => {
-  assert.equal(extractText({ conversation: '.ping' }), '.ping');
+  assert.equal(extractText({ conversation: '!ping' }), '!ping');
   assert.equal(
-    extractText({ interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{"id":".menu"}' } } }),
-    '.menu'
+    extractText({ interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{"id":"!menu"}' } } }),
+    '!menu'
   );
 });
 
@@ -42,18 +42,18 @@ test('LID senders resolve to mapped phone-number JIDs when available', async () 
     decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
     signalRepository: {
       lidMapping: {
-        getPNForLID: async (jid) => (jid === '12345@lid' ? '923448170040@s.whatsapp.net' : null)
+        getPNForLID: async (jid) => (jid === '12345@lid' ? '15551234567@s.whatsapp.net' : null)
       }
     }
   };
 
-  assert.equal(await resolveJid(socket, '12345@lid'), '923448170040@s.whatsapp.net');
+  assert.equal(await resolveJid(socket, '12345@lid'), '15551234567@s.whatsapp.net');
 });
 
 test('command handler dispatches a menu response', async () => {
   const sent = [];
   const socket = {
-    user: { id: '923448170040@s.whatsapp.net' },
+    user: { id: '15551234567@s.whatsapp.net' },
     decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
     sendMessage: async (chatId, payload, options) => {
       sent.push({ chatId, payload, options });
@@ -62,11 +62,11 @@ test('command handler dispatches a menu response', async () => {
   };
   const message = {
     key: {
-      remoteJid: '923448170041@s.whatsapp.net',
-      participant: '923448170041@s.whatsapp.net',
+      remoteJid: '15551234568@s.whatsapp.net',
+      participant: '15551234568@s.whatsapp.net',
       fromMe: false
     },
-    message: { conversation: '.menu' }
+    message: { conversation: '!menu' }
   };
 
   await handleMessage(socket, message);
@@ -87,10 +87,10 @@ test('premium store writes, lists, and removes an active record', async () => {
   const store = new PremiumStore(databasePath);
 
   try {
-    const record = await store.add('923448170040', '1d');
-    assert.equal(record.id, '923448170040');
+    const record = await store.add('15551234567', '1d');
+    assert.equal(record.id, '15551234567');
     assert.equal((await store.list()).length, 1);
-    assert.equal(await store.remove('923448170040'), true);
+    assert.equal(await store.remove('15551234567'), true);
     assert.deepEqual(await store.list(), []);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });

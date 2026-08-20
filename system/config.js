@@ -6,14 +6,14 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const DEFAULTS = Object.freeze({
-  botName: 'Black Clover',
+  botName: 'Black Clover ♣️',
   ownerName: 'Only Fixa Dev',
   ownerNumber: '923448170040',
   authorName: 'Rashid Hussain',
   authorNumber: '923448170040',
   ownerLink: 'https://wa.me/923448170040',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
-  commandPrefix: '.',
+  commandPrefix: '!',
   publicMode: true,
   authMethod: 'pairing',
   authDir: './session',
