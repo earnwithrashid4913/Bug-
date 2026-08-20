@@ -61,7 +61,6 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
 | `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
-| `IMAGE_RESPONSES` | `true` | Send one selected image with supported command responses; set false for text-only mode. |
 | `AUTH_METHOD` | `pairing` | `pairing` or `qr`. |
 | `PAIRING_NUMBER` | unset | Required for pairing on a non-interactive host. |
 | `AUTH_DIR` | `./session` | Baileys credentials path; keep private and persistent. |
@@ -72,17 +71,6 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | `LOG_LEVEL` | `info` | Pino log level. |
 
 Configuration validates phone numbers, URLs, booleans, delays, prefixes, and authentication method at startup. Invalid values fail early with an actionable error.
-
-## Image response system
-
-Supported command responses use one remotely hosted Black Clover image with a caption. The URL metadata is organized in [`system/images.js`](system/images.js), where each function has its own image set and selection is random when a set has multiple images. Image bytes are not loaded during startup; Baileys fetches only the selected URL for the active response.
-
-- Set `IMAGE_RESPONSES=false` for text-only replies.
-- Remote image upload failures automatically fall back to the original text reply.
-- `!status` is the active/alive response in this project.
-- There is no welcome event or separate alive/profile command in the current bot architecture, so none was invented solely for image delivery.
-- See [IMAGE_CREDITS.md](IMAGE_CREDITS.md) for source attribution, resolution metadata, and function mapping.
-- Run `npm run verify:images` on a host with normal outbound HTTPS access to preflight remote image transport without loading full image files into memory.
 
 ## Authentication and session handling
 
@@ -221,7 +209,6 @@ For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
 - Project configuration and migration: **Rashid Hussain**
 - Global project owner: **Only Fixa Dev**
 - WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys) and its respective maintainers
-- Remote wallpaper attribution and resolution mapping: [IMAGE_CREDITS.md](IMAGE_CREDITS.md)
 - The Apache-2.0 license file supplied with the base source is retained. Third-party dependency licenses remain with their respective authors.
 
 ## License
