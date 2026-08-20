@@ -22,6 +22,7 @@ const DEFAULTS = Object.freeze({
   dataDir: './data',
   welcomeMessage: 'Welcome @user to *@group*!',
   goodbyeMessage: 'Goodbye @user from *@group*.',
+  groqModel: 'openai/gpt-oss-20b',
   reconnectBaseDelayMs: 3_000,
   reconnectMaxDelayMs: 60_000,
   logLevel: 'info'
@@ -155,6 +156,8 @@ function loadConfig() {
     groupSettingsDbPath,
     welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
     goodbyeMessage: readString('GOODBYE_MESSAGE', DEFAULTS.goodbyeMessage),
+    groqApiKey: readString('GROQ_API_KEY', ''),
+    groqModel: readString('GROQ_MODEL', DEFAULTS.groqModel),
     reconnectBaseDelayMs,
     reconnectMaxDelayMs,
     logLevel,

@@ -71,11 +71,15 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | `GROUP_SETTINGS_DB_PATH` | `DATA_DIR/groups.json` | Optional persistent group greeting settings file. |
 | `WELCOME_MESSAGE` | supplied default | Greeting template; supports `@user` and `@group`. |
 | `GOODBYE_MESSAGE` | supplied default | Farewell template; supports `@user` and `@group`. |
+| `GROQ_API_KEY` | unset | Optional secret used by `!ai`; do not commit it. |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` | Groq model used by `!ai`. |
 | `RECONNECT_BASE_DELAY_MS` | `3000` | Initial reconnect delay. |
 | `RECONNECT_MAX_DELAY_MS` | `60000` | Maximum reconnect delay. |
 | `LOG_LEVEL` | `info` | Pino log level. |
 
 Configuration validates phone numbers, URLs, booleans, delays, prefixes, and authentication method at startup. Invalid values fail early with an actionable error.
+
+`!ai` is optional. It sends the command prompt to Groq only when you explicitly configure `GROQ_API_KEY`; do not submit secrets or sensitive personal data to an external AI provider.
 
 ## Authentication and session handling
 
@@ -119,6 +123,9 @@ Use the configured prefix (shown below as `!`).
 | `!sticker`, `!s` | Everyone in public mode | Reply to an image to create a standard WebP sticker. |
 | `!toimg`, `!sticker2img` | Everyone in public mode | Reply to a sticker to convert it to an image. |
 | `!jid`, `!chatid` | Everyone in public mode | Show the current chat and sender JIDs. |
+| `!getpp`, `!pp`, `!profilepic`, `!avatar` | Everyone in public mode | Show a profile picture from a group, quoted/mentioned user, or number. |
+| `!setpp` | Owner | Reply to an image to update the bot profile picture. |
+| `!ai`, `!ask`, `!ia`, `!groq` | Everyone in public mode | Ask Groq AI when `GROQ_API_KEY` is configured. |
 | `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
 | `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
 | `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |

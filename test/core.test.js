@@ -17,6 +17,7 @@ const {
   resolveJid
 } = require('../system/lib/message');
 const { groupSettings, handleGroupParticipantsUpdate, renderGroupMessage } = require('../system/group-events');
+const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = require('../system/lib/ai');
 const { GroupSettingsStore } = require('../system/lib/group-settings');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
@@ -30,6 +31,7 @@ test('default ownership configuration is loaded', () => {
   assert.equal(config.botName, 'Black Clover ♣️');
   assert.equal(config.stickerPackname, 'Black Clover ♣️');
   assert.equal(config.stickerAuthor, 'Only Fixa Dev');
+  assert.equal(config.groqModel, 'openai/gpt-oss-20b');
 });
 
 test('command parser accepts only the configured prefix', () => {
@@ -100,6 +102,18 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
   assert.equal(image.subarray(1, 4).toString('ascii'), 'PNG');
 });
 
+test('AI request builder is bounded and requires an explicitly configured key', async () => {
+  const request = buildGroqRequest('Hello', 'openai/gpt-oss-20b', 'Black Clover ♣️');
+  assert.equal(request.model, 'openai/gpt-oss-20b');
+  assert.equal(request.messages[1].content, 'Hello');
+  await assert.rejects(askGroq({ apiKey: '', model: request.model, prompt: 'Hello', botName: 'Black Clover ♣️' }), /not configured/);
+
+  const sender = 'ai-test@s.whatsapp.net';
+  reserveAiRequest(sender);
+  assert.throws(() => reserveAiRequest(sender), /Please wait/);
+  assert.equal(AI_REQUEST_COOLDOWN_MS, 30_000);
+});
+
 test('LID senders resolve to mapped phone-number JIDs when available', async () => {
   const socket = {
     decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
@@ -161,6 +175,31 @@ test('sticker command provides usage text when no image is supplied', async () =
 
   assert.equal(sent.length, 1);
   assert.match(sent[0].payload.text, /Reply to an image/);
+});
+
+test('profile picture command uses the current Baileys profile picture API', async () => {
+  const sent = [];
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
+    profilePictureUrl: async () => 'https://example.invalid/profile.jpg',
+    sendMessage: async (chatId, payload, options) => {
+      sent.push({ chatId, payload, options });
+      return { key: { id: 'test-message' } };
+    }
+  };
+
+  await handleMessage(socket, {
+    key: {
+      remoteJid: '15551234568@s.whatsapp.net',
+      participant: '15551234568@s.whatsapp.net',
+      fromMe: false
+    },
+    message: { conversation: '!getpp' }
+  });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.image.url, 'https://example.invalid/profile.jpg');
 });
 
 test('group management help is available only to a group admin', async () => {

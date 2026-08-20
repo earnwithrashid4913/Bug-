@@ -11,6 +11,7 @@ const {
   normalizeJid,
   resolveJid
 } = require('./lib/message');
+const { askGroq, reserveAiRequest } = require('./lib/ai');
 const { PremiumStore } = require('./lib/premium');
 const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
 
@@ -77,7 +78,10 @@ function helpText() {
     `${p}owner — owner and channel details`,
     `${p}sticker — reply to an image to create a sticker`,
     `${p}toimg — reply to a sticker to convert it to an image`,
+    `${p}getpp — get a group, mentioned, quoted, or supplied profile picture`,
+    `${p}setpp — owner-only bot profile picture update from an image`,
     `${p}jid — show the current chat and sender JIDs`,
+    `${p}ai <question> — ask the configured AI provider`,
     `${p}request <message> — send a feature request to the owner`,
     '',
     '*Group admin commands*',
@@ -327,6 +331,74 @@ async function handleGroupManagement(socket, context, command, group) {
   }
 }
 
+async function handleAiCommand(socket, context, command) {
+  const prompt = command.text.trim();
+  if (!prompt) {
+    await socket.sendMessage(
+      context.chatId,
+      { text: `Usage: ${config.commandPrefix}ai <question>` },
+      { quoted: context.raw }
+    );
+    return;
+  }
+
+  try {
+    reserveAiRequest(context.sender);
+    const answer = await askGroq({
+      apiKey: config.groqApiKey,
+      model: config.groqModel,
+      prompt,
+      botName: config.botName
+    });
+    await socket.sendMessage(context.chatId, { text: answer }, { quoted: context.raw });
+  } catch (error) {
+    console.error('[ai] Request failed:', error);
+    await socket.sendMessage(context.chatId, { text: `AI unavailable: ${error.message}` }, { quoted: context.raw });
+  }
+}
+
+async function handleGetProfilePhoto(socket, context, command) {
+  let target = getTargetJid(context.raw) || (context.isGroup ? context.chatId : context.sender);
+  if (command.args[0]) {
+    const number = normalizePhoneNumber(command.args[0], 'Profile picture number');
+    target = `${number}@s.whatsapp.net`;
+  }
+
+  try {
+    const profilePictureUrl = await socket.profilePictureUrl(target, 'image');
+    if (!profilePictureUrl) throw new Error('No profile picture is available.');
+    await socket.sendMessage(
+      context.chatId,
+      { image: { url: profilePictureUrl }, caption: `Profile picture: ${target.split('@')[0]}` },
+      { quoted: context.raw }
+    );
+  } catch (error) {
+    await socket.sendMessage(context.chatId, { text: `Could not get profile picture: ${error.message}` }, { quoted: context.raw });
+  }
+}
+
+async function handleSetBotProfilePhoto(socket, context) {
+  if (!(await requireOwner(socket, context))) return;
+  const imageMessage = getImageMessage(context.raw);
+  if (!imageMessage) {
+    await socket.sendMessage(
+      context.chatId,
+      { text: `Reply to an image with ${config.commandPrefix}setpp to update the bot profile picture.` },
+      { quoted: context.raw }
+    );
+    return;
+  }
+
+  try {
+    const imageBuffer = await downloadMediaBuffer(imageMessage, 'image');
+    await socket.updateProfilePicture(socket.user.id, imageBuffer);
+    await socket.sendMessage(context.chatId, { text: 'Bot profile picture updated.' }, { quoted: context.raw });
+  } catch (error) {
+    console.error('[setpp] Profile picture update failed:', error);
+    await socket.sendMessage(context.chatId, { text: `Could not update profile picture: ${error.message}` }, { quoted: context.raw });
+  }
+}
+
 async function handleMessage(socket, rawMessage) {
   const context = await getMessageContext(socket, rawMessage);
   if (!context.chatId || !context.sender || !context.text) return;
@@ -423,6 +495,24 @@ async function handleMessage(socket, rawMessage) {
         },
         { quoted: context.raw }
       );
+      break;
+
+    case 'getpp':
+    case 'pp':
+    case 'profilepic':
+    case 'avatar':
+      await handleGetProfilePhoto(socket, context, command);
+      break;
+
+    case 'setpp':
+      await handleSetBotProfilePhoto(socket, context);
+      break;
+
+    case 'ai':
+    case 'ask':
+    case 'ia':
+    case 'groq':
+      await handleAiCommand(socket, context, command);
       break;
 
     case 'status':
