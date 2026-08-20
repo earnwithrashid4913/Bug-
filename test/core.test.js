@@ -9,8 +9,10 @@ const test = require('node:test');
 const { config } = require('../system/config');
 const handleMessage = require('../system/handler');
 const { commandFromText } = handleMessage;
-const { extractText, resolveJid } = require('../system/lib/message');
+const { extractText, getImageMessage, resolveJid } = require('../system/lib/message');
+const { createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
+const sharp = require('sharp');
 
 test('default ownership configuration is loaded', () => {
   assert.equal(config.ownerName, 'Only Fixa Dev');
@@ -18,6 +20,8 @@ test('default ownership configuration is loaded', () => {
   assert.equal(config.ownerNumber, '923448170040');
   assert.equal(config.commandPrefix, '!');
   assert.equal(config.botName, 'Black Clover ♣️');
+  assert.equal(config.stickerPackname, 'Black Clover ♣️');
+  assert.equal(config.stickerAuthor, 'Only Fixa Dev');
 });
 
 test('command parser accepts only the configured prefix', () => {
@@ -35,6 +39,35 @@ test('message text extraction handles standard and interactive messages', () => 
     extractText({ interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{"id":"!menu"}' } } }),
     '!menu'
   );
+});
+
+test('image messages can be found directly or in a quoted message', () => {
+  const direct = { message: { imageMessage: { mimetype: 'image/png', url: 'direct' } } };
+  const quoted = {
+    message: {
+      extendedTextMessage: {
+        contextInfo: {
+          quotedMessage: { imageMessage: { mimetype: 'image/jpeg', url: 'quoted' } }
+        }
+      }
+    }
+  };
+
+  assert.equal(getImageMessage(direct).url, 'direct');
+  assert.equal(getImageMessage(quoted).url, 'quoted');
+});
+
+test('image sticker converter emits a WebP sticker with pack metadata', async () => {
+  const source = await sharp({
+    create: { width: 32, height: 20, channels: 4, background: { r: 20, g: 120, b: 80, alpha: 1 } }
+  }).png().toBuffer();
+  const sticker = await createImageSticker(source, {
+    packname: 'Black Clover ♣️',
+    author: 'Only Fixa Dev'
+  });
+
+  assert.equal(sticker.subarray(0, 4).toString('ascii'), 'RIFF');
+  assert.equal(sticker.subarray(8, 12).toString('ascii'), 'WEBP');
 });
 
 test('LID senders resolve to mapped phone-number JIDs when available', async () => {
@@ -74,6 +107,30 @@ test('command handler dispatches a menu response', async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chatId, message.key.remoteJid);
   assert.match(sent[0].payload.text, /General commands/);
+});
+
+test('sticker command provides usage text when no image is supplied', async () => {
+  const sent = [];
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
+    sendMessage: async (chatId, payload, options) => {
+      sent.push({ chatId, payload, options });
+      return { key: { id: 'test-message' } };
+    }
+  };
+
+  await handleMessage(socket, {
+    key: {
+      remoteJid: '15551234568@s.whatsapp.net',
+      participant: '15551234568@s.whatsapp.net',
+      fromMe: false
+    },
+    message: { conversation: '!sticker' }
+  });
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].payload.text, /Reply to an image/);
 });
 
 test('premium duration parser validates supported units', () => {

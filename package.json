@@ -9,7 +9,7 @@
     "start": "node index.js",
     "start:dry": "BOT_DRY_RUN=true node index.js",
     "test": "node --test",
-    "check": "node --check index.js && node --check system/config.js && node --check system/handler.js && node --check system/lib/premium.js && node --check system/lib/message.js"
+    "check": "node --check index.js && node --check system/config.js && node --check system/handler.js && node --check system/lib/sticker.js && node --check system/lib/premium.js && node --check system/lib/message.js"
   },
   "keywords": [
     "whatsapp",
@@ -21,14 +21,16 @@
   "author": "Rashid Hussain",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "chalk": "^4.1.2",
     "dotenv": "^16.6.1",
+    "node-webpmux": "^3.2.1",
     "pino": "^9.9.4",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.35.3"
   }
 }

@@ -16,7 +16,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 - Multi-file Baileys authentication with pairing-code and terminal QR options
 - Configurable bot identity, owner records, command prefix, public/self mode, paths, and reconnect tuning
 - Exponential, bounded reconnect handling that avoids looping on logout, bad-session, and connection-replaced events
-- Safe command handler for menu, ping, status, owner details, group mentions, channel lookup, request forwarding, and premium records
+- Safe command handler for menu, ping, status, owner details, group mentions, channel lookup, request forwarding, premium records, and image-to-sticker conversion
 - Owner-only public/self mode, premium management, and host-managed restart command
 - Persistent premium data with atomic writes and expiry cleanup
 - Render Background Worker and Railway configuration
@@ -28,7 +28,7 @@ The supplied base contained commands and malformed WhatsApp payloads intended to
 
 ## Requirements
 
-- Node.js **20.x LTS** is recommended. `package.json` requires Node.js `>=20` because the installed Baileys implementation requires Node 20 or newer.
+- Node.js **20.9+ LTS** is recommended. The sticker converter uses Sharp, which requires Node.js 20.9 or newer.
 - Baileys is pinned to the current official `7.0.0-rc14` release candidate. WhatsApp Web protocol changes can require a future upstream update.
 - An active WhatsApp account to link to the bot.
 - Persistent storage for `AUTH_DIR` in production.
@@ -60,6 +60,8 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | `OWNER_LINK` | supplied wa.me URL | Owner contact shown by `!owner`. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
+| `STICKER_PACKNAME` | `Black Clover ♣️` | Sticker pack name used by `!sticker`. |
+| `STICKER_AUTHOR` | `Only Fixa Dev` | Sticker publisher used by `!sticker`. |
 | `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
 | `AUTH_METHOD` | `pairing` | `pairing` or `qr`. |
 | `PAIRING_NUMBER` | unset | Required for pairing on a non-interactive host. |
@@ -111,6 +113,7 @@ Use the configured prefix (shown below as `!`).
 | `!ping` | Everyone in public mode | Check command latency. |
 | `!status` | Everyone in public mode | Show basic process status. |
 | `!owner`, `!creator` | Everyone in public mode | Show configured owner/contact details. |
+| `!sticker`, `!s` | Everyone in public mode | Reply to an image to create a standard WebP sticker. |
 | `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
 | `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
 | `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
@@ -140,7 +143,7 @@ npm run check
 
 ## Termux setup
 
-Termux can run the bot if it provides Node.js 20 or newer and stays running:
+Termux can run the bot if it provides Node.js 20.9 or newer and stays running:
 
 ```bash
 pkg update && pkg upgrade

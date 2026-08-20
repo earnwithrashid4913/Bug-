@@ -131,7 +131,7 @@ A Railway volume is required if you want the WhatsApp session and premium databa
 
 This project needs no custom Docker image as long as the selected Node.js egg/image provides Node 20 or newer.
 
-1. Create one server with a Node.js 20+ image and persistent server storage.
+1. Create one server with a Node.js 20.9+ image and persistent server storage.
 2. Upload/clone the repository.
 3. Install dependencies with `npm install` (or `npm ci` when using the lockfile).
 4. Set the environment variables in Pterodactyl's startup/configuration panel.

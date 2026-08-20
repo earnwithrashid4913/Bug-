@@ -25,6 +25,23 @@ function safeInteractiveId(message) {
   }
 }
 
+function getContextInfo(message) {
+  const unwrapped = unwrapMessage(message);
+  for (const value of Object.values(unwrapped)) {
+    if (value && typeof value === 'object' && value.contextInfo) return value.contextInfo;
+  }
+  return undefined;
+}
+
+function getImageMessage(rawMessage) {
+  const message = unwrapMessage(rawMessage?.message);
+  if (message.imageMessage) return message.imageMessage;
+
+  const quotedMessage = getContextInfo(message)?.quotedMessage;
+  const quoted = unwrapMessage(quotedMessage);
+  return quoted.imageMessage || undefined;
+}
+
 function extractText(rawMessage) {
   const message = unwrapMessage(rawMessage);
   return (
@@ -82,6 +99,8 @@ async function getMessageContext(socket, rawMessage) {
 
 module.exports = {
   extractText,
+  getContextInfo,
+  getImageMessage,
   getMessageContext,
   normalizeJid,
   resolveJid,

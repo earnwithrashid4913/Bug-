@@ -1,8 +1,10 @@
 'use strict';
 
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { config, normalizePhoneNumber } = require('./config');
-const { getMessageContext, normalizeJid, resolveJid } = require('./lib/message');
+const { getImageMessage, getMessageContext, normalizeJid, resolveJid } = require('./lib/message');
 const { PremiumStore } = require('./lib/premium');
+const { MAX_STICKER_INPUT_BYTES, createImageSticker } = require('./lib/sticker');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
 const reportCooldowns = new Map();
@@ -39,6 +41,22 @@ function formatDate(timestamp) {
   }).format(new Date(timestamp));
 }
 
+async function downloadImageBuffer(imageMessage) {
+  const stream = await downloadContentFromMessage(imageMessage, 'image');
+  const chunks = [];
+  let totalBytes = 0;
+
+  for await (const chunk of stream) {
+    totalBytes += chunk.length;
+    if (totalBytes > MAX_STICKER_INPUT_BYTES) {
+      throw new Error('Image is too large for sticker conversion. Maximum size is 12 MB.');
+    }
+    chunks.push(chunk);
+  }
+
+  return Buffer.concat(chunks, totalBytes);
+}
+
 function helpText() {
   const p = config.commandPrefix;
   return [
@@ -49,6 +67,7 @@ function helpText() {
     `${p}ping — check bot latency`,
     `${p}status — show bot status`,
     `${p}owner — owner and channel details`,
+    `${p}sticker — reply to an image to create a sticker`,
     `${p}request <message> — send a feature request to the owner`,
     '',
     '*Group admin commands*',
@@ -175,6 +194,36 @@ async function handleMessage(socket, rawMessage) {
       const started = Date.now();
       const sent = await socket.sendMessage(context.chatId, { text: 'Checking latency…' }, { quoted: context.raw });
       await socket.sendMessage(context.chatId, { text: `Pong: ${Date.now() - started}ms`, edit: sent.key });
+      break;
+    }
+
+    case 'sticker':
+    case 's': {
+      const imageMessage = getImageMessage(rawMessage);
+      if (!imageMessage) {
+        await socket.sendMessage(
+          context.chatId,
+          { text: `Reply to an image with ${config.commandPrefix}sticker to create a sticker.` },
+          { quoted: context.raw }
+        );
+        break;
+      }
+
+      try {
+        const imageBuffer = await downloadImageBuffer(imageMessage);
+        const sticker = await createImageSticker(imageBuffer, {
+          packname: config.stickerPackname,
+          author: config.stickerAuthor
+        });
+        await socket.sendMessage(context.chatId, { sticker }, { quoted: context.raw });
+      } catch (error) {
+        console.error('[sticker] Conversion failed:', error);
+        await socket.sendMessage(
+          context.chatId,
+          { text: `Could not create a sticker: ${error.message}` },
+          { quoted: context.raw }
+        );
+      }
       break;
     }
 
