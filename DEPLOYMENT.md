@@ -125,7 +125,7 @@ Railway discovers the application through `package.json`; `railway.toml` sets th
 4. Set `BOT_NAME` and any other configuration values you want to override.
 5. Deploy and obtain the pairing code from Railway logs.
 
-A Railway volume is required if you want the WhatsApp session and premium database to survive redeployments.
+A Railway volume is required if you want the WhatsApp session, premium database, and group greeting settings to survive redeployments.
 
 ## 9. Deploy to Pterodactyl
 

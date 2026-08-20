@@ -14,6 +14,7 @@ const {
 } = require('@whiskeysockets/baileys');
 
 const { config } = require('./system/config');
+const { handleGroupParticipantsUpdate } = require('./system/group-events');
 const handleMessage = require('./system/handler');
 
 let activeSocket;
@@ -193,6 +194,11 @@ async function startBot() {
     });
     socket.ev.on('messages.upsert', (upsert) => {
       void handleMessages(socket, upsert);
+    });
+    socket.ev.on('group-participants.update', (update) => {
+      void handleGroupParticipantsUpdate(socket, update).catch((error) => {
+        console.error('[group-events] Failed to process participant update:', error);
+      });
     });
 
     console.log(chalk.cyan(`[startup] ${config.botName} started. Auth directory: ${config.authDir}`));

@@ -2,9 +2,17 @@
 
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { config, normalizePhoneNumber } = require('./config');
-const { getImageMessage, getMessageContext, normalizeJid, resolveJid } = require('./lib/message');
+const { groupSettings } = require('./group-events');
+const {
+  getImageMessage,
+  getMessageContext,
+  getStickerMessage,
+  getTargetJid,
+  normalizeJid,
+  resolveJid
+} = require('./lib/message');
 const { PremiumStore } = require('./lib/premium');
-const { MAX_STICKER_INPUT_BYTES, createImageSticker } = require('./lib/sticker');
+const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
 const reportCooldowns = new Map();
@@ -41,8 +49,8 @@ function formatDate(timestamp) {
   }).format(new Date(timestamp));
 }
 
-async function downloadImageBuffer(imageMessage) {
-  const stream = await downloadContentFromMessage(imageMessage, 'image');
+async function downloadMediaBuffer(mediaMessage, mediaType) {
+  const stream = await downloadContentFromMessage(mediaMessage, mediaType);
   const chunks = [];
   let totalBytes = 0;
 
@@ -65,14 +73,18 @@ function helpText() {
     '*General commands*',
     `${p}menu — show this menu`,
     `${p}ping — check bot latency`,
-    `${p}status — show bot status`,
+    `${p}status / ${p}alive — show bot status`,
     `${p}owner — owner and channel details`,
     `${p}sticker — reply to an image to create a sticker`,
+    `${p}toimg — reply to a sticker to convert it to an image`,
+    `${p}jid — show the current chat and sender JIDs`,
     `${p}request <message> — send a feature request to the owner`,
     '',
     '*Group admin commands*',
     `${p}hidetag <message> — send a hidden mention to the group`,
     `${p}tagall <message> — mention group members`,
+    `${p}welcome / ${p}goodbye <on|off|status> — manage group greetings`,
+    `${p}gname, ${p}gdesc, ${p}add, ${p}kick, ${p}promote, ${p}demote, ${p}lock, ${p}unlock, ${p}grouplink — safe group management`,
     '',
     '*Owner commands*',
     `${p}public / ${p}self — change message mode`,
@@ -116,7 +128,14 @@ async function getGroupInfo(socket, context) {
     }
   }
 
-  return { participants, isAdmin: Boolean(participant?.admin) };
+  const botJid = normalizeJid(socket, socket.user?.id);
+  const botParticipant = participants.find((entry) => normalizeJid(socket, entry.id) === botJid);
+
+  return {
+    participants,
+    isAdmin: Boolean(participant?.admin),
+    isBotAdmin: Boolean(botParticipant?.admin)
+  };
 }
 
 async function requireOwner(socket, context) {
@@ -136,6 +155,16 @@ async function requireGroupAdmin(socket, context) {
 
   await socket.sendMessage(context.chatId, { text: 'Only a group admin or the bot owner can use this command.' }, { quoted: context.raw });
   return undefined;
+}
+
+async function requireBotAdmin(socket, context, group) {
+  if (group?.isBotAdmin) return true;
+  await socket.sendMessage(
+    context.chatId,
+    { text: 'The bot must be a group admin to use this command.' },
+    { quoted: context.raw }
+  );
+  return false;
 }
 
 async function handleReport(socket, context, message) {
@@ -169,6 +198,133 @@ async function handleReport(socket, context, message) {
     )
   );
   await socket.sendMessage(context.chatId, { text: 'Your request has been sent to the owner.' }, { quoted: context.raw });
+}
+
+async function handleGreetingSettings(socket, context, command, group) {
+  const action = command.args[0]?.toLowerCase() || 'status';
+  const settingKey = command.name === 'goodbye' ? 'goodbyeEnabled' : 'welcomeEnabled';
+  const label = command.name === 'goodbye' ? 'Goodbye messages' : 'Welcome messages';
+
+  if (command.name === 'greet') {
+    const settings = await groupSettings.get(context.chatId);
+    const text = [
+      '*Group greeting settings*',
+      `Welcome: ${settings.welcomeEnabled ? 'ON' : 'OFF'}`,
+      `Goodbye: ${settings.goodbyeEnabled ? 'ON' : 'OFF'}`,
+      '',
+      `Use ${config.commandPrefix}welcome <on|off|status> or ${config.commandPrefix}goodbye <on|off|status>.`
+    ].join('\n');
+    await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
+    return;
+  }
+
+  if (!['on', 'off', 'status'].includes(action)) {
+    await socket.sendMessage(
+      context.chatId,
+      { text: `Usage: ${config.commandPrefix}${command.name} <on|off|status>` },
+      { quoted: context.raw }
+    );
+    return;
+  }
+
+  if (action === 'status') {
+    const settings = await groupSettings.get(context.chatId);
+    await socket.sendMessage(
+      context.chatId,
+      { text: `${label}: ${settings[settingKey] ? 'ON' : 'OFF'}.` },
+      { quoted: context.raw }
+    );
+    return;
+  }
+
+  const settings = await groupSettings.update(context.chatId, { [settingKey]: action === 'on' });
+  await socket.sendMessage(
+    context.chatId,
+    { text: `${label} are now ${settings[settingKey] ? 'ON' : 'OFF'}.` },
+    { quoted: context.raw }
+  );
+}
+
+async function handleGroupManagement(socket, context, command, group) {
+  if (command.name === 'group') {
+    await socket.sendMessage(
+      context.chatId,
+      {
+        text: [
+          '*Safe group management*',
+          `${config.commandPrefix}gname <name>`,
+          `${config.commandPrefix}gdesc <description>`,
+          `${config.commandPrefix}add <international number>`,
+          `${config.commandPrefix}kick @user or reply`,
+          `${config.commandPrefix}promote @user or reply`,
+          `${config.commandPrefix}demote @user or reply`,
+          `${config.commandPrefix}lock / ${config.commandPrefix}unlock`,
+          `${config.commandPrefix}grouplink`
+        ].join('\n')
+      },
+      { quoted: context.raw }
+    );
+    return;
+  }
+
+  if (!(await requireBotAdmin(socket, context, group))) return;
+
+  const target = getTargetJid(context.raw);
+  try {
+    switch (command.name) {
+      case 'gname': {
+        const subject = command.text.trim();
+        if (!subject || subject.length > 100) throw new Error('Provide a group name between 1 and 100 characters.');
+        await socket.groupUpdateSubject(context.chatId, subject);
+        break;
+      }
+      case 'gdesc': {
+        const description = command.text.trim();
+        if (!description || description.length > 512) throw new Error('Provide a description between 1 and 512 characters.');
+        await socket.groupUpdateDescription(context.chatId, description);
+        break;
+      }
+      case 'add': {
+        const number = normalizePhoneNumber(command.args[0], 'Group participant number');
+        await socket.groupParticipantsUpdate(context.chatId, [`${number}@s.whatsapp.net`], 'add');
+        break;
+      }
+      case 'kick':
+      case 'promote':
+      case 'demote': {
+        if (!target) throw new Error(`Mention a user or reply to a message to use ${config.commandPrefix}${command.name}.`);
+        const action = command.name === 'kick' ? 'remove' : command.name;
+        await socket.groupParticipantsUpdate(context.chatId, [target], action);
+        break;
+      }
+      case 'lock':
+        await socket.groupSettingUpdate(context.chatId, 'announcement');
+        break;
+      case 'unlock':
+        await socket.groupSettingUpdate(context.chatId, 'not_announcement');
+        break;
+      case 'grouplink': {
+        const code = await socket.groupInviteCode(context.chatId);
+        if (!code) throw new Error('Unable to retrieve this group invite code.');
+        await socket.sendMessage(
+          context.chatId,
+          { text: `Group invite link:\nhttps://chat.whatsapp.com/${code}` },
+          { quoted: context.raw }
+        );
+        return;
+      }
+      default:
+        return;
+    }
+
+    await socket.sendMessage(
+      context.chatId,
+      { text: `Group action ${command.name} completed.` },
+      { quoted: context.raw }
+    );
+  } catch (error) {
+    await socket.sendMessage(context.chatId, { text: `Group action failed: ${error.message}` }, { quoted: context.raw });
+  }
 }
 
 async function handleMessage(socket, rawMessage) {
@@ -210,7 +366,7 @@ async function handleMessage(socket, rawMessage) {
       }
 
       try {
-        const imageBuffer = await downloadImageBuffer(imageMessage);
+        const imageBuffer = await downloadMediaBuffer(imageMessage, 'image');
         const sticker = await createImageSticker(imageBuffer, {
           packname: config.stickerPackname,
           author: config.stickerAuthor
@@ -227,7 +383,51 @@ async function handleMessage(socket, rawMessage) {
       break;
     }
 
+    case 'toimg':
+    case 'sticker2img': {
+      const stickerMessage = getStickerMessage(rawMessage);
+      if (!stickerMessage) {
+        await socket.sendMessage(
+          context.chatId,
+          { text: `Reply to a sticker with ${config.commandPrefix}toimg to convert it to an image.` },
+          { quoted: context.raw }
+        );
+        break;
+      }
+
+      try {
+        const stickerBuffer = await downloadMediaBuffer(stickerMessage, 'sticker');
+        const image = await convertStickerToImage(stickerBuffer);
+        await socket.sendMessage(context.chatId, { image, caption: 'Sticker converted to image.' }, { quoted: context.raw });
+      } catch (error) {
+        console.error('[toimg] Conversion failed:', error);
+        await socket.sendMessage(
+          context.chatId,
+          { text: `Could not convert this sticker: ${error.message}` },
+          { quoted: context.raw }
+        );
+      }
+      break;
+    }
+
+    case 'jid':
+    case 'chatid':
+      await socket.sendMessage(
+        context.chatId,
+        {
+          text: [
+            `Chat JID: ${context.chatId}`,
+            `Sender JID: ${context.sender}`,
+            `Type: ${context.isGroup ? 'group' : 'private'}`
+          ].join('\n')
+        },
+        { quoted: context.raw }
+      );
+      break;
+
     case 'status':
+    case 'alive':
+    case 'runtime':
       await socket.sendMessage(
         context.chatId,
         {
@@ -287,6 +487,31 @@ async function handleMessage(socket, rawMessage) {
         { text: `${command.text}\n\n${lines.join('\n')}`, mentions },
         { quoted: context.raw }
       );
+      break;
+    }
+
+    case 'welcome':
+    case 'goodbye':
+    case 'greet': {
+      const group = await requireGroupAdmin(socket, context);
+      if (!group) break;
+      await handleGreetingSettings(socket, context, command, group);
+      break;
+    }
+
+    case 'group':
+    case 'gname':
+    case 'gdesc':
+    case 'add':
+    case 'kick':
+    case 'promote':
+    case 'demote':
+    case 'lock':
+    case 'unlock':
+    case 'grouplink': {
+      const group = await requireGroupAdmin(socket, context);
+      if (!group) break;
+      await handleGroupManagement(socket, context, command, group);
       break;
     }
 

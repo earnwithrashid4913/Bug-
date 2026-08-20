@@ -9,7 +9,7 @@
     "start": "node index.js",
     "start:dry": "BOT_DRY_RUN=true node index.js",
     "test": "node --test",
-    "check": "node --check index.js && node --check system/config.js && node --check system/handler.js && node --check system/lib/sticker.js && node --check system/lib/premium.js && node --check system/lib/message.js"
+    "check": "node --check index.js && node --check system/config.js && node --check system/group-events.js && node --check system/handler.js && node --check system/lib/group-settings.js && node --check system/lib/sticker.js && node --check system/lib/premium.js && node --check system/lib/message.js"
   },
   "keywords": [
     "whatsapp",

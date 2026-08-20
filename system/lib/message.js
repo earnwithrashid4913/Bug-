@@ -33,13 +33,26 @@ function getContextInfo(message) {
   return undefined;
 }
 
+function getQuotedMessage(rawMessage) {
+  const message = unwrapMessage(rawMessage?.message);
+  return unwrapMessage(getContextInfo(message)?.quotedMessage);
+}
+
 function getImageMessage(rawMessage) {
   const message = unwrapMessage(rawMessage?.message);
   if (message.imageMessage) return message.imageMessage;
+  return getQuotedMessage(rawMessage).imageMessage || undefined;
+}
 
-  const quotedMessage = getContextInfo(message)?.quotedMessage;
-  const quoted = unwrapMessage(quotedMessage);
-  return quoted.imageMessage || undefined;
+function getStickerMessage(rawMessage) {
+  const message = unwrapMessage(rawMessage?.message);
+  if (message.stickerMessage) return message.stickerMessage;
+  return getQuotedMessage(rawMessage).stickerMessage || undefined;
+}
+
+function getTargetJid(rawMessage) {
+  const contextInfo = getContextInfo(rawMessage?.message);
+  return contextInfo?.mentionedJid?.[0] || contextInfo?.participant || undefined;
 }
 
 function extractText(rawMessage) {
@@ -102,6 +115,9 @@ module.exports = {
   getContextInfo,
   getImageMessage,
   getMessageContext,
+  getQuotedMessage,
+  getStickerMessage,
+  getTargetJid,
   normalizeJid,
   resolveJid,
   unwrapMessage

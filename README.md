@@ -16,9 +16,9 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 - Multi-file Baileys authentication with pairing-code and terminal QR options
 - Configurable bot identity, owner records, command prefix, public/self mode, paths, and reconnect tuning
 - Exponential, bounded reconnect handling that avoids looping on logout, bad-session, and connection-replaced events
-- Safe command handler for menu, ping, status, owner details, group mentions, channel lookup, request forwarding, premium records, and image-to-sticker conversion
+- Safe command handler for menu, ping, status, owner details, group mentions, group greetings, safe group administration, channel lookup, request forwarding, premium records, sticker conversion, and sticker-to-image conversion
 - Owner-only public/self mode, premium management, and host-managed restart command
-- Persistent premium data with atomic writes and expiry cleanup
+- Persistent premium and group-greeting data with atomic writes
 - Render Background Worker and Railway configuration
 - Local Node.js, Termux, generic Node.js host, and Pterodactyl-friendly startup flow
 
@@ -68,6 +68,9 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | `AUTH_DIR` | `./session` | Baileys credentials path; keep private and persistent. |
 | `DATA_DIR` | `./data` | Runtime data directory. |
 | `PREMIUM_DB_PATH` | `DATA_DIR/premium.json` | Optional custom premium database file path. |
+| `GROUP_SETTINGS_DB_PATH` | `DATA_DIR/groups.json` | Optional persistent group greeting settings file. |
+| `WELCOME_MESSAGE` | supplied default | Greeting template; supports `@user` and `@group`. |
+| `GOODBYE_MESSAGE` | supplied default | Farewell template; supports `@user` and `@group`. |
 | `RECONNECT_BASE_DELAY_MS` | `3000` | Initial reconnect delay. |
 | `RECONNECT_MAX_DELAY_MS` | `60000` | Maximum reconnect delay. |
 | `LOG_LEVEL` | `info` | Pino log level. |
@@ -111,12 +114,17 @@ Use the configured prefix (shown below as `!`).
 | --- | --- | --- |
 | `!menu`, `!help` | Everyone in public mode | Show command help. |
 | `!ping` | Everyone in public mode | Check command latency. |
-| `!status` | Everyone in public mode | Show basic process status. |
+| `!status`, `!alive`, `!runtime` | Everyone in public mode | Show basic process status. |
 | `!owner`, `!creator` | Everyone in public mode | Show configured owner/contact details. |
 | `!sticker`, `!s` | Everyone in public mode | Reply to an image to create a standard WebP sticker. |
+| `!toimg`, `!sticker2img` | Everyone in public mode | Reply to a sticker to convert it to an image. |
+| `!jid`, `!chatid` | Everyone in public mode | Show the current chat and sender JIDs. |
 | `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
 | `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
 | `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
+| `!welcome`, `!goodbye`, `!greet` | Group admin/owner | Configure safe group greetings. |
+| `!group` | Group admin/owner | Show safe group management help. |
+| `!gname`, `!gdesc`, `!add`, `!kick`, `!promote`, `!demote`, `!lock`, `!unlock`, `!grouplink` | Group admin/owner + bot admin | Perform the named group action. |
 | `!idch <channel URL>` | Everyone in public mode | Look up a WhatsApp channel invite. |
 | `!public`, `!self` | Owner | Toggle command visibility. |
 | `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`. |

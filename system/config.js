@@ -20,6 +20,8 @@ const DEFAULTS = Object.freeze({
   authMethod: 'pairing',
   authDir: './session',
   dataDir: './data',
+  welcomeMessage: 'Welcome @user to *@group*!',
+  goodbyeMessage: 'Goodbye @user from *@group*.',
   reconnectBaseDelayMs: 3_000,
   reconnectMaxDelayMs: 60_000,
   logLevel: 'info'
@@ -130,6 +132,7 @@ function loadConfig() {
 
   const dataDir = resolveRuntimePath(readString('DATA_DIR', DEFAULTS.dataDir));
   const premiumDbPath = resolveRuntimePath(readString('PREMIUM_DB_PATH', path.join(dataDir, 'premium.json')));
+  const groupSettingsDbPath = resolveRuntimePath(readString('GROUP_SETTINGS_DB_PATH', path.join(dataDir, 'groups.json')));
 
   return Object.freeze({
     botName: readString('BOT_NAME', DEFAULTS.botName),
@@ -149,6 +152,9 @@ function loadConfig() {
     authDir: resolveRuntimePath(readString('AUTH_DIR', DEFAULTS.authDir)),
     dataDir,
     premiumDbPath,
+    groupSettingsDbPath,
+    welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
+    goodbyeMessage: readString('GOODBYE_MESSAGE', DEFAULTS.goodbyeMessage),
     reconnectBaseDelayMs,
     reconnectMaxDelayMs,
     logLevel,

@@ -24,6 +24,19 @@ function buildStickerExif({ packname, author, categories = [''] }) {
   return exif;
 }
 
+async function convertStickerToImage(input) {
+  if (!Buffer.isBuffer(input) || input.length === 0) {
+    throw new TypeError('Sticker source must be a non-empty Buffer.');
+  }
+  if (input.length > MAX_STICKER_INPUT_BYTES) {
+    throw new Error('Sticker is too large to convert. Maximum size is 12 MB.');
+  }
+
+  return sharp(input, { animated: true, page: 0, limitInputPixels: 25_000_000, failOn: 'error' })
+    .png()
+    .toBuffer();
+}
+
 async function createImageSticker(input, metadata) {
   if (!Buffer.isBuffer(input) || input.length === 0) {
     throw new TypeError('Sticker source must be a non-empty Buffer.');
@@ -51,5 +64,6 @@ async function createImageSticker(input, metadata) {
 module.exports = {
   MAX_STICKER_INPUT_BYTES,
   buildStickerExif,
+  convertStickerToImage,
   createImageSticker
 };
