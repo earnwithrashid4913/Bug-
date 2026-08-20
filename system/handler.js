@@ -3,6 +3,7 @@
 const { config, normalizePhoneNumber } = require('./config');
 const { getMessageContext, normalizeJid, resolveJid } = require('./lib/message');
 const { PremiumStore } = require('./lib/premium');
+const { selectImage } = require('./images');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
 const reportCooldowns = new Map();
@@ -39,6 +40,25 @@ function formatDate(timestamp) {
   }).format(new Date(timestamp));
 }
 
+async function sendCommandResponse(socket, context, imageKey, text, messageOptions = {}) {
+  if (config.imageResponses) {
+    try {
+      const image = selectImage(imageKey);
+      return await socket.sendMessage(
+        context.chatId,
+        { image: { url: image.url }, caption: text, ...messageOptions },
+        { quoted: context.raw }
+      );
+    } catch (error) {
+      // A remote wallpaper should never make a command unavailable. Fall back
+      // to the original text reply if Baileys cannot fetch or upload it.
+      console.warn(`[images] ${imageKey} image failed; sending text fallback: ${error.message}`);
+    }
+  }
+
+  return socket.sendMessage(context.chatId, { text, ...messageOptions }, { quoted: context.raw });
+}
+
 function helpText() {
   const p = config.commandPrefix;
   return [
@@ -67,7 +87,7 @@ function helpText() {
   ].join('\n');
 }
 
-async function sendOwnerCard(socket, chatId, quoted) {
+async function sendOwnerCard(socket, context, imageKey) {
   const text = [
     `*${config.botName} owner details*`,
     `Global Owner: ${config.ownerName}`,
@@ -76,7 +96,7 @@ async function sendOwnerCard(socket, chatId, quoted) {
     `Owner WhatsApp: ${config.ownerLink}`,
     `WhatsApp Channel: ${config.whatsappChannel}`
   ].join('\n');
-  await socket.sendMessage(chatId, { text }, { quoted });
+  await sendCommandResponse(socket, context, imageKey, text);
 }
 
 async function getGroupInfo(socket, context) {
@@ -149,7 +169,7 @@ async function handleReport(socket, context, message) {
       socket.sendMessage(`${number}@s.whatsapp.net`, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] })
     )
   );
-  await socket.sendMessage(context.chatId, { text: 'Your request has been sent to the owner.' }, { quoted: context.raw });
+  await sendCommandResponse(socket, context, 'report', 'Your request has been sent to the owner.');
 }
 
 async function handleMessage(socket, rawMessage) {
@@ -166,36 +186,40 @@ async function handleMessage(socket, rawMessage) {
 
   switch (command.name) {
     case 'menu':
+      await sendCommandResponse(socket, context, 'menu', helpText());
+      break;
+
     case 'help':
-      await socket.sendMessage(context.chatId, { text: helpText() }, { quoted: context.raw });
+      await sendCommandResponse(socket, context, 'help', helpText());
       break;
 
     case 'ping':
     case 'p': {
       const started = Date.now();
-      const sent = await socket.sendMessage(context.chatId, { text: 'Checking latency…' }, { quoted: context.raw });
-      await socket.sendMessage(context.chatId, { text: `Pong: ${Date.now() - started}ms`, edit: sent.key });
+      await sendCommandResponse(socket, context, 'ping', `Pong: ${Date.now() - started}ms`);
       break;
     }
 
     case 'status':
-      await socket.sendMessage(
-        context.chatId,
-        {
-          text: [
-            `*${config.botName} status*`,
-            `Mode: ${publicMode ? 'public' : 'self'}`,
-            `Uptime: ${Math.floor(process.uptime())} seconds`,
-            `Premium database: ready`
-          ].join('\n')
-        },
-        { quoted: context.raw }
+      await sendCommandResponse(
+        socket,
+        context,
+        'status',
+        [
+          `*${config.botName} status*`,
+          `Mode: ${publicMode ? 'public' : 'self'}`,
+          `Uptime: ${Math.floor(process.uptime())} seconds`,
+          'Premium database: ready'
+        ].join('\n')
       );
       break;
 
     case 'owner':
+      await sendOwnerCard(socket, context, 'owner');
+      break;
+
     case 'creator':
-      await sendOwnerCard(socket, context.chatId, context.raw);
+      await sendOwnerCard(socket, context, 'creator');
       break;
 
     case 'public':
@@ -203,7 +227,12 @@ async function handleMessage(socket, rawMessage) {
       if (!(await requireOwner(socket, context))) break;
       publicMode = command.name === 'public';
       socket.public = publicMode;
-      await socket.sendMessage(context.chatId, { text: `Bot mode is now ${publicMode ? 'public' : 'self'}.` }, { quoted: context.raw });
+      await sendCommandResponse(
+        socket,
+        context,
+        publicMode ? 'public' : 'self',
+        `Bot mode is now ${publicMode ? 'public' : 'self'}.`
+      );
       break;
     }
 
@@ -216,10 +245,12 @@ async function handleMessage(socket, rawMessage) {
         await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}hidetag <message>` }, { quoted: context.raw });
         break;
       }
-      await socket.sendMessage(
-        context.chatId,
-        { text: message, mentions: group.participants.map((entry) => entry.id) },
-        { quoted: context.raw }
+      await sendCommandResponse(
+        socket,
+        context,
+        'hidetag',
+        message,
+        { mentions: group.participants.map((entry) => entry.id) }
       );
       break;
     }
@@ -233,11 +264,17 @@ async function handleMessage(socket, rawMessage) {
       }
       const mentions = group.participants.map((entry) => entry.id);
       const lines = group.participants.map((entry) => `• @${entry.id.split('@')[0]}`);
-      await socket.sendMessage(
-        context.chatId,
-        { text: `${command.text}\n\n${lines.join('\n')}`, mentions },
-        { quoted: context.raw }
-      );
+      const tagText = `${command.text}\n\n${lines.join('\n')}`;
+
+      // WhatsApp image captions are shorter than a large group mention list.
+      // Preserve every mention with a text follow-up only when the list cannot
+      // safely fit in the single selected image caption.
+      if (!config.imageResponses || tagText.length <= 1_000) {
+        await sendCommandResponse(socket, context, 'tagall', tagText, { mentions });
+      } else {
+        await sendCommandResponse(socket, context, 'tagall', `*Group announcement*\n${command.text}`);
+        await socket.sendMessage(context.chatId, { text: tagText, mentions }, { quoted: context.raw });
+      }
       break;
     }
 
@@ -265,7 +302,7 @@ async function handleMessage(socket, rawMessage) {
           `Followers: ${channel.subscribers}`,
           `Verified: ${channel.verification === 'VERIFIED' ? 'yes' : 'no'}`
         ].join('\n');
-        await socket.sendMessage(context.chatId, { text: details }, { quoted: context.raw });
+        await sendCommandResponse(socket, context, 'channelInfo', details);
       } catch (error) {
         await socket.sendMessage(context.chatId, { text: `Could not fetch that channel: ${error.message}` }, { quoted: context.raw });
       }
@@ -281,10 +318,11 @@ async function handleMessage(socket, rawMessage) {
       }
       try {
         const record = await premiumStore.add(phoneNumber, duration);
-        await socket.sendMessage(
-          context.chatId,
-          { text: `Premium access saved for ${record.id} until ${formatDate(record.expiresAt)} UTC.` },
-          { quoted: context.raw }
+        await sendCommandResponse(
+          socket,
+          context,
+          'premiumAdd',
+          `Premium access saved for ${record.id} until ${formatDate(record.expiresAt)} UTC.`
         );
       } catch (error) {
         await socket.sendMessage(context.chatId, { text: `Could not add premium access: ${error.message}` }, { quoted: context.raw });
@@ -301,7 +339,12 @@ async function handleMessage(socket, rawMessage) {
       try {
         const phoneNumber = normalizePhoneNumber(command.args[0], 'Premium user number');
         const removed = await premiumStore.remove(phoneNumber);
-        await socket.sendMessage(context.chatId, { text: removed ? `Premium access removed for ${phoneNumber}.` : 'That number has no active premium record.' }, { quoted: context.raw });
+        await sendCommandResponse(
+          socket,
+          context,
+          'premiumDelete',
+          removed ? `Premium access removed for ${phoneNumber}.` : 'That number has no active premium record.'
+        );
       } catch (error) {
         await socket.sendMessage(context.chatId, { text: `Could not remove premium access: ${error.message}` }, { quoted: context.raw });
       }
@@ -315,7 +358,7 @@ async function handleMessage(socket, rawMessage) {
         const text = records.length
           ? `*Active premium users*\n${records.map((record, index) => `${index + 1}. ${record.id} — ${formatDate(record.expiresAt)} UTC`).join('\n')}`
           : 'There are no active premium users.';
-        await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
+        await sendCommandResponse(socket, context, 'premiumList', text);
       } catch (error) {
         await socket.sendMessage(context.chatId, { text: `Could not read premium access: ${error.message}` }, { quoted: context.raw });
       }

@@ -9,7 +9,8 @@
     "start": "node index.js",
     "start:dry": "BOT_DRY_RUN=true node index.js",
     "test": "node --test",
-    "check": "node --check index.js && node --check system/config.js && node --check system/handler.js && node --check system/lib/premium.js && node --check system/lib/message.js"
+    "verify:images": "node scripts/verify-images.js",
+    "check": "node --check index.js && node --check system/config.js && node --check system/images.js && node --check scripts/verify-images.js && node --check system/handler.js && node --check system/lib/premium.js && node --check system/lib/message.js"
   },
   "keywords": [
     "whatsapp",

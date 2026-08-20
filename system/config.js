@@ -140,6 +140,7 @@ function loadConfig() {
     whatsappChannel: parseUrl('WHATSAPP_CHANNEL', DEFAULTS.whatsappChannel),
     commandPrefix,
     publicMode: parseBoolean('PUBLIC_MODE', DEFAULTS.publicMode),
+    imageResponses: parseBoolean('IMAGE_RESPONSES', true),
     authMethod,
     pairingNumber: parseOptionalPhoneNumber('PAIRING_NUMBER'),
     authDir: resolveRuntimePath(readString('AUTH_DIR', DEFAULTS.authDir)),
