@@ -3,6 +3,7 @@
 const readline = require('node:readline/promises');
 const { stdin: input, stdout: output } = require('node:process');
 const chalk = require('chalk');
+const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const {
@@ -88,6 +89,19 @@ async function promptForPairingNumber() {
   }
 }
 
+function renderQrCode(qr, pairingState) {
+  if (pairingState.lastQr === qr) return;
+  pairingState.lastQr = qr;
+
+  if (!output.isTTY) {
+    console.warn('[qr] A QR code was received, but this host is non-interactive. Use AUTH_METHOD=pairing with PAIRING_NUMBER for cloud hosting.');
+    return;
+  }
+
+  console.log('[qr] Scan this QR code from WhatsApp Linked Devices:');
+  qrcode.generate(qr, { small: true });
+}
+
 async function requestPairingCode(socket, pairingState) {
   if (pairingState.requested || pairingState.pending || pairingState.registered) return;
   pairingState.pending = true;
@@ -108,8 +122,9 @@ async function requestPairingCode(socket, pairingState) {
 async function handleConnectionUpdate(socket, update, pairingState) {
   if (socket !== activeSocket || stopping) return;
 
-  if (config.authMethod === 'pairing' && update.qr && !pairingState.registered) {
-    await requestPairingCode(socket, pairingState);
+  if (update.qr && !pairingState.registered) {
+    if (config.authMethod === 'pairing') await requestPairingCode(socket, pairingState);
+    else renderQrCode(update.qr, pairingState);
   }
 
   if (update.connection === 'open') {
@@ -155,7 +170,6 @@ async function startBot() {
       auth: state,
       browser: [config.botName, 'Chrome', '1.0.0'],
       logger: pino({ level: config.logLevel }),
-      printQRInTerminal: config.authMethod === 'qr',
       markOnlineOnConnect: false,
       syncFullHistory: false
     });
@@ -167,7 +181,8 @@ async function startBot() {
     const pairingState = {
       pending: false,
       requested: false,
-      registered: state.creds.registered
+      registered: state.creds.registered,
+      lastQr: undefined
     };
 
     socket.ev.on('creds.update', () => {

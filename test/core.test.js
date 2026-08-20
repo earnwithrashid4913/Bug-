@@ -9,7 +9,7 @@ const test = require('node:test');
 const { config } = require('../system/config');
 const handleMessage = require('../system/handler');
 const { commandFromText } = handleMessage;
-const { extractText } = require('../system/lib/message');
+const { extractText, resolveJid } = require('../system/lib/message');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 
 test('default ownership configuration is loaded', () => {
@@ -17,6 +17,7 @@ test('default ownership configuration is loaded', () => {
   assert.equal(config.authorName, 'Rashid Hussain');
   assert.equal(config.ownerNumber, '923448170040');
   assert.equal(config.commandPrefix, '.');
+  assert.equal(config.botName, 'Black Clover');
 });
 
 test('command parser accepts only the configured prefix', () => {
@@ -34,6 +35,19 @@ test('message text extraction handles standard and interactive messages', () => 
     extractText({ interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{"id":".menu"}' } } }),
     '.menu'
   );
+});
+
+test('LID senders resolve to mapped phone-number JIDs when available', async () => {
+  const socket = {
+    decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
+    signalRepository: {
+      lidMapping: {
+        getPNForLID: async (jid) => (jid === '12345@lid' ? '923448170040@s.whatsapp.net' : null)
+      }
+    }
+  };
+
+  assert.equal(await resolveJid(socket, '12345@lid'), '923448170040@s.whatsapp.net');
 });
 
 test('command handler dispatches a menu response', async () => {

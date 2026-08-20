@@ -1,4 +1,4 @@
-# Deployment Guide
+# Black Clover Deployment Guide
 
 This application is a long-running WhatsApp client. It is best deployed as a **single background worker** with persistent storage. It does not provide an HTTP website, so a web-service deployment is not the appropriate default.
 

@@ -1,7 +1,7 @@
 services:
   # This bot maintains an outbound WhatsApp WebSocket connection and does not expose HTTP.
   - type: worker
-    name: only-fixa-dev-whatsapp-bot
+    name: black-clover-bot
     runtime: node
     buildCommand: npm ci
     startCommand: npm start
@@ -17,6 +17,6 @@ services:
       - key: PUBLIC_MODE
         value: "true"
     disk:
-      name: whatsapp-auth-data
+      name: black-clover-auth-data
       mountPath: /var/data
       sizeGB: 1

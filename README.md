@@ -1,4 +1,4 @@
-# write bot name here
+# Black Clover
 
 A clean, configurable WhatsApp bot built with Baileys and maintained under the **Only Fixa Dev** project.
 
@@ -51,7 +51,7 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BOT_NAME` | `write bot name here` | Display name for logs and commands. |
+| `BOT_NAME` | `Black Clover` | Display name for logs and commands. |
 | `OWNER_NAME` | `Only Fixa Dev` | Global owner display name. |
 | `OWNER_NUMBER` | `923448170040` | Primary owner number; digits only. |
 | `OWNER_NUMBERS` | empty | Optional comma-separated additional owner numbers. |
@@ -96,6 +96,10 @@ AUTH_METHOD=qr
 Run `npm start` and scan the terminal QR code.
 
 The `session/` directory contains authentication credentials and private keys. It is excluded from Git. If a session is invalid or logged out, stop the process, remove only the configured `AUTH_DIR`, restart, and pair again.
+
+## Authorized-device compatibility testing
+
+Use only WhatsApp accounts and groups you own or administer. After pairing a real account, test standard WhatsApp behaviors with `.menu`, `.ping`, `.owner`, and—inside an authorized group—`.hidetag` or `.tagall`. The bot uses standard text, message edits, mentions, and supported interactive-response parsing; it does not send malformed UI payloads. Automated tests validate the command parser and supported message shapes, but a real WhatsApp pairing/message exchange must be performed by the owner.
 
 ## Commands
 

@@ -1,7 +1,7 @@
 'use strict';
 
 const { config, normalizePhoneNumber } = require('./config');
-const { getMessageContext, normalizeJid } = require('./lib/message');
+const { getMessageContext, normalizeJid, resolveJid } = require('./lib/message');
 const { PremiumStore } = require('./lib/premium');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
@@ -84,7 +84,19 @@ async function getGroupInfo(socket, context) {
   const metadata = await socket.groupMetadata(context.chatId);
   const participants = metadata.participants || [];
   const sender = normalizeJid(socket, context.sender);
-  const participant = participants.find((entry) => normalizeJid(socket, entry.id) === sender);
+  let participant = participants.find((entry) => normalizeJid(socket, entry.id) === sender);
+
+  // Baileys v7 can expose group members as privacy LIDs. Resolve those only
+  // when a direct phone-number JID comparison did not find the sender.
+  if (!participant && sender && !sender.endsWith('@lid')) {
+    for (const entry of participants) {
+      if ((await resolveJid(socket, entry.id)) === sender) {
+        participant = entry;
+        break;
+      }
+    }
+  }
+
   return { participants, isAdmin: Boolean(participant?.admin) };
 }
 

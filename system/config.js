@@ -6,7 +6,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const DEFAULTS = Object.freeze({
-  botName: 'write bot name here',
+  botName: 'Black Clover',
   ownerName: 'Only Fixa Dev',
   ownerNumber: '923448170040',
   authorName: 'Rashid Hussain',
@@ -43,7 +43,11 @@ function parseInteger(name, fallback, min, max) {
   const value = process.env[name];
   if (value === undefined || value.trim() === '') return fallback;
 
-  const parsed = Number.parseInt(value, 10);
+  if (!/^\d+$/.test(value.trim())) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+
+  const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
     throw new Error(`${name} must be an integer between ${min} and ${max}.`);
   }

@@ -47,10 +47,24 @@ function normalizeJid(socket, jid) {
   return jid.replace(/:\d+@/, '@');
 }
 
+async function resolveJid(socket, jid) {
+  const normalized = normalizeJid(socket, jid);
+  if (!normalized?.endsWith('@lid')) return normalized;
+
+  try {
+    const phoneJid = await socket.signalRepository?.lidMapping?.getPNForLID?.(normalized);
+    return phoneJid ? normalizeJid(socket, phoneJid) : normalized;
+  } catch {
+    // LID-to-phone mappings are populated by Baileys when WhatsApp provides them.
+    // Leave an unknown LID unchanged instead of failing command processing.
+    return normalized;
+  }
+}
+
 async function getMessageContext(socket, rawMessage) {
   const chatId = rawMessage?.key?.remoteJid;
   const isGroup = Boolean(chatId?.endsWith('@g.us'));
-  const sender = normalizeJid(
+  const sender = await resolveJid(
     socket,
     rawMessage?.key?.fromMe ? socket.user?.id : rawMessage?.key?.participant || rawMessage?.participant || chatId
   );
@@ -70,5 +84,6 @@ module.exports = {
   extractText,
   getMessageContext,
   normalizeJid,
+  resolveJid,
   unwrapMessage
 };
