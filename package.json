@@ -1,0 +1,32 @@
+{
+  "name": "only-fixa-dev-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "A configurable WhatsApp bot maintained by Only Fixa Dev.",
+  "private": true,
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "start:dry": "BOT_DRY_RUN=true node index.js",
+    "test": "node --test",
+    "check": "node --check index.js && node --check system/config.js && node --check system/handler.js && node --check system/lib/premium.js && node --check system/lib/message.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "nodejs",
+    "only-fixa-dev"
+  ],
+  "author": "Rashid Hussain",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.6.1",
+    "pino": "^9.9.4"
+  }
+}
