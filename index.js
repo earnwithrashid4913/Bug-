@@ -110,6 +110,11 @@ async function requestPairingCode(socket, pairingState) {
   try {
     const number = await promptForPairingNumber();
     if (!number) return;
+    
+    // Add a small delay to ensure socket is ready for pairing
+    // Baileys 7.0.0-rc14 may emit QR before full socket initialization
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     const code = await socket.requestPairingCode(number);
     pairingState.requested = true;
     console.log(chalk.green(`[pairing] Enter this code in WhatsApp: ${code}`));
@@ -123,9 +128,17 @@ async function requestPairingCode(socket, pairingState) {
 async function handleConnectionUpdate(socket, update, pairingState) {
   if (socket !== activeSocket || stopping) return;
 
+  // Handle pairing/QR flow when connection is connecting or open
   if (update.qr && !pairingState.registered) {
-    if (config.authMethod === 'pairing') await requestPairingCode(socket, pairingState);
-    else renderQrCode(update.qr, pairingState);
+    if (config.authMethod === 'pairing') {
+      // Only request pairing code when socket is actively connecting
+      // This prevents race conditions where QR fires before socket is ready
+      if (update.connection === 'connecting' || update.connection === undefined) {
+        await requestPairingCode(socket, pairingState);
+      }
+    } else {
+      renderQrCode(update.qr, pairingState);
+    }
   }
 
   if (update.connection === 'open') {
