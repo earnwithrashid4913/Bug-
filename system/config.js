@@ -8,10 +8,7 @@ dotenv.config();
 const DEFAULTS = Object.freeze({
   botName: 'Black Clover ♣️',
   ownerName: 'Only Fixa Dev',
-  ownerNumber: '923448170040',
   authorName: 'Rashid Hussain',
-  authorNumber: '923448170040',
-  ownerLink: 'https://wa.me/923448170040',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
   stickerPackname: 'Black Clover ♣️',
@@ -74,6 +71,14 @@ function parseOptionalPhoneNumber(name) {
   return normalizePhoneNumber(value, name);
 }
 
+function parseRequiredPhoneNumber(name) {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === '') {
+    throw new Error(`${name} is required. Set it to a 7-15 digit international phone number, including country code.`);
+  }
+  return normalizePhoneNumber(value, name);
+}
+
 function parseOwnerNumbers(primaryOwner) {
   const additional = readString('OWNER_NUMBERS', '')
     .split(',')
@@ -100,8 +105,8 @@ function resolveRuntimePath(value) {
 }
 
 function loadConfig() {
-  const ownerNumber = normalizePhoneNumber(readString('OWNER_NUMBER', DEFAULTS.ownerNumber), 'OWNER_NUMBER');
-  const authorNumber = normalizePhoneNumber(readString('AUTHOR_NUMBER', DEFAULTS.authorNumber), 'AUTHOR_NUMBER');
+  const ownerNumber = parseRequiredPhoneNumber('OWNER_NUMBER');
+  const authorNumber = parseOptionalPhoneNumber('AUTHOR_NUMBER') || ownerNumber;
   const commandPrefix = readString('COMMAND_PREFIX', DEFAULTS.commandPrefix);
 
   if (commandPrefix.length > 4 || /\s/.test(commandPrefix)) {
@@ -142,7 +147,7 @@ function loadConfig() {
     ownerNumbers: parseOwnerNumbers(ownerNumber),
     authorName: readString('AUTHOR_NAME', DEFAULTS.authorName),
     authorNumber,
-    ownerLink: parseUrl('OWNER_LINK', DEFAULTS.ownerLink),
+    ownerLink: parseUrl('OWNER_LINK', `https://wa.me/${ownerNumber}`),
     whatsappChannel: parseUrl('WHATSAPP_CHANNEL', DEFAULTS.whatsappChannel),
     commandPrefix,
     stickerPackname: readString('STICKER_PACKNAME', DEFAULTS.stickerPackname),

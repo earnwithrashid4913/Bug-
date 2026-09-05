@@ -18,7 +18,12 @@ function parseDuration(value) {
     throw new Error('Duration must use a whole number followed by s, m, h, or d (for example: 30d).');
   }
 
-  const milliseconds = Number(match[1]) * DURATION_UNITS[match[2].toLowerCase()];
+  const amount = Number(match[1]);
+  if (amount < 1) {
+    throw new Error('Premium duration must be at least 1 second.');
+  }
+
+  const milliseconds = amount * DURATION_UNITS[match[2].toLowerCase()];
   if (milliseconds > MAX_PREMIUM_DURATION_MS) {
     throw new Error('Premium duration cannot be longer than 366 days in one command.');
   }
@@ -96,6 +101,17 @@ class PremiumStore {
 
       await this.write(records.filter((entry) => entry.expiresAt > now));
       return record;
+    });
+  }
+
+  async has(phoneNumber) {
+    const id = normalizePhoneNumber(phoneNumber, 'Premium user number');
+    return this.transaction(async () => {
+      const records = await this.read();
+      const now = Date.now();
+      const active = records.filter((record) => record.expiresAt > now);
+      if (active.length !== records.length) await this.write(active);
+      return active.some((record) => record.id === id);
     });
   }
 

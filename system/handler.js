@@ -18,6 +18,7 @@ const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = r
 const premiumStore = new PremiumStore(config.premiumDbPath);
 const reportCooldowns = new Map();
 let publicMode = config.publicMode;
+const PREMIUM_AI_REQUEST_COOLDOWN_MS = 10_000;
 
 function commandFromText(text) {
   if (!text.startsWith(config.commandPrefix)) return undefined;
@@ -133,7 +134,15 @@ async function getGroupInfo(socket, context) {
   }
 
   const botJid = normalizeJid(socket, socket.user?.id);
-  const botParticipant = participants.find((entry) => normalizeJid(socket, entry.id) === botJid);
+  let botParticipant = participants.find((entry) => normalizeJid(socket, entry.id) === botJid);
+  if (!botParticipant && botJid && !botJid.endsWith('@lid')) {
+    for (const entry of participants) {
+      if ((await resolveJid(socket, entry.id)) === botJid) {
+        botParticipant = entry;
+        break;
+      }
+    }
+  }
 
   return {
     participants,
@@ -343,7 +352,12 @@ async function handleAiCommand(socket, context, command) {
   }
 
   try {
-    reserveAiRequest(context.sender);
+    const isPremium = context.sender?.endsWith('@s.whatsapp.net')
+      && await premiumStore.has(context.sender.split('@')[0]);
+    const cooldownMs = isOwner(socket, context.sender) || isPremium
+      ? PREMIUM_AI_REQUEST_COOLDOWN_MS
+      : undefined;
+    reserveAiRequest(context.sender, cooldownMs);
     const answer = await askGroq({
       apiKey: config.groqApiKey,
       model: config.groqModel,

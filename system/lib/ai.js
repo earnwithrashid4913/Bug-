@@ -20,10 +20,13 @@ function buildGroqRequest(prompt, model, botName) {
   };
 }
 
-function reserveAiRequest(sender) {
+function reserveAiRequest(sender, cooldownMs = AI_REQUEST_COOLDOWN_MS) {
+  if (!Number.isSafeInteger(cooldownMs) || cooldownMs < 1) {
+    throw new Error('AI request cooldown must be a positive integer.');
+  }
   const now = Date.now();
   const previous = recentRequests.get(sender) || 0;
-  const remaining = AI_REQUEST_COOLDOWN_MS - (now - previous);
+  const remaining = cooldownMs - (now - previous);
   if (remaining > 0) {
     throw new Error(`Please wait ${Math.ceil(remaining / 1000)} seconds before another AI request.`);
   }
@@ -31,7 +34,7 @@ function reserveAiRequest(sender) {
   recentRequests.set(sender, now);
   setTimeout(() => {
     if (recentRequests.get(sender) === now) recentRequests.delete(sender);
-  }, AI_REQUEST_COOLDOWN_MS).unref();
+  }, cooldownMs).unref();
 }
 
 async function askGroq({ apiKey, model, prompt, botName }) {
