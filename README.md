@@ -8,7 +8,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 
 - **Developer:** Rashid Hussain
 - **Global Owner:** Only Fixa Dev
-- **Owner WhatsApp:** https://wa.me/923448170040
+- **Owner WhatsApp:** configured through the required `OWNER_NUMBER` environment variable
 - **WhatsApp Channel:** https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T
 
 ## Features
@@ -53,11 +53,11 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | --- | --- | --- |
 | `BOT_NAME` | `Black Clover ♣️` | Display name for logs and commands. |
 | `OWNER_NAME` | `Only Fixa Dev` | Global owner display name. |
-| `OWNER_NUMBER` | `923448170040` | Primary owner number; digits only. |
+| `OWNER_NUMBER` | required | Primary owner number; 7–15 digits including country code. The bot refuses to start when it is missing or invalid. |
 | `OWNER_NUMBERS` | empty | Optional comma-separated additional owner numbers. |
 | `AUTHOR_NAME` | `Rashid Hussain` | Developer display name. |
-| `AUTHOR_NUMBER` | `923448170040` | Developer number; digits only. |
-| `OWNER_LINK` | supplied wa.me URL | Owner contact shown by `!owner`. |
+| `AUTHOR_NUMBER` | `OWNER_NUMBER` | Optional developer number; digits only. |
+| `OWNER_LINK` | `https://wa.me/OWNER_NUMBER` | Optional owner contact shown by `!owner`. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
 | `STICKER_PACKNAME` | `Black Clover ♣️` | Sticker pack name used by `!sticker`. |
@@ -88,11 +88,12 @@ Configuration validates phone numbers, URLs, booleans, delays, prefixes, and aut
 For a cloud host, set a real linking phone number:
 
 ```dotenv
+OWNER_NUMBER=your_owner_phone_number
 AUTH_METHOD=pairing
 PAIRING_NUMBER=your_linking_phone_number
 ```
 
-Replace `your_linking_phone_number` with the phone being linked, then run `npm start` and enter the emitted code in WhatsApp. This is a connection setting, not an owner/contact field. The number must include its country code and contain digits only.
+Replace both placeholders before starting the bot. `OWNER_NUMBER` authorizes bot-administration commands; `PAIRING_NUMBER` is the phone being linked and may be different. Each number must include its country code and contain digits only.
 
 ### QR code
 
@@ -125,7 +126,7 @@ Use the configured prefix (shown below as `!`).
 | `!jid`, `!chatid` | Everyone in public mode | Show the current chat and sender JIDs. |
 | `!getpp`, `!pp`, `!profilepic`, `!avatar` | Everyone in public mode | Show a profile picture from a group, quoted/mentioned user, or number. |
 | `!setpp` | Owner | Reply to an image to update the bot profile picture. |
-| `!ai`, `!ask`, `!ia`, `!groq` | Everyone in public mode | Ask Groq AI when `GROQ_API_KEY` is configured. |
+| `!ai`, `!ask`, `!ia`, `!groq` | Everyone in public mode | Ask Groq AI when `GROQ_API_KEY` is configured. Premium users and owners receive a 10-second cooldown; other users receive a 30-second cooldown. |
 | `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
 | `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
 | `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
@@ -134,7 +135,7 @@ Use the configured prefix (shown below as `!`).
 | `!gname`, `!gdesc`, `!add`, `!kick`, `!promote`, `!demote`, `!lock`, `!unlock`, `!grouplink` | Group admin/owner + bot admin | Perform the named group action. |
 | `!idch <channel URL>` | Everyone in public mode | Look up a WhatsApp channel invite. |
 | `!public`, `!self` | Owner | Toggle command visibility. |
-| `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`. |
+| `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`; the duration must be at least `1s`. Premium access enables the shorter AI cooldown. |
 | `!delprem <number>` | Owner | Remove premium access. |
 | `!listprem` | Owner | List active premium records. |
 | `!restart` | Owner | Exit cleanly for a host-managed restart. |

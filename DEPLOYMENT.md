@@ -11,7 +11,7 @@ cd Bug-
 
 ## 2. Install a supported Node.js version
 
-Use Node.js **20.x LTS** (or a newer Node.js release that satisfies `package.json`'s `>=20` engine requirement).
+Use Node.js **20.9+ LTS** (or a newer Node.js release that satisfies `package.json`'s `>=20.9` engine requirement).
 
 ```bash
 node --version
@@ -38,13 +38,7 @@ npm ci
 cp .env.example .env
 ```
 
-At minimum, set `BOT_NAME` to the name you want to display. The supplied owner defaults are:
-
-- Global Owner: **Only Fixa Dev**
-- Developer: **Rashid Hussain**
-- Owner number: `923448170040`
-- Owner link: `https://wa.me/923448170040`
-- Channel: `https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T`
+At minimum, set `BOT_NAME` and the required `OWNER_NUMBER` (7–15 digits, including country code). The bot intentionally refuses to start without a valid owner number. `AUTHOR_NUMBER` is optional and defaults to `OWNER_NUMBER`; `OWNER_LINK` is optional and defaults to the matching `https://wa.me/` link.
 
 Keep `.env`, `session/`, and `data/` private. They are intentionally ignored by Git.
 
@@ -55,11 +49,12 @@ Keep `.env`, `session/`, and `data/` private. They are intentionally ignored by 
 Set these values in `.env` or your host's environment-variable page:
 
 ```dotenv
+OWNER_NUMBER=your_owner_phone_number
 AUTH_METHOD=pairing
 PAIRING_NUMBER=your_linking_phone_number
 ```
 
-`PAIRING_NUMBER` is the phone that will be linked to the bot. Replace the placeholder with that device's real number; do not copy an owner/contact number here unless it is genuinely the account being linked. It must be digits only and include the country code.
+`OWNER_NUMBER` is required and authorizes bot-administration commands. `PAIRING_NUMBER` is the phone that will be linked to the bot. Replace both placeholders with real numbers; they may be different. Each must contain digits only and include the country code.
 
 Start the process:
 
@@ -116,6 +111,7 @@ Railway discovers the application through `package.json`; `railway.toml` sets th
 3. Add the same environment variables used for Render:
 
    ```dotenv
+   OWNER_NUMBER=your_owner_phone_number
    AUTH_METHOD=pairing
    PAIRING_NUMBER=your_linking_phone_number
    AUTH_DIR=/var/data/session

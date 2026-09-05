@@ -4,7 +4,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
+
+process.env.OWNER_NUMBER = '15551234567';
 
 const { config } = require('../system/config');
 const handleMessage = require('../system/handler');
@@ -23,10 +26,26 @@ const { convertStickerToImage, createImageSticker } = require('../system/lib/sti
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
 
-test('default ownership configuration is loaded', () => {
+test('ownership configuration requires an explicit owner number', () => {
+  const missingOwner = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, OWNER_NUMBER: '' },
+    encoding: 'utf8'
+  });
+
+  assert.notEqual(missingOwner.status, 0);
+  assert.match(missingOwner.stderr, /OWNER_NUMBER is required/);
+
+  const invalidOwner = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, OWNER_NUMBER: '123' },
+    encoding: 'utf8'
+  });
+  assert.notEqual(invalidOwner.status, 0);
+  assert.match(invalidOwner.stderr, /OWNER_NUMBER must contain a 7-15 digit international phone number/);
   assert.equal(config.ownerName, 'Only Fixa Dev');
   assert.equal(config.authorName, 'Rashid Hussain');
-  assert.equal(config.ownerNumber, '923448170040');
+  assert.equal(config.ownerNumber, '15551234567');
   assert.equal(config.commandPrefix, '!');
   assert.equal(config.botName, 'Black Clover ♣️');
   assert.equal(config.stickerPackname, 'Black Clover ♣️');
@@ -233,9 +252,47 @@ test('group management help is available only to a group admin', async () => {
   assert.match(sent[0].payload.text, /Safe group management/);
 });
 
+test('group management recognizes a bot admin represented by a Privacy LID', async () => {
+  let updatedSubject;
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
+    signalRepository: {
+      lidMapping: {
+        getPNForLID: async (jid) => (jid === 'bot-lid@lid' ? '15551234567@s.whatsapp.net' : null)
+      }
+    },
+    groupMetadata: async () => ({
+      subject: 'Test Group',
+      participants: [
+        { id: 'bot-lid@lid', admin: 'admin' },
+        { id: '15551234568@s.whatsapp.net', admin: 'admin' }
+      ]
+    }),
+    groupUpdateSubject: async (_chatId, subject) => {
+      updatedSubject = subject;
+    },
+    sendMessage: async () => ({ key: { id: 'test-message' } })
+  };
+
+  await handleMessage(socket, {
+    key: {
+      remoteJid: '123456789@g.us',
+      participant: '15551234568@s.whatsapp.net',
+      fromMe: false
+    },
+    message: { conversation: '!gname Updated Group' }
+  });
+
+  assert.equal(updatedSubject, 'Updated Group');
+});
+
 test('premium duration parser validates supported units', () => {
   assert.equal(parseDuration('2h'), 7_200_000);
   assert.throws(() => parseDuration('forever'), /Duration must use/);
+  for (const duration of ['0s', '0m', '0h', '0d']) {
+    assert.throws(() => parseDuration(duration), /at least 1 second/);
+  }
 });
 
 test('group settings persist greeting toggles and render templates', async () => {
@@ -289,8 +346,10 @@ test('premium store writes, lists, and removes an active record', async () => {
     const record = await store.add('15551234567', '1d');
     assert.equal(record.id, '15551234567');
     assert.equal((await store.list()).length, 1);
+    assert.equal(await store.has('15551234567'), true);
     assert.equal(await store.remove('15551234567'), true);
     assert.deepEqual(await store.list(), []);
+    assert.equal(await store.has('15551234567'), false);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
