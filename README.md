@@ -12,13 +12,35 @@
   <img alt="Animated contribution snake" src="https://raw.githubusercontent.com/earnwithrashid4913/Bug-/output/github-snake.svg">
 </picture>
 
-> **Developer:** Only F!XA?? Dev &nbsp;•&nbsp; **Developer Identity:** RaShiD Hussain &nbsp;•&nbsp; **Community:** ONLY GOATS ?
+> **Developed by:** GOATS MODS &nbsp;•&nbsp; **Developer:** Only F!xa Dev &nbsp;•&nbsp; **Official Channel:** [WhatsApp Channel](https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T)
 
 ## About
 
-GOATVERSE MD is a Node.js WhatsApp bot built with Baileys. It runs as one long-lived outbound WebSocket worker, with pairing-code and terminal-QR authentication, persistent bot data, safe group administration, media conversion, and an optional Groq-powered AI command.
+GOATVERSE MD is a high-performance Node.js WhatsApp bot built on Baileys v7. It operates as an outbound WebSocket worker featuring an anime-themed Web Pairing interface, interactive GPU aura particle engine, persistent storage, group administration suite, and optional Groq AI commands.
 
-`𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` is the only master bot name. `THEME` selects a presentation mode only; it never changes authorization or protected identity. The built-in themes are `default`, `gojo` (Satoru Gojo), and `kakashi` (Kakashi Hatake). Themes change menu and theme-card presentation only; they do not download, send, or bundle character artwork.
+`𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` is the master bot identity. Character themes customize the user interface, particle effects, and command banners without affecting security or authorization.
+
+## Web Pairing & Anime Interface
+
+GOATVERSE MD includes an interactive anime-inspired Web Pairing interface running on port `3000`.
+
+### The 4-Step Pairing Flow
+
+1. **Step 1 — Enter Phone Number**: Select your country code or enter custom digits with instant international format validation.
+2. **Step 2 — Anime Aura Generation**: Character aura builds and energy particles surge as the real Baileys socket pairing handshake is dispatched (`POST /api/pairing/request`).
+3. **Step 3 — Pairing Code Reveal**: Large 8-character monospace tiles with one-click clipboard copy, refresh action, and clear step-by-step WhatsApp linking instructions.
+4. **Step 4 — Real-time Connection Pipeline**: Visual 5-stage timeline (`01 Number Submitted` → `02 Code Generated` → `03 Device Approval` → `04 WhatsApp Connection` → `05 Bot Online`) dynamically tracked via live polling.
+
+### 7 Anime Character Themes
+
+Switch themes seamlessly from the Web Pairing interface or via `THEME=<id>` in `.env`:
+- **Satoru Gojo** (`gojo`): Limitless Aura • Azure & Violet Cursed Energy
+- **Ryomen Sukuna** (`sukuna`): Cursed King • Malevolent Crimson & Obsidian Flame
+- **Asta** (`asta`): Anti-Magic • Black Clover Emerald Force
+- **Nami** (`nami`): Navigator • Oceanic Azure & Golden Compass
+- **Nezuko Kamado** (`nezuko`): Hidden Power • Demonic Sakura Pink
+- **Shinobu Kocho** (`shinobu`): Butterfly Aura • Wisteria Lavender & Poison Flutter
+- **Makima** (`makima`): Control Aura • Hypnotic Amber & Ruby Chains
 
 ## Features
 
@@ -67,12 +89,6 @@ npm run check
 npm test
 ```
 
-```bash
-BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
-npm run check
-npm test
-```
-
 Copy [`.env.example`](.env.example). The top **INSTANCE SETTINGS** block is the normal deployer-editable surface:
 
 ```dotenv
@@ -85,7 +101,7 @@ THEME=gojo
 | Variable | Required | Description |
 | --- | --- | --- |
 | `BOT_NUMBER` | Yes | 7–15 digit WhatsApp account number, including country code; must match the authenticated account. |
-| `INSTANCE_OWNER_NAME`, `THEME` | No | Instance display identity and active visual mode (`default`, `gojo`, or `kakashi`); neither grants protected authorization. |
+| `INSTANCE_OWNER_NAME`, `THEME` | No | Instance display identity and active visual mode (`default`, `gojo`, `sukuna`, `asta`, `nami`, `nezuko`, `shinobu`, or `makima`); neither grants protected authorization. |
 | `INSTANCE_OWNER_NUMBER` | No | Separately grants instance-owner commands only; it is not Global Owner or Developer authorization. |
 | `AUTH_METHOD` | No | `pairing` (default) or `qr`. |
 | `AUTH_DIR`, `DATA_DIR` | No | Private persistent paths for credentials and runtime data. |
@@ -205,9 +221,12 @@ The lightweight SVG above is generated daily by [`.github/workflows/snake.yml`](
 
 ## Credits
 
-- **Protected developer brand:** Only F!XA?? Dev
-- **Protected developer identity:** RaShiD Hussain
-- **Community:** ONLY GOATS ?
+- **Project:** 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿
+- **Organization / Team:** GOATS MODS
+- **Developer:** Only F!xa Dev
+- **Author:** RaShiD Hussain
+- **Repository:** [earnwithrashid4913/Bug-](https://github.com/earnwithrashid4913/Bug-)
+- **Community / Channel:** [Official WhatsApp Channel](https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T)
 - WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys)
 
 ## License

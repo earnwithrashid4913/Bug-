@@ -1,6 +1,6 @@
 # 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿 — Deployment Guide
 
-GOATVERSE MD is a single long-running WhatsApp WebSocket worker. It is **not** an HTTP web application. Every supported deployment must use Node.js **20.9+**, one running replica, and persistent private storage for both authentication and runtime data.
+GOATVERSE MD pairs a high-performance WhatsApp WebSocket engine with an integrated Web Pairing server (running on port 3000). Every supported deployment must use Node.js **20.9+**, one running replica, and persistent private storage for both authentication and runtime data.
 
 ## Before deploying
 
@@ -8,7 +8,7 @@ GOATVERSE MD is a single long-running WhatsApp WebSocket worker. It is **not** a
 2. Install from the lockfile: `npm ci`.
 3. Copy `.env.example` locally or configure the same values in the platform environment UI.
 4. Set `BOT_NUMBER` to the WhatsApp account that will run the bot.
-5. `BOT_NUMBER` is the only number used for cloud pairing and connection.
+5. The Web Pairing interface binds to port `PORT` (defaults to 3000) for real-time browser pairing and character theme selection.
 6. Keep `AUTH_DIR` and `DATA_DIR` on a private persistent disk/volume. Do not run a second copy against the same `AUTH_DIR`.
 
 Minimal cloud configuration:
@@ -103,7 +103,7 @@ For production, run one process under your existing systemd/PM2-equivalent polic
 
 - **Docker:** no Dockerfile or compose file is included, so Docker is not claimed as a supported path.
 - **Koyeb:** no Koyeb configuration is included, so Koyeb is not claimed as a supported path.
-- **HTTP web services:** not appropriate; this project has no HTTP listener.
+- **Serverless / Lambda:** not appropriate; this bot requires a continuous WebSocket session and event loop.
 
 ## Recovery and troubleshooting
 

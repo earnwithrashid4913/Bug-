@@ -12,7 +12,7 @@ const DEFAULTS = Object.freeze({
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
   stickerPackname: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
-  stickerAuthor: 'Only F!XA?? Dev',
+  stickerAuthor: 'Only F!xa Dev',
   publicMode: true,
   authMethod: 'pairing',
   authDir: './session',
@@ -30,7 +30,14 @@ const MASTER_BOT_NAME = '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿';
 
 function readString(name, fallback) {
   const value = process.env[name];
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  if (typeof value === 'string' && value.trim()) {
+    const trimmed = value.trim();
+    if (name === 'STICKER_AUTHOR' && /Only F!XA\??\?? Dev/i.test(trimmed)) {
+      return fallback;
+    }
+    return trimmed;
+  }
+  return fallback;
 }
 
 function parseBoolean(name, fallback) {
@@ -89,6 +96,12 @@ function parseUrl(name, fallback) {
     if (parsed.protocol !== 'https:') throw new Error('Only HTTPS URLs are supported.');
     return parsed.toString().replace(/\/$/, '');
   } catch (error) {
+    if (fallback && value !== fallback) {
+      try {
+        const parsedFallback = new URL(fallback);
+        if (parsedFallback.protocol === 'https:') return parsedFallback.toString().replace(/\/$/, '');
+      } catch (_) {}
+    }
     throw new Error(`${name} must be a valid HTTPS URL. ${error.message}`);
   }
 }
@@ -111,8 +124,8 @@ function loadConfig() {
     throw new Error('AUTH_METHOD must be either "pairing" or "qr".');
   }
   const pairingNumber = parseOptionalPhoneNumber('PAIRING_NUMBER');
-  if (authMethod === 'pairing' && pairingNumber && pairingNumber !== botConnectionNumber) {
-    throw new Error('PAIRING_NUMBER must match BOT_CONNECTION_NUMBER. The paired WhatsApp account is the bot connection identity.');
+  if (authMethod === 'pairing' && pairingNumber && pairingNumber !== botNumber) {
+    throw new Error('PAIRING_NUMBER must match BOT_NUMBER. The paired WhatsApp account is the bot connection identity.');
   }
 
   const reconnectBaseDelayMs = parseInteger(

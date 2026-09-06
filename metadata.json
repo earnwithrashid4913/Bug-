@@ -1,0 +1,8 @@
+{
+  "name": "Goatverse MD WhatsApp Bot",
+  "description": "High-fidelity anime-themed WhatsApp bot with 7 character visual identities (Gojo, Sukuna, Asta, Nami, Nezuko, Shinobu, Makima), 4-step anime Web Pairing flow, GPU aura particle engine, and interactive command directory.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

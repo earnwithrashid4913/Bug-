@@ -32,7 +32,7 @@ const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = 
 const { GroupSettingsStore } = require('../system/lib/group-settings');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
-const { DEFAULT_THEME, GOJO_THEME, KAKASHI_THEME, formatThemeSummary, getActiveTheme, listThemes } = require('../system/theme');
+const { DEFAULT_THEME, GOJO_THEME, MAKIMA_THEME, formatThemeSummary, getActiveTheme, listThemes } = require('../system/theme');
 const sharp = require('sharp');
 
 test('deployment configuration requires an explicit BOT_NUMBER', () => {
@@ -53,10 +53,10 @@ test('deployment configuration requires an explicit BOT_NUMBER', () => {
   assert.notEqual(invalidConnectionNumber.status, 0);
   assert.match(invalidConnectionNumber.stderr, /BOT_NUMBER must contain a 7-15 digit international phone number/);
   assert.equal(config.botNumber, '15551234567');
-  assert.equal(config.instanceOwnerName, 'Instance Owner');
+  assert.equal(config.instanceOwnerName, process.env.INSTANCE_OWNER_NAME || 'Instance Owner');
   assert.equal(config.commandPrefix, '!');
   assert.equal(config.stickerPackname, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
-  assert.equal(config.stickerAuthor, 'Only F!XA?? Dev');
+  assert.equal(config.stickerAuthor, 'Only F!xa Dev');
   assert.equal(config.groqModel, 'openai/gpt-oss-20b');
 });
 
@@ -128,9 +128,9 @@ test('premium authorization remains tied to authorized identities', () => {
 test('unknown theme IDs safely fall back without changing the master identity', () => {
   assert.equal(getActiveTheme('default'), DEFAULT_THEME);
   assert.equal(getActiveTheme('GOJO'), GOJO_THEME);
-  assert.equal(getActiveTheme('kakashi'), KAKASHI_THEME);
+  assert.equal(getActiveTheme('makima'), MAKIMA_THEME);
   assert.equal(getActiveTheme('future-theme'), DEFAULT_THEME);
-  assert.deepEqual(listThemes().map((theme) => theme.id), ['default', 'gojo', 'kakashi']);
+  assert.deepEqual(listThemes().map((theme) => theme.id), ['default', 'gojo', 'sukuna', 'asta', 'nami', 'nezuko', 'shinobu', 'makima']);
   assert.match(formatThemeSummary(GOJO_THEME), /Satoru Gojo/);
   assert.equal(config.masterBotName, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
 });
@@ -245,7 +245,7 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
   }).png().toBuffer();
   const sticker = await createImageSticker(source, {
     packname: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
-    author: 'Only F!XA?? Dev'
+    author: 'Only F!xa Dev'
   });
 
   assert.equal(sticker.subarray(0, 4).toString('ascii'), 'RIFF');
@@ -325,7 +325,7 @@ test('command handler displays the configured character theme', async () => {
   assert.equal(sent.length, 1);
   assert.match(sent[0].payload.text, /Available themes/);
   assert.match(sent[0].payload.text, /gojo — Satoru Gojo/);
-  assert.match(sent[0].payload.text, /kakashi — Kakashi Hatake/);
+  assert.match(sent[0].payload.text, /makima — Makima/);
 });
 
 test('sticker command provides usage text when no image is supplied', async () => {
@@ -509,4 +509,16 @@ test('premium store writes, lists, and removes an active record', async () => {
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
+});
+
+test('canonical identity is immutable and verified on startup', () => {
+  const { CANONICAL_IDENTITY, verifyCanonicalIdentity } = require('../system/security');
+  assert.equal(CANONICAL_IDENTITY.projectName, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
+  assert.equal(CANONICAL_IDENTITY.organization, 'GOATS MODS');
+  assert.equal(CANONICAL_IDENTITY.developer, 'Only F!xa Dev');
+  assert.equal(CANONICAL_IDENTITY.author, 'RaShiD Hussain');
+  assert.equal(verifyCanonicalIdentity(), true);
+  assert.throws(() => {
+    CANONICAL_IDENTITY.developer = 'Imposter';
+  });
 });

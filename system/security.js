@@ -9,14 +9,38 @@ const PROTECTED_SECURITY_ENVIRONMENT_KEYS = Object.freeze([
   'OWNER_NUMBER', 'OWNER_NUMBERS'
 ]);
 
+// Canonical project identity source of truth
+const CANONICAL_IDENTITY = Object.freeze({
+  projectName: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
+  organization: 'GOATS MODS',
+  developer: 'Only F!xa Dev',
+  author: 'RaShiD Hussain',
+  repository: 'earnwithrashid4913/Bug-',
+  identityVersion: '1.0.0'
+});
+
 // These names are project identity, not deployment configuration. Authorization
 // numbers, when needed, live in a maintainer-provisioned signed manifest outside
 // the repository; no secret or owner number is shipped in source.
 const PROTECTED_DEVELOPER = Object.freeze({
-  brand: 'Only F!XA?? Dev',
-  name: 'RaShiD Hussain',
-  community: 'ONLY GOATS ?'
+  brand: CANONICAL_IDENTITY.developer,
+  name: CANONICAL_IDENTITY.author,
+  community: CANONICAL_IDENTITY.organization
 });
+
+function verifyCanonicalIdentity() {
+  const isIntact =
+    CANONICAL_IDENTITY.projectName === '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿' &&
+    CANONICAL_IDENTITY.organization === 'GOATS MODS' &&
+    CANONICAL_IDENTITY.developer === 'Only F!xa Dev' &&
+    CANONICAL_IDENTITY.author === 'RaShiD Hussain';
+
+  if (!isIntact) {
+    console.error('[security] Canonical identity verification failed: metadata altered; privileged functions locked.');
+    return false;
+  }
+  return true;
+}
 
 function normalizeIdentity(value) {
   if (typeof value !== 'string') return undefined;
@@ -46,6 +70,10 @@ function verifyIdentityManifest(manifest, secret) {
 }
 
 function loadProtectedIdentity(environment = process.env) {
+  if (!verifyCanonicalIdentity()) {
+    return Object.freeze({ locked: true, globalOwners: new Set(), developers: new Set() });
+  }
+
   const file = environment.GOATVERSE_TRUSTED_IDENTITY_FILE;
   const secret = environment.GOATVERSE_TRUSTED_IDENTITY_HMAC_KEY;
   // A release without external authorization numbers is valid: it has no global
@@ -111,6 +139,7 @@ function protectedGlobalOwnerJids() {
 }
 
 module.exports = {
+  CANONICAL_IDENTITY,
   PROTECTED_DEVELOPER,
   assertProtectedSecurityEnvironment,
   isAuthorizedAdmin,
@@ -122,5 +151,6 @@ module.exports = {
   normalizeIdentity,
   protectedGlobalOwnerJids,
   refreshProtectedIdentity,
+  verifyCanonicalIdentity,
   verifyIdentityManifest
 };
