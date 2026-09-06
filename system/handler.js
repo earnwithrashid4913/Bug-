@@ -2,7 +2,7 @@
 
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { config, normalizePhoneNumber } = require('./config');
-const { isProtectedGlobalOwner, protectedGlobalOwnerJids } = require('./security');
+const { isAuthorizedAdmin, protectedGlobalOwnerJids } = require('./security');
 const { groupSettings } = require('./group-events');
 const {
   getImageMessage,
@@ -15,6 +15,7 @@ const {
 const { askGroq, reserveAiRequest } = require('./lib/ai');
 const { PremiumStore } = require('./lib/premium');
 const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
+const { formatBrandHeader, getActiveTheme } = require('./theme');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
 const reportCooldowns = new Map();
@@ -35,11 +36,13 @@ function commandFromText(text) {
 }
 
 function ownerJids(socket) {
-  return protectedGlobalOwnerJids();
+  const owners = protectedGlobalOwnerJids();
+  if (config.instanceOwnerNumber) owners.add(`${config.instanceOwnerNumber}@s.whatsapp.net`);
+  return owners;
 }
 
 function isOwner(socket, sender) {
-  return isProtectedGlobalOwner(socket, normalizeJid(socket, sender));
+  return isAuthorizedAdmin(socket, normalizeJid(socket, sender), config.instanceOwnerNumber);
 }
 
 function formatDate(timestamp) {
@@ -69,7 +72,7 @@ async function downloadMediaBuffer(mediaMessage, mediaType) {
 function helpText() {
   const p = config.commandPrefix;
   return [
-    `*${config.botName}*`,
+    `*${formatBrandHeader(config.masterBotName, getActiveTheme(config.theme))}*`,
     '',
     '*General commands*',
     `${p}menu — show this menu`,
@@ -97,15 +100,15 @@ function helpText() {
     `${p}listprem — list active premium users`,
     `${p}restart — request a host-managed restart`,
     '',
-    `Owner: ${config.botOwnerName}`,
+    `Instance Owner: ${config.instanceOwnerName}`,
     `Channel: ${config.whatsappChannel}`
   ].join('\n');
 }
 
 async function sendOwnerCard(socket, chatId, quoted) {
   const text = [
-    `*${config.botName} owner details*`,
-    `Deployment Owner: ${config.botOwnerName}`,
+    `*${config.masterBotName} owner details*`,
+    `Instance Owner: ${config.instanceOwnerName}`,
     `Owner WhatsApp: ${config.ownerLink}`,
     `WhatsApp Channel: ${config.whatsappChannel}`
   ].join('\n');
@@ -197,7 +200,7 @@ async function handleReport(socket, context, message) {
 
   const senderNumber = context.sender?.split('@')[0] || 'unknown';
   const ownerMessage = [
-    `*${config.botName} request*`,
+    `*${config.masterBotName} request*`,
     `From: @${senderNumber}`,
     `Message: ${message}`
   ].join('\n');
@@ -359,7 +362,7 @@ async function handleAiCommand(socket, context, command) {
       apiKey: config.groqApiKey,
       model: config.groqModel,
       prompt,
-      botName: config.botName
+      botName: config.masterBotName
     });
     await socket.sendMessage(context.chatId, { text: answer }, { quoted: context.raw });
   } catch (error) {
@@ -533,7 +536,7 @@ async function handleMessage(socket, rawMessage) {
         context.chatId,
         {
           text: [
-            `*${config.botName} status*`,
+            `*${config.masterBotName} status*`,
             `Mode: ${publicMode ? 'public' : 'self'}`,
             `Uptime: ${Math.floor(process.uptime())} seconds`,
             `Premium database: ready`

@@ -170,7 +170,7 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     }
     reconnectAttempts = 0;
     pairingState.registered = true;
-    console.log(chalk.green(`[connection] ${config.botName} is connected to WhatsApp.`));
+    console.log(chalk.green(`[connection] ${config.masterBotName} is connected to WhatsApp.`));
     return;
   }
 
@@ -208,7 +208,7 @@ async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
     const socket = makeWASocket({
       auth: state,
-      browser: [config.botName, 'Chrome', '1.0.0'],
+      browser: [config.masterBotName, 'Chrome', '1.0.0'],
       logger: pino({ level: config.logLevel }),
       markOnlineOnConnect: false,
       syncFullHistory: false
@@ -240,7 +240,7 @@ async function startBot() {
       });
     });
 
-    console.log(chalk.cyan(`[startup] ${config.botName} started. Auth directory: ${config.authDir}`));
+    console.log(chalk.cyan(`[startup] ${config.masterBotName} started. Auth directory: ${config.authDir}`));
   } catch (error) {
     console.error('[startup] Failed to initialize WhatsApp:', error);
     scheduleReconnect();
@@ -276,7 +276,7 @@ process.on('uncaughtException', (error) => {
 });
 
 if (config.dryRun) {
-  console.log(`[startup] Dry run successful. Configuration for ${config.botName} is valid; no WhatsApp connection was opened.`);
+  console.log(`[startup] Dry run successful. Configuration for ${config.masterBotName} is valid; no WhatsApp connection was opened.`);
 } else {
   void startBot();
 }
