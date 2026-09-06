@@ -4,9 +4,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
+process.env.BOT_CONNECTION_NUMBER = '15551234567';
+
 const { config } = require('../system/config');
+const { isProtectedGlobalOwner } = require('../system/security');
 const handleMessage = require('../system/handler');
 const { commandFromText } = handleMessage;
 const {
@@ -23,15 +27,95 @@ const { convertStickerToImage, createImageSticker } = require('../system/lib/sti
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
 
-test('default ownership configuration is loaded', () => {
-  assert.equal(config.ownerName, 'Only Fixa Dev');
-  assert.equal(config.authorName, 'Rashid Hussain');
-  assert.equal(config.ownerNumber, '923448170040');
+test('deployment configuration requires an explicit bot connection number', () => {
+  const missingConnectionNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, BOT_CONNECTION_NUMBER: '' },
+    encoding: 'utf8'
+  });
+
+  assert.notEqual(missingConnectionNumber.status, 0);
+  assert.match(missingConnectionNumber.stderr, /BOT_CONNECTION_NUMBER is required/);
+
+  const invalidConnectionNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, BOT_CONNECTION_NUMBER: '123' },
+    encoding: 'utf8'
+  });
+  assert.notEqual(invalidConnectionNumber.status, 0);
+  assert.match(invalidConnectionNumber.stderr, /BOT_CONNECTION_NUMBER must contain a 7-15 digit international phone number/);
+  assert.equal(config.botConnectionNumber, '15551234567');
+  assert.equal(config.botOwnerName, 'Bot Owner');
   assert.equal(config.commandPrefix, '!');
   assert.equal(config.botName, 'Black Clover ♣️');
   assert.equal(config.stickerPackname, 'Black Clover ♣️');
   assert.equal(config.stickerAuthor, 'Only Fixa Dev');
   assert.equal(config.groqModel, 'openai/gpt-oss-20b');
+});
+
+test('ordinary environment variables cannot override protected Global Owner authorization', () => {
+  const override = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, OWNER_NUMBER: '15551234568' },
+    encoding: 'utf8'
+  });
+
+  assert.notEqual(override.status, 0);
+  assert.match(override.stderr, /Security configuration error.*OWNER_NUMBER cannot configure Global Owner authorization/);
+});
+
+test('instance branding is configurable without changing protected authorization', () => {
+  const deployment = spawnSync(
+    process.execPath,
+    ['-e', "const { config } = require('./system/config'); console.log(JSON.stringify({ number: config.botConnectionNumber, owner: config.botOwnerName, theme: config.theme }));"],
+    {
+      cwd: path.resolve(__dirname, '..'),
+      env: {
+        ...process.env,
+        BOT_CONNECTION_NUMBER: '15551234568',
+        BOT_OWNER_NAME: 'New Deployer',
+        BOT_NAME: 'Custom Bot',
+        THEME: 'gojo'
+      },
+      encoding: 'utf8'
+    }
+  );
+
+  assert.equal(deployment.status, 0);
+  assert.deepEqual(JSON.parse(deployment.stdout), {
+    number: '15551234568',
+    owner: 'New Deployer',
+    theme: 'gojo'
+  });
+  assert.equal(
+    isProtectedGlobalOwner({ decodeJid: (jid) => jid }, '15551234568@s.whatsapp.net'),
+    false
+  );
+});
+
+test('authenticated WhatsApp account must match the configured connection number', () => {
+  const matchingConnection = spawnSync(
+    process.execPath,
+    ['-e', "require('./index').assertConnectedBotIdentity({ user: { id: '15551234567@s.whatsapp.net' } })"],
+    {
+      cwd: path.resolve(__dirname, '..'),
+      env: { ...process.env, BOT_DRY_RUN: 'true' },
+      encoding: 'utf8'
+    }
+  );
+  assert.equal(matchingConnection.status, 0);
+
+  const mismatchedConnection = spawnSync(
+    process.execPath,
+    ['-e', "require('./index').assertConnectedBotIdentity({ user: { id: '15551234568@s.whatsapp.net' } })"],
+    {
+      cwd: path.resolve(__dirname, '..'),
+      env: { ...process.env, BOT_DRY_RUN: 'true' },
+      encoding: 'utf8'
+    }
+  );
+  assert.notEqual(mismatchedConnection.status, 0);
+  assert.match(mismatchedConnection.stderr, /Bot connection identity mismatch/);
 });
 
 test('command parser accepts only the configured prefix', () => {
@@ -233,9 +317,47 @@ test('group management help is available only to a group admin', async () => {
   assert.match(sent[0].payload.text, /Safe group management/);
 });
 
+test('group management recognizes a bot admin represented by a Privacy LID', async () => {
+  let updatedSubject;
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
+    signalRepository: {
+      lidMapping: {
+        getPNForLID: async (jid) => (jid === 'bot-lid@lid' ? '15551234567@s.whatsapp.net' : null)
+      }
+    },
+    groupMetadata: async () => ({
+      subject: 'Test Group',
+      participants: [
+        { id: 'bot-lid@lid', admin: 'admin' },
+        { id: '15551234568@s.whatsapp.net', admin: 'admin' }
+      ]
+    }),
+    groupUpdateSubject: async (_chatId, subject) => {
+      updatedSubject = subject;
+    },
+    sendMessage: async () => ({ key: { id: 'test-message' } })
+  };
+
+  await handleMessage(socket, {
+    key: {
+      remoteJid: '123456789@g.us',
+      participant: '15551234568@s.whatsapp.net',
+      fromMe: false
+    },
+    message: { conversation: '!gname Updated Group' }
+  });
+
+  assert.equal(updatedSubject, 'Updated Group');
+});
+
 test('premium duration parser validates supported units', () => {
   assert.equal(parseDuration('2h'), 7_200_000);
   assert.throws(() => parseDuration('forever'), /Duration must use/);
+  for (const duration of ['0s', '0m', '0h', '0d']) {
+    assert.throws(() => parseDuration(duration), /at least 1 second/);
+  }
 });
 
 test('group settings persist greeting toggles and render templates', async () => {
@@ -289,8 +411,10 @@ test('premium store writes, lists, and removes an active record', async () => {
     const record = await store.add('15551234567', '1d');
     assert.equal(record.id, '15551234567');
     assert.equal((await store.list()).length, 1);
+    assert.equal(await store.has('15551234567'), true);
     assert.equal(await store.remove('15551234567'), true);
     assert.deepEqual(await store.list(), []);
+    assert.equal(await store.has('15551234567'), false);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

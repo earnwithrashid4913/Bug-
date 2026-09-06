@@ -8,7 +8,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 
 - **Developer:** Rashid Hussain
 - **Global Owner:** Only Fixa Dev
-- **Owner WhatsApp:** https://wa.me/923448170040
+- **Deployment owner:** configured through the instance-only `BOT_OWNER_NAME` environment variable
 - **WhatsApp Channel:** https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T
 
 ## Features
@@ -52,12 +52,10 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BOT_NAME` | `Black Clover ♣️` | Display name for logs and commands. |
-| `OWNER_NAME` | `Only Fixa Dev` | Global owner display name. |
-| `OWNER_NUMBER` | `923448170040` | Primary owner number; digits only. |
-| `OWNER_NUMBERS` | empty | Optional comma-separated additional owner numbers. |
-| `AUTHOR_NAME` | `Rashid Hussain` | Developer display name. |
-| `AUTHOR_NUMBER` | `923448170040` | Developer number; digits only. |
-| `OWNER_LINK` | supplied wa.me URL | Owner contact shown by `!owner`. |
+| `BOT_OWNER_NAME` | `Bot Owner` | Per-deployment display/branding name; it never grants authorization. |
+| `BOT_CONNECTION_NUMBER` | required | Per-deployment WhatsApp account; 7–15 digits including country code. Startup fails when absent/invalid, and the connected account must match it. |
+| `THEME` | `default` | Per-deployment branding metadata. It does not affect authorization. |
+| `OWNER_LINK` | `https://wa.me/BOT_CONNECTION_NUMBER` | Optional instance contact shown by `!owner`. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
 | `STICKER_PACKNAME` | `Black Clover ♣️` | Sticker pack name used by `!sticker`. |
@@ -88,11 +86,19 @@ Configuration validates phone numbers, URLs, booleans, delays, prefixes, and aut
 For a cloud host, set a real linking phone number:
 
 ```dotenv
+BOT_OWNER_NAME=your_deployment_name
+BOT_CONNECTION_NUMBER=your_bot_connection_number
 AUTH_METHOD=pairing
 PAIRING_NUMBER=your_linking_phone_number
 ```
 
-Replace `your_linking_phone_number` with the phone being linked, then run `npm start` and enter the emitted code in WhatsApp. This is a connection setting, not an owner/contact field. The number must include its country code and contain digits only.
+Replace the placeholders before starting the bot. `BOT_CONNECTION_NUMBER` is the account this deployment will authenticate as; `BOT_OWNER_NAME` is display-only; `PAIRING_NUMBER` is the phone being linked and may be different. Each number must include its country code and contain digits only.
+
+### Instance configuration and protected authorization
+
+`BOT_NAME`, `BOT_OWNER_NAME`, `BOT_CONNECTION_NUMBER`, `THEME`, and similar instance settings may be changed by a deployer. They never grant Global Owner authorization. Global Owner authorization is source-controlled by `system/security.js`; normal environment variables such as `GLOBAL_OWNER_NUMBERS`, `OWNER_NUMBER`, and `OWNER_NUMBERS` are rejected at startup. A connected bot account is also **not** automatically a Global Owner.
+
+The source code is under the deployer's control, so local code changes cannot be made cryptographically tamper-proof without an external trust anchor. For a production Global Owner policy, maintainers must distribute reviewed/signed releases or use a remote verification service. The bot fails closed for attempted environment-based overrides and never deletes source, sessions, or authentication data.
 
 ### QR code
 
@@ -125,7 +131,7 @@ Use the configured prefix (shown below as `!`).
 | `!jid`, `!chatid` | Everyone in public mode | Show the current chat and sender JIDs. |
 | `!getpp`, `!pp`, `!profilepic`, `!avatar` | Everyone in public mode | Show a profile picture from a group, quoted/mentioned user, or number. |
 | `!setpp` | Owner | Reply to an image to update the bot profile picture. |
-| `!ai`, `!ask`, `!ia`, `!groq` | Everyone in public mode | Ask Groq AI when `GROQ_API_KEY` is configured. |
+| `!ai`, `!ask`, `!ia`, `!groq` | Everyone in public mode | Ask Groq AI when `GROQ_API_KEY` is configured. Premium users and owners receive a 10-second cooldown; other users receive a 30-second cooldown. |
 | `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
 | `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
 | `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
@@ -134,7 +140,7 @@ Use the configured prefix (shown below as `!`).
 | `!gname`, `!gdesc`, `!add`, `!kick`, `!promote`, `!demote`, `!lock`, `!unlock`, `!grouplink` | Group admin/owner + bot admin | Perform the named group action. |
 | `!idch <channel URL>` | Everyone in public mode | Look up a WhatsApp channel invite. |
 | `!public`, `!self` | Owner | Toggle command visibility. |
-| `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`. |
+| `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`; the duration must be at least `1s`. Premium access enables the shorter AI cooldown. |
 | `!delprem <number>` | Owner | Remove premium access. |
 | `!listprem` | Owner | List active premium records. |
 | `!restart` | Owner | Exit cleanly for a host-managed restart. |
