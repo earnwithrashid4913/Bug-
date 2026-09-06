@@ -188,3 +188,30 @@ test('the real supervisor keeps a worker process alive and respawns it', async (
     await once(parent, 'exit');
   }
 });
+
+// --- persisted bot mode wired through the command handler ------------------
+
+test('the handler restores the persisted bot mode onto the socket', async () => {
+  // config.modeDbPath is read when the handler module loads, so point it at a
+  // throwaway file before requiring it (each test file runs in its own process).
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bot-mode-db-')), 'mode.json');
+  process.env.MODE_DB_PATH = dbPath;
+
+  const handleMessage = require('../system/handler');
+  const socket = { public: true };
+
+  assert.equal(await handleMessage.initializeMode(socket), 'public', 'defaults to the configured mode');
+  assert.equal(socket.public, true);
+
+  await handleMessage.modeStore.set('self');
+  const reopened = { public: true };
+  assert.equal(await handleMessage.initializeMode(reopened), 'self', 'mode survived a restart');
+  assert.equal(reopened.public, false, 'self mode is applied to the socket');
+
+  await handleMessage.modeStore.set('public');
+  const restored = { public: false };
+  assert.equal(await handleMessage.initializeMode(restored), 'public');
+  assert.equal(restored.public, true);
+});
