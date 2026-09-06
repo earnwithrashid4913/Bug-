@@ -116,6 +116,25 @@ test('pairing reports the real socket state instead of inventing a code', async 
   assert.equal(app.liveStatus.pairingCode, null);
 });
 
+test('pairing is refused once WhatsApp is actually connected', async () => {
+  const previous = { ...app.liveStatus };
+  app.liveStatus.connected = true;
+
+  try {
+    const { status, payload } = await call('/api/pairing', {
+      method: 'POST',
+      body: { phoneNumber: '923001234567' },
+      forwardFor: '198.51.100.99'
+    });
+    assert.equal(status, 409);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, undefined);
+    assert.match(payload.error, /already connected/);
+  } finally {
+    Object.assign(app.liveStatus, previous);
+  }
+});
+
 test('pairing requests are rate limited', async () => {
   const first = await call('/api/pairing', { method: 'POST', body: { phoneNumber: '923001234567' }, forwardFor: '198.51.100.7' });
   assert.equal(first.status, 503);
