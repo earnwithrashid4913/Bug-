@@ -525,17 +525,13 @@ if (!isChildProcess && !config.dryRun) {
 }
 
 module.exports = {
-  CHILD_FLAG,
   IGNORED_PROCESS_ERRORS,
-  bootstrapSession,
   decodeJid,
   disconnectStatusCode,
   formatPairingCode,
   getActiveThemeId: () => activeTheme.id,
   handlePairingRequest,
-  isChildProcess,
   liveStatus,
   setActiveTheme,
-  shouldReconnect,
-  startBot
+  shouldReconnect
 };
