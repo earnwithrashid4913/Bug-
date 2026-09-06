@@ -2,7 +2,6 @@
 
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { config, normalizePhoneNumber } = require('./config');
-const { isAuthorizedAdmin, protectedGlobalOwnerJids } = require('./security');
 const { groupSettings } = require('./group-events');
 const {
   getImageMessage,
@@ -13,14 +12,25 @@ const {
   resolveJid
 } = require('./lib/message');
 const { askGroq, reserveAiRequest } = require('./lib/ai');
+const { BotModeStore } = require('./lib/bot-mode');
 const { PremiumStore } = require('./lib/premium');
+const { requestRestart } = require('./lib/runtime');
 const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
-const { formatBrandHeader, formatThemeSummary, getActiveTheme, listThemes } = require('./theme');
+const { isAuthorizedAdmin } = require('./security');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
+const modeStore = new BotModeStore(config.modeDbPath, config.publicMode ? 'public' : 'self');
 const reportCooldowns = new Map();
 let publicMode = config.publicMode;
-const PREMIUM_AI_REQUEST_COOLDOWN_MS = 10_000;
+
+// Restores the persisted public/self mode so `!public` and `!self` survive a
+// restart on hosts with ephemeral storage.
+async function initializeMode(socket) {
+  const mode = await modeStore.get();
+  publicMode = mode === 'public';
+  if (socket) socket.public = publicMode;
+  return mode;
+}
 
 function commandFromText(text) {
   if (!text.startsWith(config.commandPrefix)) return undefined;
@@ -36,13 +46,16 @@ function commandFromText(text) {
 }
 
 function ownerJids(socket) {
-  const owners = protectedGlobalOwnerJids();
-  if (config.instanceOwnerNumber) owners.add(`${config.instanceOwnerNumber}@s.whatsapp.net`);
-  return owners;
+  const configuredOwners = config.ownerNumbers.map((number) => `${number}@s.whatsapp.net`);
+  const connectedAccount = normalizeJid(socket, socket.user?.id);
+  return new Set(connectedAccount ? [...configuredOwners, connectedAccount] : configuredOwners);
 }
 
 function isOwner(socket, sender) {
-  return isAuthorizedAdmin(socket, normalizeJid(socket, sender), config.instanceOwnerNumber);
+  // The instance owner (BOT_NUMBER) and the linked account, plus any global
+  // owner or developer granted by the signed identity manifest in security.js.
+  return ownerJids(socket).has(normalizeJid(socket, sender))
+    || isAuthorizedAdmin(socket, sender, config.botNumber);
 }
 
 function formatDate(timestamp) {
@@ -71,10 +84,8 @@ async function downloadMediaBuffer(mediaMessage, mediaType) {
 
 function helpText() {
   const p = config.commandPrefix;
-  const theme = getActiveTheme(config.theme);
   return [
-    `*${formatBrandHeader(config.masterBotName, theme)}*`,
-    theme.tagline,
+    `*${config.botName}*`,
     '',
     '*General commands*',
     `${p}menu — show this menu`,
@@ -88,8 +99,6 @@ function helpText() {
     `${p}jid — show the current chat and sender JIDs`,
     `${p}ai <question> — ask the configured AI provider`,
     `${p}request <message> — send a feature request to the owner`,
-    `${p}theme — show the active character theme`,
-    `${p}idch <WhatsApp channel URL> — inspect public channel metadata`,
     '',
     '*Group admin commands*',
     `${p}hidetag <message> — send a hidden mention to the group`,
@@ -104,33 +113,17 @@ function helpText() {
     `${p}listprem — list active premium users`,
     `${p}restart — request a host-managed restart`,
     '',
-    `Instance Owner: ${config.instanceOwnerName}`,
+    `Owner: ${config.ownerName}`,
     `Channel: ${config.whatsappChannel}`
-  ].join('\n');
-}
-
-function themeText() {
-  const activeTheme = getActiveTheme(config.theme);
-  const availableThemes = listThemes()
-    .map((theme) => `${theme.id === activeTheme.id ? '•' : '○'} ${theme.icon ? `${theme.icon} ` : ''}${theme.id} — ${theme.character || theme.name}`)
-    .join('\n');
-
-  return [
-    `*${config.masterBotName} theme*`,
-    '',
-    formatThemeSummary(activeTheme),
-    '',
-    '*Available themes*',
-    availableThemes,
-    '',
-    'Set THEME in your deployment environment and restart the bot to change the presentation theme.'
   ].join('\n');
 }
 
 async function sendOwnerCard(socket, chatId, quoted) {
   const text = [
-    `*${config.masterBotName} owner details*`,
-    `Instance Owner: ${config.instanceOwnerName}`,
+    `*${config.botName} owner details*`,
+    `Global Owner: ${config.ownerName}`,
+    `Developer: ${config.authorName}`,
+    `Developer WhatsApp: https://wa.me/${config.authorNumber}`,
     `Owner WhatsApp: ${config.ownerLink}`,
     `WhatsApp Channel: ${config.whatsappChannel}`
   ].join('\n');
@@ -156,15 +149,7 @@ async function getGroupInfo(socket, context) {
   }
 
   const botJid = normalizeJid(socket, socket.user?.id);
-  let botParticipant = participants.find((entry) => normalizeJid(socket, entry.id) === botJid);
-  if (!botParticipant && botJid && !botJid.endsWith('@lid')) {
-    for (const entry of participants) {
-      if ((await resolveJid(socket, entry.id)) === botJid) {
-        botParticipant = entry;
-        break;
-      }
-    }
-  }
+  const botParticipant = participants.find((entry) => normalizeJid(socket, entry.id) === botJid);
 
   return {
     participants,
@@ -222,14 +207,14 @@ async function handleReport(socket, context, message) {
 
   const senderNumber = context.sender?.split('@')[0] || 'unknown';
   const ownerMessage = [
-    `*${config.masterBotName} request*`,
+    `*${config.botName} request*`,
     `From: @${senderNumber}`,
     `Message: ${message}`
   ].join('\n');
 
   await Promise.all(
-    [...ownerJids(socket)].map((jid) =>
-      socket.sendMessage(jid, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] })
+    config.ownerNumbers.map((number) =>
+      socket.sendMessage(`${number}@s.whatsapp.net`, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] })
     )
   );
   await socket.sendMessage(context.chatId, { text: 'Your request has been sent to the owner.' }, { quoted: context.raw });
@@ -374,17 +359,12 @@ async function handleAiCommand(socket, context, command) {
   }
 
   try {
-    const isPremium = context.sender?.endsWith('@s.whatsapp.net')
-      && await premiumStore.has(context.sender.split('@')[0]);
-    const cooldownMs = isOwner(socket, context.sender) || isPremium
-      ? PREMIUM_AI_REQUEST_COOLDOWN_MS
-      : undefined;
-    reserveAiRequest(context.sender, cooldownMs);
+    reserveAiRequest(context.sender);
     const answer = await askGroq({
       apiKey: config.groqApiKey,
       model: config.groqModel,
       prompt,
-      botName: config.masterBotName
+      botName: config.botName
     });
     await socket.sendMessage(context.chatId, { text: answer }, { quoted: context.raw });
   } catch (error) {
@@ -451,11 +431,6 @@ async function handleMessage(socket, rawMessage) {
     case 'menu':
     case 'help':
       await socket.sendMessage(context.chatId, { text: helpText() }, { quoted: context.raw });
-      break;
-
-    case 'theme':
-    case 'themes':
-      await socket.sendMessage(context.chatId, { text: themeText() }, { quoted: context.raw });
       break;
 
     case 'ping':
@@ -563,7 +538,7 @@ async function handleMessage(socket, rawMessage) {
         context.chatId,
         {
           text: [
-            `*${config.masterBotName} status*`,
+            `*${config.botName} status*`,
             `Mode: ${publicMode ? 'public' : 'self'}`,
             `Uptime: ${Math.floor(process.uptime())} seconds`,
             `Premium database: ready`
@@ -583,6 +558,7 @@ async function handleMessage(socket, rawMessage) {
       if (!(await requireOwner(socket, context))) break;
       publicMode = command.name === 'public';
       socket.public = publicMode;
+      await modeStore.set(publicMode ? 'public' : 'self');
       await socket.sendMessage(context.chatId, { text: `Bot mode is now ${publicMode ? 'public' : 'self'}.` }, { quoted: context.raw });
       break;
     }
@@ -735,12 +711,16 @@ async function handleMessage(socket, rawMessage) {
     case 'restart':
     case 'rst': {
       if (!(await requireOwner(socket, context))) break;
+      const mode = requestRestart();
       await socket.sendMessage(
         context.chatId,
-        { text: 'Restart requested. Ensure your host is configured to restart this process after it exits.' },
+        {
+          text: mode === 'supervisor'
+            ? 'Restarting now. The built-in supervisor will bring the bot back in a few seconds.'
+            : 'Restart requested. Ensure your host is configured to restart this process after it exits.'
+        },
         { quoted: context.raw }
       );
-      setTimeout(() => process.exit(0), 250).unref();
       break;
     }
 
@@ -752,5 +732,5 @@ async function handleMessage(socket, rawMessage) {
 module.exports = handleMessage;
 module.exports.commandFromText = commandFromText;
 module.exports.helpText = helpText;
-module.exports.themeText = themeText;
-module.exports.getPublicMode = () => publicMode;
+module.exports.initializeMode = initializeMode;
+module.exports.modeStore = modeStore;

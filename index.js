@@ -1,5 +1,7 @@
 'use strict';
 
+const { spawn } = require('node:child_process');
+const path = require('node:path');
 const { stdout: output } = require('node:process');
 const chalk = require('chalk');
 const qrcode = require('qrcode-terminal');
@@ -8,36 +10,80 @@ const { Boom } = require('@hapi/boom');
 const {
   default: makeWASocket,
   DisconnectReason,
+  fetchLatestBaileysVersion,
   jidDecode,
+  makeCacheableSignalKeyStore,
   useMultiFileAuthState
 } = require('@whiskeysockets/baileys');
 
-const { config, normalizePhoneNumber } = require('./system/config');
+const { config } = require('./system/config');
 const { handleGroupParticipantsUpdate } = require('./system/group-events');
 const handleMessage = require('./system/handler');
-const { getActiveTheme, listThemes } = require('./system/theme');
+const { MemoryCache } = require('./system/lib/cache');
+const { prepareSession } = require('./system/session');
+const { getTheme, isThemeId, listThemes, resolveTheme } = require('./system/theme');
 const { createWebServer } = require('./system/web');
 
+// ---------------------------------------------------------------------------
+// Process supervisor (migrated from the reference bot).
+//
+// `node index.js` spawns `node index.js --child` and keeps it alive. A crash or
+// a `!restart` request therefore recovers without relying on the hosting panel
+// to notice, which is what the reference bot does with its own launcher.
+// ---------------------------------------------------------------------------
+
+const CHILD_FLAG = '--child';
+const isChildProcess = process.argv.includes(CHILD_FLAG);
+
+// How many worker exits inside one minute are tolerated before the supervisor
+// gives up instead of looping forever.
+const MAX_WORKER_RESTARTS_PER_MINUTE = 5;
+let workerExits = [];
+
+// Grace period after the WhatsApp handshake before a pairing code is requested,
+// so the registration query is not sent into a settling socket.
+const PAIRING_SETTLE_MS = 3_000;
+
+// WhatsApp/socket noise that must never take the whole process down. The
+// reference bot filters exactly these; each one is already handled by the
+// reconnect logic below.
+const IGNORED_PROCESS_ERRORS = Object.freeze([
+  'conflict',
+  'Socket connection timeout',
+  'not-authorized',
+  'already-exists',
+  'rate-overlimit',
+  'Connection Closed',
+  'Timed Out',
+  'Value not found'
+]);
+
 let activeSocket;
-let currentPairingState;
+let webServer;
+let childProcess;
 let reconnectTimer;
 let reconnectAttempts = 0;
 let stopping = false;
-let httpServer;
+let resetting = false;
+let currentPairingState;
 
+// Live mirror of the WhatsApp socket state. The dashboard renders this object
+// verbatim, so it is only ever written from real socket events — the UI never
+// shows "connected" unless WhatsApp actually reported an open connection.
 const liveStatus = {
-  status: 'starting',
+  state: 'starting',
+  connected: false,
+  message: 'Starting the WhatsApp client…',
   pairingCode: null,
-  lastQr: null,
-  connectedAt: null
+  pairingNumber: null,
+  pairingRequestedAt: null,
+  session: 'unknown',
+  botUser: null,
+  startedAt: Date.now(),
+  updatedAt: Date.now()
 };
-const recentLogs = [];
 
-function logEvent(level, message) {
-  const time = new Date().toLocaleTimeString('en-US', { hour12: false });
-  recentLogs.push({ time, level, message });
-  if (recentLogs.length > 50) recentLogs.shift();
-}
+let activeTheme = resolveTheme(config.theme);
 
 const disconnectLabels = Object.freeze({
   [DisconnectReason.badSession]: 'The saved WhatsApp session is invalid.',
@@ -56,24 +102,6 @@ function decodeJid(jid) {
     return decoded?.user && decoded?.server ? `${decoded.user}@${decoded.server}` : jid;
   }
   return jid;
-}
-
-function assertConnectedBotIdentity(socket) {
-  const connectedJid = decodeJid(socket.user?.id);
-  const connectedNumber = connectedJid?.split('@')[0];
-  let normalizedConnectedNumber;
-  try {
-    normalizedConnectedNumber = normalizePhoneNumber(connectedNumber, 'Connected WhatsApp account');
-  } catch {
-    throw new Error('Bot connection identity could not be verified from the authenticated WhatsApp account.');
-  }
-
-  if (normalizedConnectedNumber !== config.botNumber) {
-    throw new Error(
-      `Bot connection identity mismatch: BOT_NUMBER is ${config.botNumber}, ` +
-      `but the authenticated WhatsApp account is ${normalizedConnectedNumber}.`
-    );
-  }
 }
 
 function disconnectStatusCode(lastDisconnect) {
@@ -104,12 +132,22 @@ function scheduleReconnect() {
   }, delay);
 }
 
+function setStatus(state, message, extra = {}) {
+  Object.assign(liveStatus, {
+    state,
+    message,
+    connected: state === 'connected',
+    updatedAt: Date.now(),
+    ...extra
+  });
+}
+
 function renderQrCode(qr, pairingState) {
   if (pairingState.lastQr === qr) return;
   pairingState.lastQr = qr;
 
   if (!output.isTTY) {
-    console.warn('[qr] A QR code was received, but this host is non-interactive. Use AUTH_METHOD=pairing with BOT_NUMBER for cloud hosting.');
+    console.warn('[qr] A QR code was received, but this host is non-interactive. Use the web dashboard pairing flow instead.');
     return;
   }
 
@@ -117,80 +155,117 @@ function renderQrCode(qr, pairingState) {
   qrcode.generate(qr, { small: true });
 }
 
+// Pairing codes are displayed the same way the reference bot formats them:
+// two groups of four characters separated by a dash.
+function formatPairingCode(code) {
+  return code?.match(/.{1,4}/g)?.join('-') || code;
+}
+
 async function requestPairingCode(socket, pairingState, targetNumber) {
-  const numberToPair = targetNumber || config.botNumber;
-  if (pairingState.pending || pairingState.registered) return liveStatus.pairingCode;
-  pairingState.pending = true;
+  if (!socket || pairingState.registered) return liveStatus.pairingCode;
+
+  const number = targetNumber || config.botNumber;
 
   try {
-    // Add a small delay to ensure socket is ready for pairing
-    // Baileys 7.0.0-rc14 may emit QR before full socket initialization
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    const code = await socket.requestPairingCode(numberToPair);
+    const code = await socket.requestPairingCode(number);
     pairingState.requested = true;
+    pairingState.pending = false;
+    pairingState.lastQr = undefined;
     liveStatus.pairingCode = code;
-    liveStatus.botNumber = numberToPair;
-    liveStatus.status = 'pairing';
-    logEvent('pairing', `Pairing code generated for +${numberToPair}: ${code}`);
-    console.log(chalk.green(`[pairing] Enter this code in WhatsApp (+${numberToPair}): ${code}`));
+    liveStatus.pairingNumber = number;
+    liveStatus.pairingRequestedAt = Date.now();
+    setStatus('pairing', `Enter the pairing code in WhatsApp on ${number}.`);
+    console.log(chalk.green(`[pairing] Enter this code in WhatsApp (${number}): ${formatPairingCode(code)}`));
     return code;
   } catch (error) {
-    logEvent('error', `Could not request pairing code for +${numberToPair}: ${error.message}`);
+    pairingState.pending = false;
     console.error(`[pairing] Could not request a pairing code: ${error.message}`);
     throw error;
-  } finally {
-    pairingState.pending = false;
   }
+}
+
+// Called by the dashboard. Real errors surface to the user; nothing is faked.
+async function handlePairingRequest(number) {
+  if (liveStatus.connected || currentPairingState?.registered) {
+    throw Object.assign(new Error('WhatsApp is already connected.'), { status: 409 });
+  }
+  // A pairing code can only be requested once the WhatsApp handshake finished
+  // (the socket reported a QR / reached the pairing stage).
+  if (!activeSocket || !currentPairingState?.readyForPairing) {
+    throw Object.assign(
+      new Error('The WhatsApp client is still connecting. Try again in a few seconds.'),
+      { status: 503 }
+    );
+  }
+
+  return requestPairingCode(activeSocket, currentPairingState, number);
+}
+
+function setActiveTheme(themeId) {
+  if (!isThemeId(themeId)) {
+    throw new Error(`Unknown theme "${themeId}". Available themes: ${listThemes().map((theme) => theme.id).join(', ')}.`);
+  }
+  activeTheme = getTheme(themeId);
+  console.log(`[theme] Active theme is now ${activeTheme.name}.`);
+  return activeTheme;
 }
 
 async function handleConnectionUpdate(socket, update, pairingState) {
   if (socket !== activeSocket || stopping) return;
 
-  // Handle pairing/QR flow when connection is connecting or open
   if (update.qr && !pairingState.registered) {
-    liveStatus.lastQr = update.qr;
+    // The handshake is complete from here on, so a pairing code can be issued.
+    pairingState.readyForPairing = true;
+
     if (config.authMethod === 'pairing') {
-      // Only request pairing code when socket is actively connecting
-      // This prevents race conditions where QR fires before socket is ready
-      if (update.connection === 'connecting' || update.connection === undefined) {
-        await requestPairingCode(socket, pairingState);
-      }
+      setStatus('pairing', `Requesting a pairing code for ${config.botNumber}…`);
+      // Give the socket a moment to settle before the registration IQ, the same
+      // way the reference bot delays its automatic pairing request.
+      await new Promise((resolve) => setTimeout(resolve, PAIRING_SETTLE_MS).unref());
+      if (stopping || socket !== activeSocket) return;
+
+      await requestPairingCode(socket, pairingState, config.botNumber).catch((error) => {
+        setStatus('connecting', `Pairing code request failed: ${error.message}`);
+      });
     } else {
-      liveStatus.status = 'qr';
+      // Internal, terminal-only fallback. The dashboard never offers QR.
+      setStatus('connecting', 'Scan the QR code printed in the server terminal.');
       renderQrCode(update.qr, pairingState);
     }
   }
 
   if (update.connection === 'open') {
-    try {
-      assertConnectedBotIdentity(socket);
-    } catch (error) {
-      logEvent('error', `Connection identity mismatch: ${error.message}`);
-      console.error(`[security] ${error.message}`);
-      process.exitCode = 1;
-      shutdown('connection identity mismatch');
-      return;
-    }
     reconnectAttempts = 0;
     pairingState.registered = true;
-    liveStatus.status = 'connected';
-    liveStatus.connectedAt = new Date().toISOString();
-    logEvent('info', `${config.masterBotName} is connected to WhatsApp.`);
-    console.log(chalk.green(`[connection] ${config.masterBotName} is connected to WhatsApp.`));
+    setStatus('connected', `${config.botName} is connected to WhatsApp.`, {
+      pairingCode: null,
+      pairingRequestedAt: null,
+      session: 'paired',
+      botUser: socket.user?.id?.split(':')[0] || socket.user?.id || null
+    });
+    console.log(chalk.green(`[connection] ${config.botName} is connected to WhatsApp.`));
+    console.log(chalk.cyan(`[connection] Logged in as: ${socket.user?.name || 'Unknown'} (${socket.user?.id?.split(':')[0] || 'n/a'})`));
     return;
   }
 
   if (update.connection !== 'close') return;
 
+  pairingState.readyForPairing = false;
   const reason = disconnectStatusCode(update.lastDisconnect);
   const label = disconnectLabels[reason] || `Unknown disconnect reason: ${reason ?? 'not supplied'}.`;
-  liveStatus.status = 'disconnected';
-  logEvent('warn', `WhatsApp disconnected: ${label}`);
+  setStatus(reason === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected', label, {
+    pairingCode: null,
+    session: reason === DisconnectReason.loggedOut ? 'logged_out' : liveStatus.session
+  });
   console.warn(`[connection] ${label}`);
 
   if (shouldReconnect(reason)) {
     scheduleReconnect();
+    return;
+  }
+
+  if (reason === DisconnectReason.loggedOut) {
+    console.error('[connection] This device was logged out. Pair again from the dashboard, or set a fresh SESSION_ID, then restart the bot.');
     return;
   }
 
@@ -210,30 +285,76 @@ async function handleMessages(socket, upsert) {
   }
 }
 
+function bootstrapSession() {
+  try {
+    const result = prepareSession({
+      authDir: config.authDir,
+      sessionId: config.sessionId,
+      overwrite: config.sessionOverwrite
+    });
+    liveStatus.session = result === 'empty' ? 'none' : result;
+    return result;
+  } catch (error) {
+    // A bad SESSION_ID must not brick the deployment: keep serving the
+    // dashboard so the owner can pair again from the browser.
+    liveStatus.session = 'invalid';
+    console.error(chalk.red(`[session] ${error.message}`));
+    console.error('[session] The dashboard is still available so you can pair again from the browser.');
+    return 'invalid';
+  }
+}
+
 async function startBot() {
   if (stopping) return;
 
   try {
+    // The reference bot pins the socket to the newest published WhatsApp Web
+    // version; falling back to Baileys' bundled default keeps this safe offline.
+    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+    if (!version) console.warn('[connection] Could not fetch the latest WhatsApp Web version; using the bundled default.');
+
     const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
+    const logger = pino({ level: config.logLevel });
     const socket = makeWASocket({
-      auth: state,
-      browser: [config.masterBotName, 'Chrome', '1.0.0'],
-      logger: pino({ level: config.logLevel }),
+      ...(version ? { version } : {}),
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, logger.child({ level: 'silent' }))
+      },
+      logger,
+      browser: ['Ubuntu', 'Chrome', '20.0.04'],
+      fireInitQueries: false,
       markOnlineOnConnect: false,
-      syncFullHistory: false
+      generateHighQualityLinkPreview: true,
+      // Full history sync is skipped for a lightweight startup, but recent
+      // history sync stays enabled: Baileys 7 needs it for the initial LID
+      // mappings and warns that disabling every sync type causes session errors.
+      syncFullHistory: false,
+      msgRetryCounterCache: new MemoryCache({ maxEntries: 1_000 }),
+      userDevicesCache: new MemoryCache({ stdTtlMs: 5 * 60_000, maxEntries: 500 })
     });
 
     activeSocket = socket;
     socket.decodeJid = decodeJid;
-    socket.public = config.publicMode;
+    // Restores the persisted public/self mode (data/mode.json).
+    socket.public = (await handleMessage.initializeMode(socket)) === 'public';
 
     const pairingState = {
       pending: false,
       requested: false,
       registered: state.creds.registered,
+      // True once the WhatsApp handshake completed and a code can be issued.
+      readyForPairing: false,
       lastQr: undefined
     };
     currentPairingState = pairingState;
+
+    setStatus(
+      pairingState.registered ? 'connecting' : 'pairing',
+      pairingState.registered
+        ? 'Restoring the saved WhatsApp session…'
+        : `Waiting to pair ${config.botNumber}.`
+    );
 
     socket.ev.on('creds.update', () => {
       void saveCreds().catch((error) => console.error('[auth] Failed to save credentials:', error));
@@ -250,11 +371,37 @@ async function startBot() {
       });
     });
 
-    console.log(chalk.cyan(`[startup] ${config.masterBotName} started. Auth directory: ${config.authDir}`));
+    console.log(chalk.cyan(`[startup] ${config.botName} started. Auth directory: ${config.authDir}`));
   } catch (error) {
+    activeSocket = undefined;
+    currentPairingState = undefined;
+    setStatus('error', `WhatsApp failed to initialize: ${error.message}`);
     console.error('[startup] Failed to initialize WhatsApp:', error);
     scheduleReconnect();
   }
+}
+
+function startWebServer() {
+  webServer = createWebServer({
+    config,
+    themes: listThemes(),
+    getActiveThemeId: () => activeTheme.id,
+    setActiveTheme,
+    getStatus: () => ({ ...liveStatus, uptimeMs: Date.now() - liveStatus.startedAt }),
+    requestPairing: handlePairingRequest
+  });
+
+  webServer.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`[web] Port ${config.webPort} is already in use. Set PORT to a free port.`);
+      return;
+    }
+    console.error('[web] Dashboard server error:', error);
+  });
+
+  webServer.listen(config.webPort, config.webHost, () => {
+    console.log(chalk.cyan(`[web] Pairing dashboard listening on http://${config.webHost}:${config.webPort} (theme: ${activeTheme.name}).`));
+  });
 }
 
 function shutdown(signal) {
@@ -263,12 +410,10 @@ function shutdown(signal) {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   console.log(`[shutdown] Received ${signal}; closing the bot process.`);
 
-  if (httpServer) {
-    try {
-      httpServer.close();
-    } catch (error) {
-      console.error('[shutdown] Failed to close web server cleanly:', error);
-    }
+  try {
+    webServer?.close();
+  } catch (error) {
+    console.error('[shutdown] Failed to close the dashboard server cleanly:', error);
   }
 
   try {
@@ -282,70 +427,111 @@ function shutdown(signal) {
   setTimeout(() => process.exit(process.exitCode || 0), 5_000).unref();
 }
 
-function startServer(port = config.webPort, host = '0.0.0.0') {
-  if (httpServer) return httpServer;
-  httpServer = createWebServer({
-    config,
-    liveStatus,
-    recentLogs,
-    getActiveTheme,
-    listThemes,
-    getPublicMode: handleMessage.getPublicMode,
-    port,
-    host,
-    onRefreshPairingCode: async (phoneNumber) => {
-      let targetNumber = config.botNumber;
-      if (phoneNumber && typeof phoneNumber === 'string' && phoneNumber.trim()) {
-        try {
-          const requestedNumber = normalizePhoneNumber(phoneNumber, 'Pairing phone number');
-          if (requestedNumber !== config.botNumber) {
-            throw new Error('The web pairing interface can only request a code for the configured BOT_NUMBER.');
-          }
-        } catch (err) {
-          logEvent('warn', `Invalid pairing request: ${err.message}`);
-          throw err;
-        }
-      }
-      if (activeSocket && currentPairingState && !currentPairingState.registered) {
-        currentPairingState.requested = false;
-        currentPairingState.pending = false;
-        liveStatus.pairingCode = null;
-        logEvent('pairing', `Pairing code requested for +${targetNumber}`);
-        return await requestPairingCode(activeSocket, currentPairingState, targetNumber);
-      }
-      return liveStatus.pairingCode;
-    }
+// ---------------------------------------------------------------------------
+// Supervisor side: spawn and keep the worker alive.
+// ---------------------------------------------------------------------------
+
+function launchChild() {
+  const entry = path.join(__dirname, 'index.js');
+  const child = spawn(process.execPath, [entry, CHILD_FLAG], {
+    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    env: process.env
   });
-  return httpServer;
+  childProcess = child;
+
+  child.on('message', (message) => {
+    if (message?.type !== 'reset') return;
+    console.log('[supervisor] Restart requested by the bot; relaunching the worker.');
+    resetting = true;
+    child.kill('SIGTERM');
+  });
+
+  child.on('exit', (code, signal) => {
+    childProcess = undefined;
+    if (stopping) return;
+
+    if (resetting) {
+      resetting = false;
+      launchChild();
+      return;
+    }
+
+    // Crash-loop guard: a worker that keeps dying immediately means the
+    // deployment itself is broken (bad configuration, missing credentials), so
+    // report it instead of burning CPU in a restart loop.
+    const now = Date.now();
+    workerExits = workerExits.filter((at) => now - at < 60_000);
+    workerExits.push(now);
+
+    if (workerExits.length >= MAX_WORKER_RESTARTS_PER_MINUTE) {
+      console.error('[supervisor] The worker keeps exiting; stopping instead of looping. Check the errors above.');
+      process.exitCode = code ?? 1;
+      shutdown('crash-loop');
+      return;
+    }
+
+    console.warn(`[supervisor] Worker exited (code ${code}, signal ${signal}); restarting.`);
+    launchChild();
+  });
+
+  child.on('error', (error) => {
+    console.error('[supervisor] Failed to manage the worker process:', error);
+  });
 }
 
-process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => {
+  if (!isChildProcess && childProcess) {
+    stopping = true;
+    childProcess.kill('SIGINT');
+    return;
+  }
+  shutdown('SIGINT');
+});
+
+process.once('SIGTERM', () => {
+  if (!isChildProcess && childProcess) {
+    stopping = true;
+    childProcess.kill('SIGTERM');
+    return;
+  }
+  shutdown('SIGTERM');
+});
+
 process.on('unhandledRejection', (error) => {
   console.error('[process] Unhandled promise rejection:', error);
 });
+
 process.on('uncaughtException', (error) => {
+  const text = String(error?.message || error);
+  if (IGNORED_PROCESS_ERRORS.some((needle) => text.includes(needle))) {
+    console.warn(`[process] Ignored known WhatsApp socket noise: ${text}`);
+    return;
+  }
+
   console.error('[process] Uncaught exception:', error);
   process.exitCode = 1;
   shutdown('uncaughtException');
 });
 
-if (require.main === module) {
-  if (config.dryRun) {
-    liveStatus.status = 'dry_run';
-    console.log(`[startup] Dry run successful. Configuration for ${config.masterBotName} is valid; no WhatsApp connection was opened.`);
-  } else {
-    startServer();
-    logEvent('info', `${config.masterBotName} starting... Auth dir: ${config.authDir}`);
-    void startBot();
-  }
+if (!isChildProcess && !config.dryRun) {
+  launchChild();
+} else if (config.dryRun) {
+  bootstrapSession();
+  console.log(`[startup] Dry run successful. Configuration for ${config.botName} is valid; no WhatsApp connection was opened.`);
+} else {
+  bootstrapSession();
+  startWebServer();
+  void startBot();
 }
 
 module.exports = {
+  IGNORED_PROCESS_ERRORS,
   decodeJid,
-  assertConnectedBotIdentity,
   disconnectStatusCode,
-  shouldReconnect,
-  startBot,
-  startServer
+  formatPairingCode,
+  getActiveThemeId: () => activeTheme.id,
+  handlePairingRequest,
+  liveStatus,
+  setActiveTheme,
+  shouldReconnect
 };

@@ -1,13 +1,24 @@
 services:
-  # This bot maintains an outbound WhatsApp WebSocket connection and does not expose HTTP.
-  - type: worker
+  # The bot keeps an outbound WhatsApp WebSocket open and also serves the
+  # themed Web Pairing dashboard, so it is deployed as a web service.
+  - type: web
     name: goatverse-md
     runtime: node
     buildCommand: npm ci
     startCommand: npm start
+    healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: 20.19.5
+      # The only two user-facing settings. BOT_NUMBER needs the country code
+      # and must not contain a "+".
+      - key: OWNER_NAME
+        sync: false
+      - key: BOT_NUMBER
+        sync: false
+      # makima | nami | nezuko | shinobu | gojo | sukuna | asta
+      - key: THEME
+        value: gojo
       - key: AUTH_METHOD
         value: pairing
       - key: AUTH_DIR
@@ -16,7 +27,13 @@ services:
         value: /var/data/data
       - key: PUBLIC_MODE
         value: "true"
+      # Optional: restore a paired session when the disk is not attached.
+      # Raw JSON or base64 contents of session/creds.json.
+      - key: SESSION_ID
+        sync: false
+      - key: EXPOSE_SESSION_ID
+        value: "false"
     disk:
-      name: goatverse-md-data
+      name: goatverse-auth-data
       mountPath: /var/data
       sizeGB: 1
