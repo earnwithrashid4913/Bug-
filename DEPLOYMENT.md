@@ -7,19 +7,17 @@ GOATVERSE MD is a single long-running WhatsApp WebSocket worker. It is **not** a
 1. Use Node.js 20.9+ (`node --version`).
 2. Install from the lockfile: `npm ci`.
 3. Copy `.env.example` locally or configure the same values in the platform environment UI.
-4. Set `BOT_CONNECTION_NUMBER` to the WhatsApp account that will run the bot.
-5. For a cloud pairing code, set `PAIRING_NUMBER` to **the same number** as `BOT_CONNECTION_NUMBER`.
+4. Set `BOT_NUMBER` to the WhatsApp account that will run the bot.
+5. `BOT_NUMBER` is the only number used for cloud pairing and connection.
 6. Keep `AUTH_DIR` and `DATA_DIR` on a private persistent disk/volume. Do not run a second copy against the same `AUTH_DIR`.
 
 Minimal cloud configuration:
 
 ```dotenv
-BOT_NAME=My GOATVERSE Instance
 INSTANCE_OWNER_NAME=Your Name
 INSTANCE_OWNER_NUMBER=15551234567
-BOT_CONNECTION_NUMBER=15551234567
+BOT_NUMBER=15551234567
 AUTH_METHOD=pairing
-PAIRING_NUMBER=15551234567
 AUTH_DIR=/var/data/session
 DATA_DIR=/var/data/data
 ```
@@ -31,12 +29,12 @@ DATA_DIR=/var/data/data
 Run the non-network validation before a first deploy:
 
 ```bash
-BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
+BOT_NUMBER=15551234567 npm run start:dry
 npm run check
 npm test
 ```
 
-Start with `npm start`. For `AUTH_METHOD=pairing`, copy the printed code into WhatsApp **Linked devices** for `BOT_CONNECTION_NUMBER`. For local `AUTH_METHOD=qr`, scan the terminal QR with that same account. After the connection log appears, test `!menu`, `!ping`, and `!owner`.
+Start with `npm start`. For `AUTH_METHOD=pairing`, copy the printed code into WhatsApp **Linked devices** for `BOT_NUMBER`. For local `AUTH_METHOD=qr`, scan the terminal QR with that same account. After the connection log appears, test `!menu`, `!ping`, and `!owner`.
 
 ## Render
 
@@ -46,7 +44,7 @@ The included [`render.yaml`](render.yaml) is a worker Blueprint with `npm ci`, `
 
 1. Create a Blueprint from the repository.
 2. Keep the 1 GB disk at `/var/data` and one worker instance.
-3. Add `BOT_CONNECTION_NUMBER` and matching `PAIRING_NUMBER` in the Render environment UI; set optional instance settings there too.
+3. Add `BOT_NUMBER` in the Render environment UI; set optional instance settings there too.
 4. Keep `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`.
 5. Deploy, pair from logs, and preserve the disk across restarts and updates.
 
@@ -61,7 +59,7 @@ The included [`render.yaml`](render.yaml) is a worker Blueprint with `npm ci`, `
 [`railway.toml`](railway.toml) starts the process with `npm start`; Nixpacks installs the project from `package.json`/the lockfile.
 
 1. Create a project from the repository and add one Volume at `/var/data`.
-2. Set `BOT_CONNECTION_NUMBER`, matching `PAIRING_NUMBER`, optional instance settings, `AUTH_DIR=/var/data/session`, and `DATA_DIR=/var/data/data`.
+2. Set `BOT_NUMBER`, optional instance settings, `AUTH_DIR=/var/data/session`, and `DATA_DIR=/var/data/data`.
 3. Deploy one replica and obtain the pairing code from logs.
 4. Keep the Volume attached for restarts and updates.
 
@@ -93,7 +91,7 @@ cd Bug-
 cp .env.example .env
 # edit .env; use private persistent paths for AUTH_DIR and DATA_DIR
 npm ci
-BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
+BOT_NUMBER=15551234567 npm run start:dry
 npm start
 ```
 
@@ -111,8 +109,8 @@ For production, run one process under your existing systemd/PM2-equivalent polic
 
 | Problem | Action |
 | --- | --- |
-| No pairing code in cloud logs | Set `PAIRING_NUMBER` to valid digits matching `BOT_CONNECTION_NUMBER`. |
-| Connection identity mismatch | Pair the exact account in `BOT_CONNECTION_NUMBER`; this is an intentional fail-closed check. |
+| No pairing code in cloud logs | Set a valid `BOT_NUMBER` (digits and country code). |
+| Connection identity mismatch | Pair the exact account in `BOT_NUMBER`; this is an intentional fail-closed check. |
 | Session disappears after deploy | Mount persistent storage and point both `AUTH_DIR` and `DATA_DIR` to it. |
 | `Bad Session` / logout | Stop the process, remove only configured `AUTH_DIR`, restart, and pair again. |
 | Commands ignored | Check `COMMAND_PREFIX`, `PUBLIC_MODE`, authorization settings, and worker logs. |

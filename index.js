@@ -1,7 +1,6 @@
 'use strict';
 
-const readline = require('node:readline/promises');
-const { stdin: input, stdout: output } = require('node:process');
+const { stdout: output } = require('node:process');
 const chalk = require('chalk');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
@@ -51,9 +50,9 @@ function assertConnectedBotIdentity(socket) {
     throw new Error('Bot connection identity could not be verified from the authenticated WhatsApp account.');
   }
 
-  if (normalizedConnectedNumber !== config.botConnectionNumber) {
+  if (normalizedConnectedNumber !== config.botNumber) {
     throw new Error(
-      `Bot connection identity mismatch: BOT_CONNECTION_NUMBER is ${config.botConnectionNumber}, ` +
+      `Bot connection identity mismatch: BOT_NUMBER is ${config.botNumber}, ` +
       `but the authenticated WhatsApp account is ${normalizedConnectedNumber}.`
     );
   }
@@ -87,33 +86,12 @@ function scheduleReconnect() {
   }, delay);
 }
 
-async function promptForPairingNumber() {
-  if (config.pairingNumber) return config.pairingNumber;
-
-  if (!input.isTTY) {
-    console.warn('[pairing] PAIRING_NUMBER is not set and this host is non-interactive. Set PAIRING_NUMBER to request a pairing code, or use AUTH_METHOD=qr in a local terminal.');
-    return undefined;
-  }
-
-  const terminal = readline.createInterface({ input, output });
-  try {
-    const answer = await terminal.question('Enter the WhatsApp number to pair (country code, digits only): ');
-    const number = answer.replace(/\D/g, '');
-    if (!/^\d{7,15}$/.test(number)) {
-      throw new Error('The pairing number must contain 7-15 digits, including its country code.');
-    }
-    return number;
-  } finally {
-    terminal.close();
-  }
-}
-
 function renderQrCode(qr, pairingState) {
   if (pairingState.lastQr === qr) return;
   pairingState.lastQr = qr;
 
   if (!output.isTTY) {
-    console.warn('[qr] A QR code was received, but this host is non-interactive. Use AUTH_METHOD=pairing with PAIRING_NUMBER for cloud hosting.');
+    console.warn('[qr] A QR code was received, but this host is non-interactive. Use AUTH_METHOD=pairing with BOT_NUMBER for cloud hosting.');
     return;
   }
 
@@ -126,14 +104,11 @@ async function requestPairingCode(socket, pairingState) {
   pairingState.pending = true;
 
   try {
-    const number = await promptForPairingNumber();
-    if (!number) return;
-    
     // Add a small delay to ensure socket is ready for pairing
     // Baileys 7.0.0-rc14 may emit QR before full socket initialization
     await new Promise(resolve => setTimeout(resolve, 500));
     
-    const code = await socket.requestPairingCode(number);
+    const code = await socket.requestPairingCode(config.botNumber);
     pairingState.requested = true;
     console.log(chalk.green(`[pairing] Enter this code in WhatsApp: ${code}`));
   } catch (error) {

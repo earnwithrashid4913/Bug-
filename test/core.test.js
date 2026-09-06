@@ -7,12 +7,13 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
-process.env.BOT_CONNECTION_NUMBER = '15551234567';
+process.env.BOT_NUMBER = '15551234567';
 
 const { config } = require('../system/config');
 const {
   isAuthorizedAdmin,
   isGlobalOwner,
+  isPremiumAuthorized,
   loadProtectedIdentity,
   PROTECTED_DEVELOPER,
   verifyIdentityManifest
@@ -31,50 +32,44 @@ const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = 
 const { GroupSettingsStore } = require('../system/lib/group-settings');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
+const { DEFAULT_THEME, getActiveTheme } = require('../system/theme');
 const sharp = require('sharp');
 
-test('deployment configuration requires an explicit bot connection number', () => {
+test('deployment configuration requires an explicit BOT_NUMBER', () => {
   const missingConnectionNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, BOT_CONNECTION_NUMBER: '' },
+    env: { ...process.env, BOT_NUMBER: '' },
     encoding: 'utf8'
   });
 
   assert.notEqual(missingConnectionNumber.status, 0);
-  assert.match(missingConnectionNumber.stderr, /BOT_CONNECTION_NUMBER is required/);
+  assert.match(missingConnectionNumber.stderr, /BOT_NUMBER is required/);
 
   const invalidConnectionNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, BOT_CONNECTION_NUMBER: '123' },
+    env: { ...process.env, BOT_NUMBER: '123' },
     encoding: 'utf8'
   });
   assert.notEqual(invalidConnectionNumber.status, 0);
-  assert.match(invalidConnectionNumber.stderr, /BOT_CONNECTION_NUMBER must contain a 7-15 digit international phone number/);
-  assert.equal(config.botConnectionNumber, '15551234567');
+  assert.match(invalidConnectionNumber.stderr, /BOT_NUMBER must contain a 7-15 digit international phone number/);
+  assert.equal(config.botNumber, '15551234567');
   assert.equal(config.instanceOwnerName, 'Instance Owner');
   assert.equal(config.commandPrefix, '!');
-  assert.equal(config.botName, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
   assert.equal(config.stickerPackname, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
   assert.equal(config.stickerAuthor, 'Only F!XA?? Dev');
   assert.equal(config.groqModel, 'openai/gpt-oss-20b');
 });
 
-test('pairing configuration cannot authenticate a different bot connection identity', () => {
-  const mismatchedPairingNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+test('legacy connection setting is not an accepted BOT_NUMBER alias', () => {
+  const legacyOnly = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
     cwd: path.resolve(__dirname, '..'),
-    env: {
-      ...process.env,
-      BOT_CONNECTION_NUMBER: '15551234567',
-      AUTH_METHOD: 'pairing',
-      PAIRING_NUMBER: '15551234568'
-    },
+    env: { ...process.env, BOT_NUMBER: '', [['BOT', 'CONNECTION_NUMBER'].join('_')]: '15551234568' },
     encoding: 'utf8'
   });
 
-  assert.notEqual(mismatchedPairingNumber.status, 0);
-  assert.match(mismatchedPairingNumber.stderr, /PAIRING_NUMBER must match BOT_CONNECTION_NUMBER/);
+  assert.notEqual(legacyOnly.status, 0);
+  assert.match(legacyOnly.stderr, /BOT_NUMBER is required/);
 });
-
 test('ordinary environment variables cannot override protected Global Owner authorization', () => {
   const override = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
     cwd: path.resolve(__dirname, '..'),
@@ -97,15 +92,14 @@ test('ordinary environment variables cannot override protected Global Owner auth
 test('instance branding is configurable without changing protected authorization', () => {
   const deployment = spawnSync(
     process.execPath,
-    ['-e', "const { config } = require('./system/config'); console.log(JSON.stringify({ master: config.masterBotName, number: config.botConnectionNumber, owner: config.instanceOwnerName, ownerNumber: config.instanceOwnerNumber, theme: config.theme }));"],
+    ['-e', "const { config } = require('./system/config'); console.log(JSON.stringify({ master: config.masterBotName, number: config.botNumber, owner: config.instanceOwnerName, ownerNumber: config.instanceOwnerNumber, theme: config.theme }));"],
     {
       cwd: path.resolve(__dirname, '..'),
       env: {
         ...process.env,
-        BOT_CONNECTION_NUMBER: '15551234568',
+        BOT_NUMBER: '15551234568',
         INSTANCE_OWNER_NAME: 'New Deployer',
         INSTANCE_OWNER_NUMBER: '15551234569',
-        BOT_NAME: 'Custom Bot',
         THEME: 'gojo'
       },
       encoding: 'utf8'
@@ -123,6 +117,18 @@ test('instance branding is configurable without changing protected authorization
   assert.equal(isGlobalOwner({ decodeJid: (jid) => jid }, '15551234568@s.whatsapp.net'), false);
   assert.equal(isAuthorizedAdmin({ decodeJid: (jid) => jid }, '15551234569@s.whatsapp.net', '15551234569'), true);
   assert.equal(isGlobalOwner({ decodeJid: (jid) => jid }, '15551234569@s.whatsapp.net'), false);
+});
+
+test('premium authorization remains tied to authorized identities', () => {
+  const socket = { decodeJid: (jid) => jid };
+  assert.equal(isPremiumAuthorized(socket, '15551234569@s.whatsapp.net', '15551234569'), true);
+  assert.equal(isPremiumAuthorized(socket, '15551234568@s.whatsapp.net', '15551234569'), false);
+});
+
+test('unknown theme IDs safely fall back without changing the master identity', () => {
+  assert.equal(getActiveTheme('default'), DEFAULT_THEME);
+  assert.equal(getActiveTheme('future-theme'), DEFAULT_THEME);
+  assert.equal(config.masterBotName, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
 });
 
 test('protected identity manifests are HMAC verified and fail closed when tampered', async () => {
@@ -152,7 +158,7 @@ test('protected identity manifests are HMAC verified and fail closed when tamper
   assert.equal(lockedRuntime.stdout.trim(), 'false');
 });
 
-test('authenticated WhatsApp account must match the configured connection number', () => {
+test('authenticated WhatsApp account must match the configured bot number', () => {
   const matchingConnection = spawnSync(
     process.execPath,
     ['-e', "require('./index').assertConnectedBotIdentity({ user: { id: '15551234567@s.whatsapp.net' } })"],

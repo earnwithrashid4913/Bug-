@@ -6,6 +6,11 @@
   <img alt="Node.js 20.9 or newer" src="https://img.shields.io/badge/node-%E2%89%A520.9-339933.svg">
   <img alt="Runtime: WhatsApp worker" src="https://img.shields.io/badge/runtime-WhatsApp%20worker-25D366.svg">
 </p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/earnwithrashid4913/Bug-/output/github-snake-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/earnwithrashid4913/Bug-/output/github-snake.svg">
+  <img alt="Animated contribution snake" src="https://raw.githubusercontent.com/earnwithrashid4913/Bug-/output/github-snake.svg">
+</picture>
 
 > **Developer:** Only F!XA?? Dev &nbsp;•&nbsp; **Developer Identity:** RaShiD Hussain &nbsp;•&nbsp; **Community:** ONLY GOATS ?
 
@@ -39,7 +44,7 @@ GOATVERSE MD is a Node.js WhatsApp bot built with Baileys. It runs as one long-l
 
 Deployment users may set instance presentation and instance-level ownership. They cannot set protected Global Owner, developer identity, authorization, or HMAC material through normal environment variables. Attempts to use protected owner/developer environment keys fail at startup. If a configured trusted identity manifest is absent, invalid, or tampered with, privileged functions lock without deleting sessions or source files.
 
-A pairing number and the connected WhatsApp account **never** become Global Owner automatically. For pairing-code authentication, `PAIRING_NUMBER` must equal `BOT_CONNECTION_NUMBER`; the connected account is checked again after login. Keep `.env`, `AUTH_DIR`, `DATA_DIR`, and any trusted-manifest/HMAC inputs outside Git.
+The connected WhatsApp account **never** becomes Global Owner automatically. `BOT_NUMBER` is the single pairing and connection setting; the connected account is checked again after login. Keep `.env`, `AUTH_DIR`, `DATA_DIR`, and any trusted-manifest/HMAC inputs outside Git.
 
 ## Installation
 
@@ -57,29 +62,32 @@ npm start
 Use `npm install` only when developing or intentionally updating dependencies. Validate configuration without opening WhatsApp:
 
 ```bash
+BOT_NUMBER=15551234567 npm run start:dry
+npm run check
+npm test
+```
+
+```bash
 BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
 npm run check
 npm test
 ```
 
-## Configuration
-
 Copy [`.env.example`](.env.example). The top **INSTANCE SETTINGS** block is the normal deployer-editable surface:
 
 ```dotenv
-BOT_NAME=My GOATVERSE Instance
 INSTANCE_OWNER_NAME=Your Name
 INSTANCE_OWNER_NUMBER=15551234567
-BOT_CONNECTION_NUMBER=15551234567
+BOT_NUMBER=15551234567
 THEME=default
 ```
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `BOT_CONNECTION_NUMBER` | Yes | 7–15 digit WhatsApp account number, including country code; must match the authenticated account. |
-| `BOT_NAME`, `INSTANCE_OWNER_NAME`, `INSTANCE_OWNER_NUMBER`, `THEME` | No | Instance-only presentation/owner settings. `INSTANCE_OWNER_NUMBER` grants instance-level commands only. |
+| `BOT_NUMBER` | Yes | 7–15 digit WhatsApp account number, including country code; must match the authenticated account. |
+| `INSTANCE_OWNER_NAME`, `THEME` | No | Instance display identity and active visual mode; neither grants protected authorization. |
+| `INSTANCE_OWNER_NUMBER` | No | Separately grants instance-owner commands only; it is not Global Owner or Developer authorization. |
 | `AUTH_METHOD` | No | `pairing` (default) or `qr`. |
-| `PAIRING_NUMBER` | Cloud pairing | Same digits as `BOT_CONNECTION_NUMBER`; required on non-interactive pairing hosts. |
 | `AUTH_DIR`, `DATA_DIR` | No | Private persistent paths for credentials and runtime data. |
 | `COMMAND_PREFIX`, `PUBLIC_MODE`, `LOG_LEVEL` | No | Command/runtime controls validated at startup. |
 | `GROQ_API_KEY`, `GROQ_MODEL` | No | Optional AI provider configuration; never commit the API key. |
@@ -90,11 +98,11 @@ THEME=default
 
 ### Cloud pairing code
 
-Set `AUTH_METHOD=pairing`, `BOT_CONNECTION_NUMBER`, and the identical `PAIRING_NUMBER`. Start the worker, copy the code from its logs, then enter it under WhatsApp **Linked devices** for that account. Persist `AUTH_DIR` before restarting.
+Set `AUTH_METHOD=pairing` and `BOT_NUMBER`. Start the worker, copy the code from its logs, then enter it under WhatsApp **Linked devices** for that account. Persist `AUTH_DIR` before restarting.
 
 ### Local terminal QR
 
-Set `AUTH_METHOD=qr`, run `npm start` from an interactive terminal, and scan the displayed QR code with the same account as `BOT_CONNECTION_NUMBER`.
+Set `AUTH_METHOD=qr`, run `npm start` from an interactive terminal, and scan the displayed QR code with the same account as `BOT_NUMBER`.
 
 A real WhatsApp login cannot be automated by this repository's tests. On an invalid session or logout, stop the worker, remove **only** the configured private `AUTH_DIR`, and pair again.
 
@@ -113,13 +121,20 @@ A real WhatsApp login cannot be automated by this repository's tests. On an inva
 
 > All supported paths require **one replica only**. Never share an `AUTH_DIR` between concurrent workers.
 
+| 🟣 **Pterodactyl** | 🖥 **VPS / Linux** | 🚀 **Render** | 🚂 **Railway** |
+| --- | --- | --- | --- |
+| Persistent server storage | Full host control | Included worker Blueprint | Included start manifest |
+| [Deploy guide](DEPLOYMENT.md#pterodactyl) | [Deploy guide](DEPLOYMENT.md#vps--linux) | [Deploy guide](DEPLOYMENT.md#render) | [Deploy guide](DEPLOYMENT.md#railway) |
+
+Docker and Koyeb are not presented as deployment buttons because this repository contains no Docker or Koyeb configuration. Their unsupported status is documented honestly in the [deployment guide](DEPLOYMENT.md#unsupported-paths).
+
 ### Render
 
 The included [`render.yaml`](render.yaml) defines a Background Worker, not an HTTP service.
 
 1. Create a Render Blueprint from this repository and confirm `npm ci` / `npm start`.
 2. Keep the supplied 1 GB disk mounted at `/var/data`.
-3. Set `BOT_CONNECTION_NUMBER`, `PAIRING_NUMBER` (same value), and optional instance settings in Render's environment UI.
+3. Set `BOT_NUMBER` and optional instance settings in Render's environment UI.
 4. Keep `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`, deploy one worker, then pair from logs.
 5. Restarts retain state only while that disk remains attached. For updates, pull the release, redeploy, and preserve the disk.
 
@@ -131,7 +146,7 @@ Render disks and worker availability depend on the selected Render plan; see the
 
 1. Create a project from this repository; Railway builds with Nixpacks.
 2. Add one Volume mounted at `/var/data`.
-3. Set `BOT_CONNECTION_NUMBER`, matching `PAIRING_NUMBER`, and `AUTH_DIR=/var/data/session`, `DATA_DIR=/var/data/data`.
+3. Set `BOT_NUMBER` and `AUTH_DIR=/var/data/session`, `DATA_DIR=/var/data/data`.
 4. Deploy one replica and pair from logs. Preserve the Volume during redeploys and updates.
 
 See [Railway Volumes](https://docs.railway.com/volumes) for the current volume workflow.
@@ -150,8 +165,8 @@ For complete step-by-step deployment and recovery instructions, see [DEPLOYMENT.
 
 | Symptom | Resolution |
 | --- | --- |
-| No cloud pairing code | Set a valid, matching `PAIRING_NUMBER`; QR needs an interactive terminal. |
-| Identity mismatch at connect | Pair/scan the account in `BOT_CONNECTION_NUMBER`; the bot intentionally exits rather than substitute an identity. |
+| No cloud pairing code | Set a valid `BOT_NUMBER`; QR needs an interactive terminal. |
+| Identity mismatch at connect | Pair/scan the account in `BOT_NUMBER`; the bot intentionally exits rather than substitute an identity. |
 | Re-pair after deployment | Put both `AUTH_DIR` and `DATA_DIR` on the platform's persistent disk/volume. |
 | Commands do not respond | Check the prefix, `PUBLIC_MODE`, access policy, and worker logs. The linked account is not implicitly an owner. |
 | Bad session / logged out | Stop the worker, remove only configured `AUTH_DIR`, start once, and pair again. |
@@ -173,7 +188,7 @@ Use the configured prefix (`!` by default).
 
 ```bash
 npm ci
-BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
+BOT_NUMBER=15551234567 npm run start:dry
 npm run check
 npm test
 ```
@@ -183,6 +198,10 @@ Tests cover configuration validation, protected-identity failure behavior, comma
 ## Contribution
 
 Keep changes small and reviewed. Preserve the protected identity/security architecture, do not add destructive WhatsApp payloads, and add or update tests for behavior changes. Run the development checks before opening a pull request.
+
+## Contribution snake
+
+The lightweight SVG above is generated daily by [`.github/workflows/snake.yml`](.github/workflows/snake.yml) and published to the repository `output` branch. It uses light/dark variants and adds no bot runtime dependency. If repository Actions are disabled or the workflow token cannot write repository contents, the animation simply remains unavailable; bot operation is unaffected.
 
 ## Credits
 

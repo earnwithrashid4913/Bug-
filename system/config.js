@@ -7,7 +7,6 @@ const { assertProtectedSecurityEnvironment } = require('./security');
 dotenv.config();
 
 const DEFAULTS = Object.freeze({
-  botName: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
   instanceOwnerName: 'Instance Owner',
   theme: 'default',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
@@ -100,7 +99,7 @@ function resolveRuntimePath(value) {
 
 function loadConfig() {
   assertProtectedSecurityEnvironment();
-  const botConnectionNumber = parseRequiredPhoneNumber('BOT_CONNECTION_NUMBER');
+  const botNumber = parseRequiredPhoneNumber('BOT_NUMBER');
   const commandPrefix = readString('COMMAND_PREFIX', DEFAULTS.commandPrefix);
 
   if (commandPrefix.length > 4 || /\s/.test(commandPrefix)) {
@@ -140,23 +139,17 @@ function loadConfig() {
 
   return Object.freeze({
     masterBotName: MASTER_BOT_NAME,
-    botName: readString('BOT_NAME', DEFAULTS.botName),
-    // BOT_OWNER_NAME and OWNER_NAME remain supported as display-only aliases.
-    instanceOwnerName: readString(
-      'INSTANCE_OWNER_NAME',
-      readString('BOT_OWNER_NAME', readString('OWNER_NAME', DEFAULTS.instanceOwnerName))
-    ),
+    instanceOwnerName: readString('INSTANCE_OWNER_NAME', DEFAULTS.instanceOwnerName),
     instanceOwnerNumber: parseOptionalPhoneNumber('INSTANCE_OWNER_NUMBER'),
-    botConnectionNumber,
+    botNumber,
     theme: readString('THEME', DEFAULTS.theme),
-    ownerLink: parseUrl('OWNER_LINK', `https://wa.me/${botConnectionNumber}`),
+    ownerLink: parseUrl('OWNER_LINK', `https://wa.me/${botNumber}`),
     whatsappChannel: parseUrl('WHATSAPP_CHANNEL', DEFAULTS.whatsappChannel),
     commandPrefix,
     stickerPackname: readString('STICKER_PACKNAME', DEFAULTS.stickerPackname),
     stickerAuthor: readString('STICKER_AUTHOR', DEFAULTS.stickerAuthor),
     publicMode: parseBoolean('PUBLIC_MODE', DEFAULTS.publicMode),
     authMethod,
-    pairingNumber,
     authDir: resolveRuntimePath(readString('AUTH_DIR', DEFAULTS.authDir)),
     dataDir,
     premiumDbPath,
