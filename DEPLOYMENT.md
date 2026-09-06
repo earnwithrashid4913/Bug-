@@ -1,4 +1,4 @@
-# Black Clover ♣️ Deployment Guide
+# 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿 Deployment Guide
 
 This application is a long-running WhatsApp client. It is best deployed as a **single background worker** with persistent storage. It does not provide an HTTP website, so a web-service deployment is not the appropriate default.
 
@@ -38,7 +38,7 @@ npm ci
 cp .env.example .env
 ```
 
-At minimum, set `BOT_NAME`, `BOT_OWNER_NAME`, and the required `BOT_CONNECTION_NUMBER` (7–15 digits, including country code). The bot refuses to start without a valid connection number and verifies it against the authenticated WhatsApp account. `BOT_OWNER_NAME` is display-only and does not grant Global Owner authorization.
+At minimum, set `BOT_NAME`, `INSTANCE_OWNER_NAME`, `INSTANCE_OWNER_NUMBER` (when owner features are needed), and the required `BOT_CONNECTION_NUMBER` (7–15 digits, including country code). The bot refuses to start without a valid connection number and verifies it against the authenticated WhatsApp account. `INSTANCE_OWNER_NAME` is display-only; `INSTANCE_OWNER_NUMBER` grants only instance-level features and does not grant Global Owner or Developer authorization.
 
 Keep `.env`, `session/`, and `data/` private. They are intentionally ignored by Git.
 
@@ -49,7 +49,8 @@ Keep `.env`, `session/`, and `data/` private. They are intentionally ignored by 
 Set these values in `.env` or your host's environment-variable page:
 
 ```dotenv
-BOT_OWNER_NAME=your_deployment_name
+INSTANCE_OWNER_NAME=your_deployment_name
+INSTANCE_OWNER_NUMBER=your_instance_owner_number
 BOT_CONNECTION_NUMBER=your_bot_connection_number
 AUTH_METHOD=pairing
 PAIRING_NUMBER=your_linking_phone_number
@@ -112,7 +113,8 @@ Railway discovers the application through `package.json`; `railway.toml` sets th
 3. Add the same environment variables used for Render:
 
    ```dotenv
-   BOT_OWNER_NAME=your_deployment_name
+   INSTANCE_OWNER_NAME=your_deployment_name
+   INSTANCE_OWNER_NUMBER=your_instance_owner_number
    BOT_CONNECTION_NUMBER=your_bot_connection_number
    AUTH_METHOD=pairing
    PAIRING_NUMBER=your_linking_phone_number
@@ -159,7 +161,7 @@ Set `AUTH_DIR` and `DATA_DIR` to paths that survive restarts and deployments. Do
 | `PAIRING_NUMBER is not set` | Set it on non-interactive/cloud hosts, or use `AUTH_METHOD=qr` in a local terminal. |
 | Bot asks to pair again after deployment | `AUTH_DIR` is on ephemeral storage. Attach a volume/disk and point `AUTH_DIR` to it. |
 | `Bad Session` or `logged out` | Stop the bot, remove only the configured authentication directory, restart, then pair again. |
-| Bot ignores commands | Verify the configured prefix and `PUBLIC_MODE`. In self mode, only identities authorized by the protected Global Owner policy can use commands. The linked account is not automatically authorized. |
+| Bot ignores commands | Verify the configured prefix and `PUBLIC_MODE`. In self mode, only authorized Global Owner, Developer, or Instance Owner identities can use commands. The linked account is not automatically authorized. |
 | Bot stops with a connection identity mismatch | Set `BOT_CONNECTION_NUMBER` to the number of the actual authenticated WhatsApp account. The bot will not substitute another identity. |
 | `npm ci` fails | Commit/use the generated `package-lock.json`, or use `npm install` for local development. |
 | `restart` stops the bot | Configure the platform/process manager to restart exited processes. The command intentionally does not delete your saved session. |

@@ -1,14 +1,13 @@
-# Black Clover ♣️
+# 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿
 
-A clean, configurable WhatsApp bot built with Baileys and maintained under the **Only Fixa Dev** project.
+**One Bot. Infinite Themes.**
 
-> Change the displayed bot name in `.env` with `BOT_NAME`. It is intentionally not hard-coded throughout the source.
+GOATVERSE MD is a clean, configurable WhatsApp bot built with Baileys. **GOATVERSE MD is always the original/master bot name.** Future anime modes—such as Gojo Mode, Itachi Mode, or Naruto Mode—are visual active-theme names only; they never replace the master identity or affect authorization. No additional themes are implemented yet.
 
-## Project ownership
-
-- **Developer:** Rashid Hussain
-- **Global Owner:** Only Fixa Dev
-- **Deployment owner:** configured through the instance-only `BOT_OWNER_NAME` environment variable
+- **Developed by:** Only F!XA?? Dev
+- **Developer:** RaShiD Hussain
+- **Community:** ONLY GOATS ?
+- **Instance owner:** configured through the instance-only `INSTANCE_OWNER_NAME` and `INSTANCE_OWNER_NUMBER` settings
 - **WhatsApp Channel:** https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T
 
 ## Features
@@ -51,15 +50,15 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BOT_NAME` | `Black Clover ♣️` | Display name for logs and commands. |
-| `BOT_OWNER_NAME` | `Bot Owner` | Per-deployment display/branding name; it never grants authorization. |
+| `BOT_NAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Optional instance label. It does not replace the GOATVERSE MD master header or protected identity. |
+| `INSTANCE_OWNER_NAME` | `Instance Owner` | Per-deployment display/branding name; it never grants authorization. |
 | `BOT_CONNECTION_NUMBER` | required | Per-deployment WhatsApp account; 7–15 digits including country code. Startup fails when absent/invalid, and the connected account must match it. |
 | `THEME` | `default` | Per-deployment branding metadata. It does not affect authorization. |
 | `OWNER_LINK` | `https://wa.me/BOT_CONNECTION_NUMBER` | Optional instance contact shown by `!owner`. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
-| `STICKER_PACKNAME` | `Black Clover ♣️` | Sticker pack name used by `!sticker`. |
-| `STICKER_AUTHOR` | `Only Fixa Dev` | Sticker publisher used by `!sticker`. |
+| `STICKER_PACKNAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Sticker pack name used by `!sticker`. |
+| `STICKER_AUTHOR` | `Only F!XA?? Dev` | Sticker publisher used by `!sticker`. |
 | `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
 | `AUTH_METHOD` | `pairing` | `pairing` or `qr`. |
 | `PAIRING_NUMBER` | unset | Required for pairing on a non-interactive host. |
@@ -86,17 +85,18 @@ Configuration validates phone numbers, URLs, booleans, delays, prefixes, and aut
 For a cloud host, set a real linking phone number:
 
 ```dotenv
-BOT_OWNER_NAME=your_deployment_name
+INSTANCE_OWNER_NAME=your_deployment_name
+INSTANCE_OWNER_NUMBER=your_instance_owner_number
 BOT_CONNECTION_NUMBER=your_bot_connection_number
 AUTH_METHOD=pairing
 PAIRING_NUMBER=your_linking_phone_number
 ```
 
-Replace the placeholders before starting the bot. `BOT_CONNECTION_NUMBER` is the account this deployment will authenticate as; `BOT_OWNER_NAME` is display-only; `PAIRING_NUMBER` is the phone being linked and may be different. Each number must include its country code and contain digits only.
+Replace the placeholders before starting the bot. `BOT_CONNECTION_NUMBER` is the account this deployment will authenticate as; `INSTANCE_OWNER_NAME` is display-only; `INSTANCE_OWNER_NUMBER` grants only instance-level owner features; `PAIRING_NUMBER` is the phone being linked and may be different. Each number must include its country code and contain digits only.
 
 ### Instance configuration and protected authorization
 
-`BOT_NAME`, `BOT_OWNER_NAME`, `BOT_CONNECTION_NUMBER`, `THEME`, and similar instance settings may be changed by a deployer. They never grant Global Owner authorization. Global Owner authorization is source-controlled by `system/security.js`; normal environment variables such as `GLOBAL_OWNER_NUMBERS`, `OWNER_NUMBER`, and `OWNER_NUMBERS` are rejected at startup. A connected bot account is also **not** automatically a Global Owner.
+`BOT_NAME`, `INSTANCE_OWNER_NAME`, `INSTANCE_OWNER_NUMBER`, `BOT_CONNECTION_NUMBER`, `THEME`, and similar instance settings may be changed by a deployer. `BOT_NAME` and `THEME` are instance presentation inputs only; neither can replace the GOATVERSE MD master identity. They never grant Global Owner authorization. Global Owner and Developer identity are protected by `system/security.js`; normal environment variables such as `GLOBAL_OWNER_NUMBERS`, `DEVELOPER_IDENTITY`, `OWNER_NUMBER`, and `OWNER_NUMBERS` are rejected at startup. A connected bot account, pairing number, or Instance Owner is **not** automatically a Global Owner. Maintainers can provision authorization numbers only through an HMAC-SHA-256 verified identity manifest and a secret held outside this repository; an invalid, missing, or mismatched configured manifest locks privileged functions without changing source or session files.
 
 The source code is under the deployer's control, so local code changes cannot be made cryptographically tamper-proof without an external trust anchor. For a production Global Owner policy, maintainers must distribute reviewed/signed releases or use a remote verification service. The bot fails closed for attempted environment-based overrides and never deletes source, sessions, or authentication data.
 
@@ -230,8 +230,8 @@ For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Credits
 
-- Project configuration and migration: **Rashid Hussain**
-- Global project owner: **Only Fixa Dev**
+- Project configuration and migration: **RaShiD Hussain**
+- Global project owner: **Only F!XA?? Dev**
 - WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys) and its respective maintainers
 - The Apache-2.0 license file supplied with the base source is retained. Third-party dependency licenses remain with their respective authors.
 

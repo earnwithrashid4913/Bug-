@@ -7,13 +7,13 @@ const { assertProtectedSecurityEnvironment } = require('./security');
 dotenv.config();
 
 const DEFAULTS = Object.freeze({
-  botName: 'Black Clover ♣️',
-  botOwnerName: 'Bot Owner',
+  botName: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
+  instanceOwnerName: 'Instance Owner',
   theme: 'default',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
-  stickerPackname: 'Black Clover ♣️',
-  stickerAuthor: 'Only Fixa Dev',
+  stickerPackname: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
+  stickerAuthor: 'Only F!XA?? Dev',
   publicMode: true,
   authMethod: 'pairing',
   authDir: './session',
@@ -25,6 +25,9 @@ const DEFAULTS = Object.freeze({
   reconnectMaxDelayMs: 60_000,
   logLevel: 'info'
 });
+
+// This is the project identity, not a deployer-selected theme or instance label.
+const MASTER_BOT_NAME = '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿';
 
 function readString(name, fallback) {
   const value = process.env[name];
@@ -132,8 +135,14 @@ function loadConfig() {
   const groupSettingsDbPath = resolveRuntimePath(readString('GROUP_SETTINGS_DB_PATH', path.join(dataDir, 'groups.json')));
 
   return Object.freeze({
+    masterBotName: MASTER_BOT_NAME,
     botName: readString('BOT_NAME', DEFAULTS.botName),
-    botOwnerName: readString('BOT_OWNER_NAME', readString('OWNER_NAME', DEFAULTS.botOwnerName)),
+    // BOT_OWNER_NAME and OWNER_NAME remain supported as display-only aliases.
+    instanceOwnerName: readString(
+      'INSTANCE_OWNER_NAME',
+      readString('BOT_OWNER_NAME', readString('OWNER_NAME', DEFAULTS.instanceOwnerName))
+    ),
+    instanceOwnerNumber: parseOptionalPhoneNumber('INSTANCE_OWNER_NUMBER'),
     botConnectionNumber,
     theme: readString('THEME', DEFAULTS.theme),
     ownerLink: parseUrl('OWNER_LINK', `https://wa.me/${botConnectionNumber}`),
@@ -163,6 +172,7 @@ const config = loadConfig();
 
 module.exports = {
   DEFAULTS,
+  MASTER_BOT_NAME,
   config,
   loadConfig,
   normalizePhoneNumber

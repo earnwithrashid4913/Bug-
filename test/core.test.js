@@ -10,7 +10,13 @@ const test = require('node:test');
 process.env.BOT_CONNECTION_NUMBER = '15551234567';
 
 const { config } = require('../system/config');
-const { isProtectedGlobalOwner } = require('../system/security');
+const {
+  isAuthorizedAdmin,
+  isGlobalOwner,
+  loadProtectedIdentity,
+  PROTECTED_DEVELOPER,
+  verifyIdentityManifest
+} = require('../system/security');
 const handleMessage = require('../system/handler');
 const { commandFromText } = handleMessage;
 const {
@@ -45,11 +51,11 @@ test('deployment configuration requires an explicit bot connection number', () =
   assert.notEqual(invalidConnectionNumber.status, 0);
   assert.match(invalidConnectionNumber.stderr, /BOT_CONNECTION_NUMBER must contain a 7-15 digit international phone number/);
   assert.equal(config.botConnectionNumber, '15551234567');
-  assert.equal(config.botOwnerName, 'Bot Owner');
+  assert.equal(config.instanceOwnerName, 'Instance Owner');
   assert.equal(config.commandPrefix, '!');
-  assert.equal(config.botName, 'Black Clover ♣️');
-  assert.equal(config.stickerPackname, 'Black Clover ♣️');
-  assert.equal(config.stickerAuthor, 'Only Fixa Dev');
+  assert.equal(config.botName, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
+  assert.equal(config.stickerPackname, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
+  assert.equal(config.stickerAuthor, 'Only F!XA?? Dev');
   assert.equal(config.groqModel, 'openai/gpt-oss-20b');
 });
 
@@ -61,19 +67,28 @@ test('ordinary environment variables cannot override protected Global Owner auth
   });
 
   assert.notEqual(override.status, 0);
-  assert.match(override.stderr, /Security configuration error.*OWNER_NUMBER cannot configure Global Owner authorization/);
+  assert.match(override.stderr, /Security configuration error: protected identity overrides are not allowed/);
+
+  const developerOverride = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, DEVELOPER_IDENTITY: 'Impostor' },
+    encoding: 'utf8'
+  });
+  assert.notEqual(developerOverride.status, 0);
+  assert.match(developerOverride.stderr, /Security configuration error: protected identity overrides are not allowed/);
 });
 
 test('instance branding is configurable without changing protected authorization', () => {
   const deployment = spawnSync(
     process.execPath,
-    ['-e', "const { config } = require('./system/config'); console.log(JSON.stringify({ number: config.botConnectionNumber, owner: config.botOwnerName, theme: config.theme }));"],
+    ['-e', "const { config } = require('./system/config'); console.log(JSON.stringify({ master: config.masterBotName, number: config.botConnectionNumber, owner: config.instanceOwnerName, ownerNumber: config.instanceOwnerNumber, theme: config.theme }));"],
     {
       cwd: path.resolve(__dirname, '..'),
       env: {
         ...process.env,
         BOT_CONNECTION_NUMBER: '15551234568',
-        BOT_OWNER_NAME: 'New Deployer',
+        INSTANCE_OWNER_NAME: 'New Deployer',
+        INSTANCE_OWNER_NUMBER: '15551234569',
         BOT_NAME: 'Custom Bot',
         THEME: 'gojo'
       },
@@ -83,14 +98,42 @@ test('instance branding is configurable without changing protected authorization
 
   assert.equal(deployment.status, 0);
   assert.deepEqual(JSON.parse(deployment.stdout), {
+    master: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
     number: '15551234568',
     owner: 'New Deployer',
+    ownerNumber: '15551234569',
     theme: 'gojo'
   });
-  assert.equal(
-    isProtectedGlobalOwner({ decodeJid: (jid) => jid }, '15551234568@s.whatsapp.net'),
-    false
-  );
+  assert.equal(isGlobalOwner({ decodeJid: (jid) => jid }, '15551234568@s.whatsapp.net'), false);
+  assert.equal(isAuthorizedAdmin({ decodeJid: (jid) => jid }, '15551234569@s.whatsapp.net', '15551234569'), true);
+  assert.equal(isGlobalOwner({ decodeJid: (jid) => jid }, '15551234569@s.whatsapp.net'), false);
+});
+
+test('protected identity manifests are HMAC verified and fail closed when tampered', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'goatverse-identity-'));
+  const manifestPath = path.join(directory, 'identity.json');
+  const secret = 'external-test-secret';
+  const manifest = { developer: PROTECTED_DEVELOPER, globalOwnerNumbers: ['15551234560'], developerNumbers: ['15551234561'] };
+  const crypto = require('node:crypto');
+  manifest.signature = crypto.createHmac('sha256', secret)
+    .update(JSON.stringify({ developer: PROTECTED_DEVELOPER, globalOwnerNumbers: ['15551234560'], developerNumbers: ['15551234561'] }))
+    .digest('hex');
+  assert.equal(verifyIdentityManifest(manifest, secret), true);
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+  assert.equal(loadProtectedIdentity({ GOATVERSE_TRUSTED_IDENTITY_FILE: manifestPath, GOATVERSE_TRUSTED_IDENTITY_HMAC_KEY: secret }).locked, false);
+  manifest.globalOwnerNumbers = ['15551234569'];
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+  const tampered = loadProtectedIdentity({ GOATVERSE_TRUSTED_IDENTITY_FILE: manifestPath, GOATVERSE_TRUSTED_IDENTITY_HMAC_KEY: secret });
+  assert.equal(tampered.locked, true);
+  assert.equal(tampered.globalOwners.size, 0);
+
+  const lockedRuntime = spawnSync(process.execPath, ['-e', "const s = require('./system/security'); console.log(s.isAuthorizedAdmin({ decodeJid: x => x }, '15551234560@s.whatsapp.net', '15551234569'))"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, GOATVERSE_TRUSTED_IDENTITY_FILE: manifestPath, GOATVERSE_TRUSTED_IDENTITY_HMAC_KEY: secret },
+    encoding: 'utf8'
+  });
+  assert.equal(lockedRuntime.status, 0);
+  assert.equal(lockedRuntime.stdout.trim(), 'false');
 });
 
 test('authenticated WhatsApp account must match the configured connection number', () => {
@@ -175,8 +218,8 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
     create: { width: 32, height: 20, channels: 4, background: { r: 20, g: 120, b: 80, alpha: 1 } }
   }).png().toBuffer();
   const sticker = await createImageSticker(source, {
-    packname: 'Black Clover ♣️',
-    author: 'Only Fixa Dev'
+    packname: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
+    author: 'Only F!XA?? Dev'
   });
 
   assert.equal(sticker.subarray(0, 4).toString('ascii'), 'RIFF');
@@ -187,10 +230,10 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
 });
 
 test('AI request builder is bounded and requires an explicitly configured key', async () => {
-  const request = buildGroqRequest('Hello', 'openai/gpt-oss-20b', 'Black Clover ♣️');
+  const request = buildGroqRequest('Hello', 'openai/gpt-oss-20b', '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
   assert.equal(request.model, 'openai/gpt-oss-20b');
   assert.equal(request.messages[1].content, 'Hello');
-  await assert.rejects(askGroq({ apiKey: '', model: request.model, prompt: 'Hello', botName: 'Black Clover ♣️' }), /not configured/);
+  await assert.rejects(askGroq({ apiKey: '', model: request.model, prompt: 'Hello', botName: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿' }), /not configured/);
 
   const sender = 'ai-test@s.whatsapp.net';
   reserveAiRequest(sender);
