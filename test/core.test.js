@@ -7,9 +7,10 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
-process.env.OWNER_NUMBER = '15551234567';
+process.env.BOT_CONNECTION_NUMBER = '15551234567';
 
 const { config } = require('../system/config');
+const { isProtectedGlobalOwner } = require('../system/security');
 const handleMessage = require('../system/handler');
 const { commandFromText } = handleMessage;
 const {
@@ -26,31 +27,95 @@ const { convertStickerToImage, createImageSticker } = require('../system/lib/sti
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
 
-test('ownership configuration requires an explicit owner number', () => {
-  const missingOwner = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+test('deployment configuration requires an explicit bot connection number', () => {
+  const missingConnectionNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, OWNER_NUMBER: '' },
+    env: { ...process.env, BOT_CONNECTION_NUMBER: '' },
     encoding: 'utf8'
   });
 
-  assert.notEqual(missingOwner.status, 0);
-  assert.match(missingOwner.stderr, /OWNER_NUMBER is required/);
+  assert.notEqual(missingConnectionNumber.status, 0);
+  assert.match(missingConnectionNumber.stderr, /BOT_CONNECTION_NUMBER is required/);
 
-  const invalidOwner = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+  const invalidConnectionNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, OWNER_NUMBER: '123' },
+    env: { ...process.env, BOT_CONNECTION_NUMBER: '123' },
     encoding: 'utf8'
   });
-  assert.notEqual(invalidOwner.status, 0);
-  assert.match(invalidOwner.stderr, /OWNER_NUMBER must contain a 7-15 digit international phone number/);
-  assert.equal(config.ownerName, 'Only Fixa Dev');
-  assert.equal(config.authorName, 'Rashid Hussain');
-  assert.equal(config.ownerNumber, '15551234567');
+  assert.notEqual(invalidConnectionNumber.status, 0);
+  assert.match(invalidConnectionNumber.stderr, /BOT_CONNECTION_NUMBER must contain a 7-15 digit international phone number/);
+  assert.equal(config.botConnectionNumber, '15551234567');
+  assert.equal(config.botOwnerName, 'Bot Owner');
   assert.equal(config.commandPrefix, '!');
   assert.equal(config.botName, 'Black Clover ♣️');
   assert.equal(config.stickerPackname, 'Black Clover ♣️');
   assert.equal(config.stickerAuthor, 'Only Fixa Dev');
   assert.equal(config.groqModel, 'openai/gpt-oss-20b');
+});
+
+test('ordinary environment variables cannot override protected Global Owner authorization', () => {
+  const override = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, OWNER_NUMBER: '15551234568' },
+    encoding: 'utf8'
+  });
+
+  assert.notEqual(override.status, 0);
+  assert.match(override.stderr, /Security configuration error.*OWNER_NUMBER cannot configure Global Owner authorization/);
+});
+
+test('instance branding is configurable without changing protected authorization', () => {
+  const deployment = spawnSync(
+    process.execPath,
+    ['-e', "const { config } = require('./system/config'); console.log(JSON.stringify({ number: config.botConnectionNumber, owner: config.botOwnerName, theme: config.theme }));"],
+    {
+      cwd: path.resolve(__dirname, '..'),
+      env: {
+        ...process.env,
+        BOT_CONNECTION_NUMBER: '15551234568',
+        BOT_OWNER_NAME: 'New Deployer',
+        BOT_NAME: 'Custom Bot',
+        THEME: 'gojo'
+      },
+      encoding: 'utf8'
+    }
+  );
+
+  assert.equal(deployment.status, 0);
+  assert.deepEqual(JSON.parse(deployment.stdout), {
+    number: '15551234568',
+    owner: 'New Deployer',
+    theme: 'gojo'
+  });
+  assert.equal(
+    isProtectedGlobalOwner({ decodeJid: (jid) => jid }, '15551234568@s.whatsapp.net'),
+    false
+  );
+});
+
+test('authenticated WhatsApp account must match the configured connection number', () => {
+  const matchingConnection = spawnSync(
+    process.execPath,
+    ['-e', "require('./index').assertConnectedBotIdentity({ user: { id: '15551234567@s.whatsapp.net' } })"],
+    {
+      cwd: path.resolve(__dirname, '..'),
+      env: { ...process.env, BOT_DRY_RUN: 'true' },
+      encoding: 'utf8'
+    }
+  );
+  assert.equal(matchingConnection.status, 0);
+
+  const mismatchedConnection = spawnSync(
+    process.execPath,
+    ['-e', "require('./index').assertConnectedBotIdentity({ user: { id: '15551234568@s.whatsapp.net' } })"],
+    {
+      cwd: path.resolve(__dirname, '..'),
+      env: { ...process.env, BOT_DRY_RUN: 'true' },
+      encoding: 'utf8'
+    }
+  );
+  assert.notEqual(mismatchedConnection.status, 0);
+  assert.match(mismatchedConnection.stderr, /Bot connection identity mismatch/);
 });
 
 test('command parser accepts only the configured prefix', () => {

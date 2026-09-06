@@ -2,6 +2,7 @@
 
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { config, normalizePhoneNumber } = require('./config');
+const { isProtectedGlobalOwner, protectedGlobalOwnerJids } = require('./security');
 const { groupSettings } = require('./group-events');
 const {
   getImageMessage,
@@ -34,13 +35,11 @@ function commandFromText(text) {
 }
 
 function ownerJids(socket) {
-  const configuredOwners = config.ownerNumbers.map((number) => `${number}@s.whatsapp.net`);
-  const connectedAccount = normalizeJid(socket, socket.user?.id);
-  return new Set(connectedAccount ? [...configuredOwners, connectedAccount] : configuredOwners);
+  return protectedGlobalOwnerJids();
 }
 
 function isOwner(socket, sender) {
-  return ownerJids(socket).has(normalizeJid(socket, sender));
+  return isProtectedGlobalOwner(socket, normalizeJid(socket, sender));
 }
 
 function formatDate(timestamp) {
@@ -98,7 +97,7 @@ function helpText() {
     `${p}listprem — list active premium users`,
     `${p}restart — request a host-managed restart`,
     '',
-    `Owner: ${config.ownerName}`,
+    `Owner: ${config.botOwnerName}`,
     `Channel: ${config.whatsappChannel}`
   ].join('\n');
 }
@@ -106,9 +105,7 @@ function helpText() {
 async function sendOwnerCard(socket, chatId, quoted) {
   const text = [
     `*${config.botName} owner details*`,
-    `Global Owner: ${config.ownerName}`,
-    `Developer: ${config.authorName}`,
-    `Developer WhatsApp: https://wa.me/${config.authorNumber}`,
+    `Deployment Owner: ${config.botOwnerName}`,
     `Owner WhatsApp: ${config.ownerLink}`,
     `WhatsApp Channel: ${config.whatsappChannel}`
   ].join('\n');
@@ -206,8 +203,8 @@ async function handleReport(socket, context, message) {
   ].join('\n');
 
   await Promise.all(
-    config.ownerNumbers.map((number) =>
-      socket.sendMessage(`${number}@s.whatsapp.net`, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] })
+    [...ownerJids(socket)].map((jid) =>
+      socket.sendMessage(jid, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] })
     )
   );
   await socket.sendMessage(context.chatId, { text: 'Your request has been sent to the owner.' }, { quoted: context.raw });

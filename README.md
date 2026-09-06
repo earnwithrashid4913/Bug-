@@ -8,7 +8,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 
 - **Developer:** Rashid Hussain
 - **Global Owner:** Only Fixa Dev
-- **Owner WhatsApp:** configured through the required `OWNER_NUMBER` environment variable
+- **Deployment owner:** configured through the instance-only `BOT_OWNER_NAME` environment variable
 - **WhatsApp Channel:** https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T
 
 ## Features
@@ -52,12 +52,10 @@ All runtime configuration is centralized in [`system/config.js`](system/config.j
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BOT_NAME` | `Black Clover ♣️` | Display name for logs and commands. |
-| `OWNER_NAME` | `Only Fixa Dev` | Global owner display name. |
-| `OWNER_NUMBER` | required | Primary owner number; 7–15 digits including country code. The bot refuses to start when it is missing or invalid. |
-| `OWNER_NUMBERS` | empty | Optional comma-separated additional owner numbers. |
-| `AUTHOR_NAME` | `Rashid Hussain` | Developer display name. |
-| `AUTHOR_NUMBER` | `OWNER_NUMBER` | Optional developer number; digits only. |
-| `OWNER_LINK` | `https://wa.me/OWNER_NUMBER` | Optional owner contact shown by `!owner`. |
+| `BOT_OWNER_NAME` | `Bot Owner` | Per-deployment display/branding name; it never grants authorization. |
+| `BOT_CONNECTION_NUMBER` | required | Per-deployment WhatsApp account; 7–15 digits including country code. Startup fails when absent/invalid, and the connected account must match it. |
+| `THEME` | `default` | Per-deployment branding metadata. It does not affect authorization. |
+| `OWNER_LINK` | `https://wa.me/BOT_CONNECTION_NUMBER` | Optional instance contact shown by `!owner`. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
 | `STICKER_PACKNAME` | `Black Clover ♣️` | Sticker pack name used by `!sticker`. |
@@ -88,12 +86,19 @@ Configuration validates phone numbers, URLs, booleans, delays, prefixes, and aut
 For a cloud host, set a real linking phone number:
 
 ```dotenv
-OWNER_NUMBER=your_owner_phone_number
+BOT_OWNER_NAME=your_deployment_name
+BOT_CONNECTION_NUMBER=your_bot_connection_number
 AUTH_METHOD=pairing
 PAIRING_NUMBER=your_linking_phone_number
 ```
 
-Replace both placeholders before starting the bot. `OWNER_NUMBER` authorizes bot-administration commands; `PAIRING_NUMBER` is the phone being linked and may be different. Each number must include its country code and contain digits only.
+Replace the placeholders before starting the bot. `BOT_CONNECTION_NUMBER` is the account this deployment will authenticate as; `BOT_OWNER_NAME` is display-only; `PAIRING_NUMBER` is the phone being linked and may be different. Each number must include its country code and contain digits only.
+
+### Instance configuration and protected authorization
+
+`BOT_NAME`, `BOT_OWNER_NAME`, `BOT_CONNECTION_NUMBER`, `THEME`, and similar instance settings may be changed by a deployer. They never grant Global Owner authorization. Global Owner authorization is source-controlled by `system/security.js`; normal environment variables such as `GLOBAL_OWNER_NUMBERS`, `OWNER_NUMBER`, and `OWNER_NUMBERS` are rejected at startup. A connected bot account is also **not** automatically a Global Owner.
+
+The source code is under the deployer's control, so local code changes cannot be made cryptographically tamper-proof without an external trust anchor. For a production Global Owner policy, maintainers must distribute reviewed/signed releases or use a remote verification service. The bot fails closed for attempted environment-based overrides and never deletes source, sessions, or authentication data.
 
 ### QR code
 

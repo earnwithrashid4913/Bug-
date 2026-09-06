@@ -13,7 +13,7 @@ const {
   useMultiFileAuthState
 } = require('@whiskeysockets/baileys');
 
-const { config } = require('./system/config');
+const { config, normalizePhoneNumber } = require('./system/config');
 const { handleGroupParticipantsUpdate } = require('./system/group-events');
 const handleMessage = require('./system/handler');
 
@@ -39,6 +39,24 @@ function decodeJid(jid) {
     return decoded?.user && decoded?.server ? `${decoded.user}@${decoded.server}` : jid;
   }
   return jid;
+}
+
+function assertConnectedBotIdentity(socket) {
+  const connectedJid = decodeJid(socket.user?.id);
+  const connectedNumber = connectedJid?.split('@')[0];
+  let normalizedConnectedNumber;
+  try {
+    normalizedConnectedNumber = normalizePhoneNumber(connectedNumber, 'Connected WhatsApp account');
+  } catch {
+    throw new Error('Bot connection identity could not be verified from the authenticated WhatsApp account.');
+  }
+
+  if (normalizedConnectedNumber !== config.botConnectionNumber) {
+    throw new Error(
+      `Bot connection identity mismatch: BOT_CONNECTION_NUMBER is ${config.botConnectionNumber}, ` +
+      `but the authenticated WhatsApp account is ${normalizedConnectedNumber}.`
+    );
+  }
 }
 
 function disconnectStatusCode(lastDisconnect) {
@@ -142,6 +160,14 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   }
 
   if (update.connection === 'open') {
+    try {
+      assertConnectedBotIdentity(socket);
+    } catch (error) {
+      console.error(`[security] ${error.message}`);
+      process.exitCode = 1;
+      shutdown('connection identity mismatch');
+      return;
+    }
     reconnectAttempts = 0;
     pairingState.registered = true;
     console.log(chalk.green(`[connection] ${config.botName} is connected to WhatsApp.`));
@@ -257,6 +283,7 @@ if (config.dryRun) {
 
 module.exports = {
   decodeJid,
+  assertConnectedBotIdentity,
   disconnectStatusCode,
   shouldReconnect,
   startBot

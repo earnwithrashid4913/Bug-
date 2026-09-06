@@ -2,13 +2,14 @@
 
 const path = require('node:path');
 const dotenv = require('dotenv');
+const { assertProtectedSecurityEnvironment } = require('./security');
 
 dotenv.config();
 
 const DEFAULTS = Object.freeze({
   botName: 'Black Clover ♣️',
-  ownerName: 'Only Fixa Dev',
-  authorName: 'Rashid Hussain',
+  botOwnerName: 'Bot Owner',
+  theme: 'default',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
   stickerPackname: 'Black Clover ♣️',
@@ -79,16 +80,6 @@ function parseRequiredPhoneNumber(name) {
   return normalizePhoneNumber(value, name);
 }
 
-function parseOwnerNumbers(primaryOwner) {
-  const additional = readString('OWNER_NUMBERS', '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map((value) => normalizePhoneNumber(value, 'OWNER_NUMBERS'));
-
-  return [...new Set([primaryOwner, ...additional])];
-}
-
 function parseUrl(name, fallback) {
   const value = readString(name, fallback);
   try {
@@ -105,8 +96,8 @@ function resolveRuntimePath(value) {
 }
 
 function loadConfig() {
-  const ownerNumber = parseRequiredPhoneNumber('OWNER_NUMBER');
-  const authorNumber = parseOptionalPhoneNumber('AUTHOR_NUMBER') || ownerNumber;
+  assertProtectedSecurityEnvironment();
+  const botConnectionNumber = parseRequiredPhoneNumber('BOT_CONNECTION_NUMBER');
   const commandPrefix = readString('COMMAND_PREFIX', DEFAULTS.commandPrefix);
 
   if (commandPrefix.length > 4 || /\s/.test(commandPrefix)) {
@@ -142,12 +133,10 @@ function loadConfig() {
 
   return Object.freeze({
     botName: readString('BOT_NAME', DEFAULTS.botName),
-    ownerName: readString('OWNER_NAME', DEFAULTS.ownerName),
-    ownerNumber,
-    ownerNumbers: parseOwnerNumbers(ownerNumber),
-    authorName: readString('AUTHOR_NAME', DEFAULTS.authorName),
-    authorNumber,
-    ownerLink: parseUrl('OWNER_LINK', `https://wa.me/${ownerNumber}`),
+    botOwnerName: readString('BOT_OWNER_NAME', readString('OWNER_NAME', DEFAULTS.botOwnerName)),
+    botConnectionNumber,
+    theme: readString('THEME', DEFAULTS.theme),
+    ownerLink: parseUrl('OWNER_LINK', `https://wa.me/${botConnectionNumber}`),
     whatsappChannel: parseUrl('WHATSAPP_CHANNEL', DEFAULTS.whatsappChannel),
     commandPrefix,
     stickerPackname: readString('STICKER_PACKNAME', DEFAULTS.stickerPackname),
