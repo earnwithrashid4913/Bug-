@@ -19,7 +19,8 @@ const COMMANDS_CATALOG = [
       { cmd: 'alive', args: '', desc: 'Instant pulse check to confirm bot is awake and responding', perm: 'Everyone' },
       { cmd: 'owner', args: '', desc: 'View bot owner contact identity and official WhatsApp channel', perm: 'Everyone' },
       { cmd: 'theme', args: '', desc: 'Show current anime character theme, series, and available presets', perm: 'Everyone' },
-      { cmd: 'jid', args: '', desc: 'Inspect current sender and chat JID identifiers for debugging', perm: 'Everyone' }
+      { cmd: 'jid', args: '', desc: 'Inspect current sender and chat JID identifiers for debugging', perm: 'Everyone' },
+      { cmd: 'idch', args: '<WhatsApp channel URL>', desc: 'Inspect public WhatsApp channel metadata from its invite URL', perm: 'Everyone' }
     ]
   },
   {
@@ -82,7 +83,7 @@ const COMMANDS_CATALOG = [
     items: [
       { cmd: 'public', args: '', desc: 'Switch bot to public mode (responds in personal & group chats)', perm: 'Owner Only' },
       { cmd: 'self', args: '', desc: 'Switch bot to private mode (responds exclusively to instance owner)', perm: 'Owner Only' },
-      { cmd: 'addprem', args: '<number> [duration]', desc: 'Grant temporary or permanent premium subscriber privileges', perm: 'Owner Only' },
+      { cmd: 'addprem', args: '<number> [duration]', desc: 'Grant time-limited premium AI cooldown access (up to 366 days)', perm: 'Owner Only' },
       { cmd: 'delprem', args: '<number>', desc: 'Revoke premium privileges from specified subscriber number', perm: 'Owner Only' },
       { cmd: 'listprem', args: '', desc: 'List all currently active premium subscribers with expiration timestamps', perm: 'Owner Only' },
       { cmd: 'restart', args: '', desc: 'Gracefully recycle and restart bot socket worker process', perm: 'Owner Only' }
@@ -110,7 +111,7 @@ function renderDashboardHtml({ config, activeTheme, liveStatus, recentLogs, allT
 <html lang="en" data-theme="${escapeHtml(activeTheme.id)}">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${escapeHtml(config.masterBotName)} — Anime WhatsApp Web Pairing</title>
   <meta name="description" content="Connect your WhatsApp to ${escapeHtml(config.masterBotName)} via anime-inspired Web Pairing Sanctum.">
   <meta property="og:title" content="${escapeHtml(config.masterBotName)} Web Pairing">
@@ -2229,7 +2230,7 @@ function escapeJs(str) {
     .replace(/"/g, '\\"');
 }
 
-function createWebServer({ config, liveStatus, recentLogs, getActiveTheme, listThemes, port = 3000, host = '0.0.0.0', onRefreshPairingCode }) {
+function createWebServer({ config, liveStatus, recentLogs, getActiveTheme, listThemes, getPublicMode, port = 3000, host = '0.0.0.0', onRefreshPairingCode }) {
   const publicDir = path.resolve(__dirname, '..', 'public');
   let currentWebThemeId = config.theme || 'default';
 
@@ -2267,7 +2268,7 @@ function createWebServer({ config, liveStatus, recentLogs, getActiveTheme, listT
     }
 
     // Live status API
-    if (url.pathname === '/api/status') {
+    if (url.pathname === '/api/status' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       const currentTheme = getActiveTheme(currentWebThemeId);
       return res.end(JSON.stringify({
@@ -2278,7 +2279,7 @@ function createWebServer({ config, liveStatus, recentLogs, getActiveTheme, listT
         pairingCode: liveStatus.pairingCode,
         lastQr: liveStatus.lastQr,
         authMethod: config.authMethod,
-        publicMode: config.publicMode,
+        publicMode: typeof getPublicMode === 'function' ? getPublicMode() : config.publicMode,
         commandPrefix: config.commandPrefix,
         theme: currentTheme.id,
         uptime: Math.floor(process.uptime()),
@@ -2287,7 +2288,7 @@ function createWebServer({ config, liveStatus, recentLogs, getActiveTheme, listT
     }
 
     // Command catalog API
-    if (url.pathname === '/api/commands') {
+    if (url.pathname === '/api/commands' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(COMMANDS_CATALOG));
     }
@@ -2342,16 +2343,25 @@ function createWebServer({ config, liveStatus, recentLogs, getActiveTheme, listT
     // Update active theme in memory
     if (url.pathname === '/api/theme' && req.method === 'POST') {
       let body = '';
-      req.on('data', chunk => body += chunk);
+      req.on('data', chunk => {
+        body += chunk;
+        if (body.length > 10_000) req.destroy();
+      });
       req.on('end', () => {
         try {
           const parsed = JSON.parse(body);
-          if (parsed.theme) {
-            currentWebThemeId = parsed.theme;
+          const requestedThemeId = String(parsed.theme || '').trim().toLowerCase();
+          const activeTheme = getActiveTheme(requestedThemeId);
+          if (!requestedThemeId || activeTheme.id !== requestedThemeId) {
+            throw new Error('Unknown theme.');
           }
-        } catch (_) {}
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, activeTheme: currentWebThemeId }));
+          currentWebThemeId = activeTheme.id;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: true, activeTheme: currentWebThemeId }));
+        } catch (error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ success: false, error: error.message || 'Invalid theme request.' }));
+        }
       });
       return;
     }

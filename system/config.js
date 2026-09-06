@@ -22,7 +22,8 @@ const DEFAULTS = Object.freeze({
   groqModel: 'openai/gpt-oss-20b',
   reconnectBaseDelayMs: 3_000,
   reconnectMaxDelayMs: 60_000,
-  logLevel: 'info'
+  logLevel: 'info',
+  webPort: 3000
 });
 
 // This is the project identity, not a deployer-selected theme or instance label.
@@ -146,6 +147,8 @@ function loadConfig() {
     throw new Error('LOG_LEVEL must be a valid pino log level.');
   }
 
+  const webPort = parseInteger('PORT', DEFAULTS.webPort, 1, 65_535);
+
   const dataDir = resolveRuntimePath(readString('DATA_DIR', DEFAULTS.dataDir));
   const premiumDbPath = resolveRuntimePath(readString('PREMIUM_DB_PATH', path.join(dataDir, 'premium.json')));
   const groupSettingsDbPath = resolveRuntimePath(readString('GROUP_SETTINGS_DB_PATH', path.join(dataDir, 'groups.json')));
@@ -174,6 +177,7 @@ function loadConfig() {
     reconnectBaseDelayMs,
     reconnectMaxDelayMs,
     logLevel,
+    webPort,
     dryRun: parseBoolean('BOT_DRY_RUN', false)
   });
 }

@@ -522,3 +522,25 @@ test('canonical identity is immutable and verified on startup', () => {
     CANONICAL_IDENTITY.developer = 'Imposter';
   });
 });
+
+test('web port is validated and exposed as runtime configuration', () => {
+  const validPort = spawnSync(
+    process.execPath,
+    ['-e', "console.log(require('./system/config').config.webPort)"],
+    {
+      cwd: path.resolve(__dirname, '..'),
+      env: { ...process.env, BOT_NUMBER: '15551234567', PORT: '4567' },
+      encoding: 'utf8'
+    }
+  );
+  assert.equal(validPort.status, 0);
+  assert.equal(validPort.stdout.trim(), '4567');
+
+  const invalidPort = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: { ...process.env, BOT_NUMBER: '15551234567', PORT: '70000' },
+    encoding: 'utf8'
+  });
+  assert.notEqual(invalidPort.status, 0);
+  assert.match(invalidPort.stderr, /PORT must be an integer between 1 and 65535/);
+});
