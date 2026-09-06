@@ -2,43 +2,47 @@
 
 const path = require('node:path');
 const dotenv = require('dotenv');
-const { assertProtectedSecurityEnvironment } = require('./security');
+const { FALLBACK_THEME_ID, isThemeId, resolveTheme } = require('./theme');
 
 dotenv.config();
 
+// Project branding. The developer credit is part of the project identity and is
+// intentionally not a deployer-tunable setting.
+const DEVELOPER_NAME = 'Goats Mods';
+
+// User-facing configuration is limited to OWNER_NAME and BOT_NUMBER.
+// Everything below is internal/optional and has a safe default.
 const DEFAULTS = Object.freeze({
-  instanceOwnerName: 'Instance Owner',
-  theme: 'default',
+  botName: 'Black Clover ♣️',
+  ownerName: 'Only Fixa Dev',
+  // Digits only, country code included, never prefixed with "+".
+  botNumber: '923448170040',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
-  stickerPackname: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
-  stickerAuthor: 'Only F!xa Dev',
+  stickerPackname: 'Black Clover ♣️',
+  stickerAuthor: 'Only Fixa Dev',
   publicMode: true,
+  // The dashboard is web-pairing only. "qr" stays available as an internal
+  // escape hatch for local terminals; it is never offered by the web UI.
   authMethod: 'pairing',
   authDir: './session',
   dataDir: './data',
+  theme: FALLBACK_THEME_ID,
+  webHost: '0.0.0.0',
+  webPort: 3_000,
   welcomeMessage: 'Welcome @user to *@group*!',
   goodbyeMessage: 'Goodbye @user from *@group*.',
   groqModel: 'openai/gpt-oss-20b',
   reconnectBaseDelayMs: 3_000,
   reconnectMaxDelayMs: 60_000,
-  logLevel: 'info',
-  webPort: 3000
+  logLevel: 'info'
 });
 
-// This is the project identity, not a deployer-selected theme or instance label.
-const MASTER_BOT_NAME = '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿';
+const BOT_NUMBER_HINT = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
 
 function readString(name, fallback) {
   const value = process.env[name];
-  if (typeof value === 'string' && value.trim()) {
-    const trimmed = value.trim();
-    if (name === 'STICKER_AUTHOR' && /Only F!XA\??\?? Dev/i.test(trimmed)) {
-      return fallback;
-    }
-    return trimmed;
-  }
-  return fallback;
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
 function parseBoolean(name, fallback) {
@@ -76,18 +80,34 @@ function normalizePhoneNumber(value, fieldName) {
   return number;
 }
 
-function parseOptionalPhoneNumber(name) {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === '') return undefined;
-  return normalizePhoneNumber(value, name);
+// Strict on purpose: the value is typed by a human into a dashboard field or a
+// .env file, and a stray "+" is the single most common mistake. Failing fast
+// with the guidance text beats silently pairing the wrong account.
+function assertBotNumber(value, fieldName = 'BOT_NUMBER') {
+  const raw = String(value ?? '').trim();
+
+  if (raw.includes('+')) {
+    throw new Error(`${fieldName} must not contain "+". ${BOT_NUMBER_HINT}`);
+  }
+  if (!/^\d{7,15}$/.test(raw)) {
+    throw new Error(`${fieldName} must be 7-15 digits including the country code. ${BOT_NUMBER_HINT}`);
+  }
+
+  return raw;
 }
 
-function parseRequiredPhoneNumber(name) {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === '') {
-    throw new Error(`${name} is required. Set it to a 7-15 digit international phone number, including country code.`);
-  }
-  return normalizePhoneNumber(value, name);
+function parseBotNumber(fallback) {
+  // PAIRING_NUMBER is the legacy name for the same setting and is only kept so
+  // existing deployments keep booting. It is not part of the user-facing docs.
+  const raw = readString('BOT_NUMBER', readString('PAIRING_NUMBER', ''));
+  return raw ? assertBotNumber(raw, 'BOT_NUMBER') : fallback;
+}
+
+function parseTheme(fallback) {
+  const requested = readString('THEME', fallback).toLowerCase();
+  if (requested === fallback || isThemeId(requested)) return resolveTheme(requested).id;
+  console.warn(`[config] Unknown THEME "${requested}"; using the ${resolveTheme(fallback).name} theme instead.`);
+  return resolveTheme(fallback).id;
 }
 
 function parseUrl(name, fallback) {
@@ -97,12 +117,6 @@ function parseUrl(name, fallback) {
     if (parsed.protocol !== 'https:') throw new Error('Only HTTPS URLs are supported.');
     return parsed.toString().replace(/\/$/, '');
   } catch (error) {
-    if (fallback && value !== fallback) {
-      try {
-        const parsedFallback = new URL(fallback);
-        if (parsedFallback.protocol === 'https:') return parsedFallback.toString().replace(/\/$/, '');
-      } catch (_) {}
-    }
     throw new Error(`${name} must be a valid HTTPS URL. ${error.message}`);
   }
 }
@@ -112,8 +126,8 @@ function resolveRuntimePath(value) {
 }
 
 function loadConfig() {
-  assertProtectedSecurityEnvironment();
-  const botNumber = parseRequiredPhoneNumber('BOT_NUMBER');
+  // Single owner only: the number the bot is linked to is the owner's number.
+  const botNumber = parseBotNumber(DEFAULTS.botNumber);
   const commandPrefix = readString('COMMAND_PREFIX', DEFAULTS.commandPrefix);
 
   if (commandPrefix.length > 4 || /\s/.test(commandPrefix)) {
@@ -123,10 +137,6 @@ function loadConfig() {
   const authMethod = readString('AUTH_METHOD', DEFAULTS.authMethod).toLowerCase();
   if (!['pairing', 'qr'].includes(authMethod)) {
     throw new Error('AUTH_METHOD must be either "pairing" or "qr".');
-  }
-  const pairingNumber = parseOptionalPhoneNumber('PAIRING_NUMBER');
-  if (authMethod === 'pairing' && pairingNumber && pairingNumber !== botNumber) {
-    throw new Error('PAIRING_NUMBER must match BOT_NUMBER. The paired WhatsApp account is the bot connection identity.');
   }
 
   const reconnectBaseDelayMs = parseInteger(
@@ -147,19 +157,21 @@ function loadConfig() {
     throw new Error('LOG_LEVEL must be a valid pino log level.');
   }
 
-  const webPort = parseInteger('PORT', DEFAULTS.webPort, 1, 65_535);
-
   const dataDir = resolveRuntimePath(readString('DATA_DIR', DEFAULTS.dataDir));
   const premiumDbPath = resolveRuntimePath(readString('PREMIUM_DB_PATH', path.join(dataDir, 'premium.json')));
   const groupSettingsDbPath = resolveRuntimePath(readString('GROUP_SETTINGS_DB_PATH', path.join(dataDir, 'groups.json')));
 
   return Object.freeze({
-    masterBotName: MASTER_BOT_NAME,
-    instanceOwnerName: readString('INSTANCE_OWNER_NAME', DEFAULTS.instanceOwnerName),
-    instanceOwnerNumber: parseOptionalPhoneNumber('INSTANCE_OWNER_NUMBER'),
+    botName: readString('BOT_NAME', DEFAULTS.botName),
+    ownerName: readString('OWNER_NAME', DEFAULTS.ownerName),
     botNumber,
-    theme: readString('THEME', DEFAULTS.theme),
-    ownerLink: parseUrl('OWNER_LINK', `https://wa.me/${botNumber}`),
+    // Derived from BOT_NUMBER — never configured separately.
+    ownerNumber: botNumber,
+    ownerNumbers: Object.freeze([botNumber]),
+    developerName: DEVELOPER_NAME,
+    authorName: DEVELOPER_NAME,
+    authorNumber: botNumber,
+    ownerLink: `https://wa.me/${botNumber}`,
     whatsappChannel: parseUrl('WHATSAPP_CHANNEL', DEFAULTS.whatsappChannel),
     commandPrefix,
     stickerPackname: readString('STICKER_PACKNAME', DEFAULTS.stickerPackname),
@@ -170,6 +182,9 @@ function loadConfig() {
     dataDir,
     premiumDbPath,
     groupSettingsDbPath,
+    theme: parseTheme(DEFAULTS.theme),
+    webHost: readString('WEB_HOST', DEFAULTS.webHost),
+    webPort: parseInteger('PORT', DEFAULTS.webPort, 1, 65_535),
     welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
     goodbyeMessage: readString('GOODBYE_MESSAGE', DEFAULTS.goodbyeMessage),
     groqApiKey: readString('GROQ_API_KEY', ''),
@@ -177,7 +192,6 @@ function loadConfig() {
     reconnectBaseDelayMs,
     reconnectMaxDelayMs,
     logLevel,
-    webPort,
     dryRun: parseBoolean('BOT_DRY_RUN', false)
   });
 }
@@ -186,7 +200,9 @@ const config = loadConfig();
 
 module.exports = {
   DEFAULTS,
-  MASTER_BOT_NAME,
+  DEVELOPER_NAME,
+  BOT_NUMBER_HINT,
+  assertBotNumber,
   config,
   loadConfig,
   normalizePhoneNumber

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="gojo" data-images="on">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="Anime-themed WhatsApp Web Pairing dashboard." />
+  <link rel="preconnect" href="https://files.catbox.moe" />
+  <link rel="dns-prefetch" href="https://files.catbox.moe" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>WhatsApp Web Pairing</title>
+</head>
+<body>
+  <div class="stage" aria-hidden="true">
+    <div class="bg-slide" id="bgSlideA"><img alt="" decoding="async" /></div>
+    <div class="bg-slide" id="bgSlideB"><img alt="" decoding="async" /></div>
+    <div class="bg-gradient"></div>
+    <div class="bg-overlay"></div>
+    <div class="bg-glow"></div>
+    <canvas id="particles"></canvas>
+  </div>
+
+  <a class="skip-link" href="#pairingCard">Skip to pairing</a>
+
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" id="themeIcon">♾️</span>
+        <span class="brand-text">
+          <span class="brand-name" id="botName">Loading…</span>
+          <span class="brand-sub">Web Pairing · <span id="themeName">—</span></span>
+        </span>
+      </div>
+      <div class="status-pill" id="statusPill" data-state="starting" role="status" aria-live="polite">
+        <span class="status-dot"></span>
+        <span id="statusText">Starting…</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><span id="themeSeries">—</span> · <span id="themeVibe">—</span></p>
+        <h1>Link WhatsApp with <span class="accent">Web Pairing</span></h1>
+        <p class="lede" id="themeTagline">—</p>
+        <blockquote class="quote" id="themeQuote">—</blockquote>
+        <p class="owner-line">Owner: <strong id="ownerName">—</strong> <span class="dot-sep">·</span> <span id="botNumber">—</span></p>
+      </div>
+
+      <section class="card pairing" id="pairingCard" aria-labelledby="pairingTitle">
+        <h2 id="pairingTitle">Web Pairing</h2>
+        <p class="card-hint">Nothing to scan. Generate a code and type it into WhatsApp.</p>
+
+        <ol class="steps" id="steps">
+          <li class="step is-active" data-step="1"><span class="step-index">1</span> Enter your number</li>
+          <li class="step" data-step="2"><span class="step-index">2</span> Generate the code</li>
+          <li class="step" data-step="3"><span class="step-index">3</span> WhatsApp → Linked devices</li>
+          <li class="step" data-step="4"><span class="step-index">4</span> Type the code</li>
+        </ol>
+
+        <form class="pair-form" id="pairForm" novalidate>
+          <label class="field-label" for="phoneNumber">Your WhatsApp number</label>
+          <input
+            class="field"
+            id="phoneNumber"
+            name="phoneNumber"
+            type="tel"
+            inputmode="numeric"
+            autocomplete="tel-national"
+            placeholder="923001234567"
+            aria-describedby="phoneHint"
+            required
+          />
+          <p class="field-hint" id="phoneHint">Enter your WhatsApp number with country code, without +.</p>
+          <button class="btn btn-primary" id="pairButton" type="submit">Generate pairing code</button>
+          <p class="form-message" id="formMessage" role="alert"></p>
+        </form>
+
+        <div class="code-box" id="codeBox" hidden>
+          <p class="code-label">Enter this code in WhatsApp</p>
+          <p class="code" id="codeValue">········</p>
+          <div class="code-actions">
+            <button class="btn btn-ghost" id="copyButton" type="button">Copy code</button>
+            <button class="btn btn-ghost" id="regenerateButton" type="button">New code</button>
+          </div>
+          <p class="code-help">WhatsApp → Settings → Linked devices → Link a device → <strong>Link with phone number instead</strong></p>
+        </div>
+
+        <div class="linked" id="linkedBox" hidden>
+          <p class="linked-title">Connected</p>
+          <p class="linked-text" id="linkedText">WhatsApp is linked and the bot is live.</p>
+        </div>
+      </section>
+    </section>
+
+    <section class="card themes" aria-labelledby="themesTitle">
+      <div class="themes-head">
+        <h2 id="themesTitle">Character theme</h2>
+        <p class="card-hint">Every theme repaints the background, glow, particles and pairing box.</p>
+      </div>
+      <div class="theme-grid" id="themeGrid" role="group" aria-label="Character themes"></div>
+    </section>
+
+    <footer class="footer">
+      <span class="credit" id="credit">Developed By: Goats Mods</span>
+      <span class="footer-meta"><span id="themeCharacter">—</span> · <span id="rotationNote">background rotates every 5s</span></span>
+    </footer>
+  </main>
+
+  <noscript>
+    <p class="noscript">This dashboard needs JavaScript to generate a WhatsApp pairing code.</p>
+  </noscript>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
