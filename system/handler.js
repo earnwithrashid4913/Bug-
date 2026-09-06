@@ -15,7 +15,7 @@ const {
 const { askGroq, reserveAiRequest } = require('./lib/ai');
 const { PremiumStore } = require('./lib/premium');
 const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
-const { formatBrandHeader, getActiveTheme } = require('./theme');
+const { formatBrandHeader, formatThemeSummary, getActiveTheme, listThemes } = require('./theme');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
 const reportCooldowns = new Map();
@@ -71,8 +71,10 @@ async function downloadMediaBuffer(mediaMessage, mediaType) {
 
 function helpText() {
   const p = config.commandPrefix;
+  const theme = getActiveTheme(config.theme);
   return [
-    `*${formatBrandHeader(config.masterBotName, getActiveTheme(config.theme))}*`,
+    `*${formatBrandHeader(config.masterBotName, theme)}*`,
+    theme.tagline,
     '',
     '*General commands*',
     `${p}menu — show this menu`,
@@ -86,6 +88,7 @@ function helpText() {
     `${p}jid — show the current chat and sender JIDs`,
     `${p}ai <question> — ask the configured AI provider`,
     `${p}request <message> — send a feature request to the owner`,
+    `${p}theme — show the active character theme`,
     '',
     '*Group admin commands*',
     `${p}hidetag <message> — send a hidden mention to the group`,
@@ -102,6 +105,24 @@ function helpText() {
     '',
     `Instance Owner: ${config.instanceOwnerName}`,
     `Channel: ${config.whatsappChannel}`
+  ].join('\n');
+}
+
+function themeText() {
+  const activeTheme = getActiveTheme(config.theme);
+  const availableThemes = listThemes()
+    .map((theme) => `${theme.id === activeTheme.id ? '•' : '○'} ${theme.icon ? `${theme.icon} ` : ''}${theme.id} — ${theme.character || theme.name}`)
+    .join('\n');
+
+  return [
+    `*${config.masterBotName} theme*`,
+    '',
+    formatThemeSummary(activeTheme),
+    '',
+    '*Available themes*',
+    availableThemes,
+    '',
+    'Set THEME in your deployment environment and restart the bot to change the presentation theme.'
   ].join('\n');
 }
 
@@ -431,6 +452,11 @@ async function handleMessage(socket, rawMessage) {
       await socket.sendMessage(context.chatId, { text: helpText() }, { quoted: context.raw });
       break;
 
+    case 'theme':
+    case 'themes':
+      await socket.sendMessage(context.chatId, { text: themeText() }, { quoted: context.raw });
+      break;
+
     case 'ping':
     case 'p': {
       const started = Date.now();
@@ -725,3 +751,4 @@ async function handleMessage(socket, rawMessage) {
 module.exports = handleMessage;
 module.exports.commandFromText = commandFromText;
 module.exports.helpText = helpText;
+module.exports.themeText = themeText;
