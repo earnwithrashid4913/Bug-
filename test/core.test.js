@@ -59,6 +59,22 @@ test('deployment configuration requires an explicit bot connection number', () =
   assert.equal(config.groqModel, 'openai/gpt-oss-20b');
 });
 
+test('pairing configuration cannot authenticate a different bot connection identity', () => {
+  const mismatchedPairingNumber = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
+    cwd: path.resolve(__dirname, '..'),
+    env: {
+      ...process.env,
+      BOT_CONNECTION_NUMBER: '15551234567',
+      AUTH_METHOD: 'pairing',
+      PAIRING_NUMBER: '15551234568'
+    },
+    encoding: 'utf8'
+  });
+
+  assert.notEqual(mismatchedPairingNumber.status, 0);
+  assert.match(mismatchedPairingNumber.stderr, /PAIRING_NUMBER must match BOT_CONNECTION_NUMBER/);
+});
+
 test('ordinary environment variables cannot override protected Global Owner authorization', () => {
   const override = spawnSync(process.execPath, ['-e', "require('./system/config')"], {
     cwd: path.resolve(__dirname, '..'),
@@ -404,7 +420,7 @@ test('premium duration parser validates supported units', () => {
 });
 
 test('group settings persist greeting toggles and render templates', async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'black-clover-groups-'));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'goatverse-groups-'));
   const store = new GroupSettingsStore(path.join(directory, 'groups.json'));
 
   try {
@@ -420,7 +436,7 @@ test('group settings persist greeting toggles and render templates', async () =>
 });
 
 test('group participant events send greetings only when enabled', async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'black-clover-events-'));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'goatverse-events-'));
   const originalPath = groupSettings.filePath;
   groupSettings.filePath = path.join(directory, 'groups.json');
   const sent = [];

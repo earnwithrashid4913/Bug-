@@ -1,240 +1,196 @@
 # 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿
 
-**One Bot. Infinite Themes.**
+<p align="center"><strong>One Bot. Infinite Themes.</strong></p>
+<p align="center">
+  <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2563eb.svg"></a>
+  <img alt="Node.js 20.9 or newer" src="https://img.shields.io/badge/node-%E2%89%A520.9-339933.svg">
+  <img alt="Runtime: WhatsApp worker" src="https://img.shields.io/badge/runtime-WhatsApp%20worker-25D366.svg">
+</p>
 
-GOATVERSE MD is a clean, configurable WhatsApp bot built with Baileys. **GOATVERSE MD is always the original/master bot name.** Future anime modes—such as Gojo Mode, Itachi Mode, or Naruto Mode—are visual active-theme names only; they never replace the master identity or affect authorization. No additional themes are implemented yet.
+> **Developer:** Only F!XA?? Dev &nbsp;•&nbsp; **Developer Identity:** RaShiD Hussain &nbsp;•&nbsp; **Community:** ONLY GOATS ?
 
-- **Developed by:** Only F!XA?? Dev
-- **Developer:** RaShiD Hussain
-- **Community:** ONLY GOATS ?
-- **Instance owner:** configured through the instance-only `INSTANCE_OWNER_NAME` and `INSTANCE_OWNER_NUMBER` settings
-- **WhatsApp Channel:** https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T
+## About
+
+GOATVERSE MD is a Node.js WhatsApp bot built with Baileys. It runs as one long-lived outbound WebSocket worker, with pairing-code and terminal-QR authentication, persistent bot data, safe group administration, media conversion, and an optional Groq-powered AI command.
+
+`𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` is the only master bot name. `THEME` selects a presentation mode only; it never changes authorization or protected identity. The repository currently ships the `default` theme and is deliberately ready for reviewed future themes without bundling unimplemented assets.
 
 ## Features
 
-- Multi-file Baileys authentication with pairing-code and terminal QR options
-- Configurable bot identity, owner records, command prefix, public/self mode, paths, and reconnect tuning
-- Exponential, bounded reconnect handling that avoids looping on logout, bad-session, and connection-replaced events
-- Safe command handler for menu, ping, status, owner details, group mentions, group greetings, safe group administration, channel lookup, request forwarding, premium records, sticker conversion, and sticker-to-image conversion
-- Owner-only public/self mode, premium management, and host-managed restart command
-- Persistent premium and group-greeting data with atomic writes
-- Render Background Worker and Railway configuration
-- Local Node.js, Termux, generic Node.js host, and Pterodactyl-friendly startup flow
+- Pairing-code or terminal QR authentication, with authenticated-account identity verification.
+- Persistent, atomic premium and group-greeting stores.
+- Bounded reconnects that stop for logout, bad-session, and connection-replaced events.
+- Commands for status, owners, safe group administration, greetings, stickers, profile photos, requests, premium access, and optional AI.
+- Image/sticker conversion with input-size and pixel limits.
+- Render Background Worker and Railway manifests; portable Node.js instructions for VPS and Pterodactyl.
 
-## Safety boundary
+## Architecture
 
-The supplied base contained commands and malformed WhatsApp payloads intended to force-close, freeze, or crash other clients. Those destructive capabilities, their menus, and unrelated third-party follow/media endpoints were deliberately removed during this migration. This repository retains benign bot administration and group-utility functionality only.
+| Area | Implementation |
+| --- | --- |
+| Entrypoint | `index.js` creates one Baileys socket, handles lifecycle signals, pairing, and reconnects. |
+| Configuration | `system/config.js` validates environment values before connecting. |
+| Commands | `system/handler.js` parses the configured prefix and applies access checks. |
+| Identity | `system/security.js` holds protected developer metadata and verifies optional signed identity manifests. |
+| State | `AUTH_DIR` holds Baileys credentials; `DATA_DIR` holds premium and group settings. |
+| Themes | `system/theme.js` is data-only and cannot affect authorization. |
 
-## Requirements
+## Security and identity boundary
 
-- Node.js **20.9+ LTS** is recommended. The sticker converter uses Sharp, which requires Node.js 20.9 or newer.
-- Baileys is pinned to the current official `7.0.0-rc14` release candidate. WhatsApp Web protocol changes can require a future upstream update.
-- An active WhatsApp account to link to the bot.
-- Persistent storage for `AUTH_DIR` in production.
+Deployment users may set instance presentation and instance-level ownership. They cannot set protected Global Owner, developer identity, authorization, or HMAC material through normal environment variables. Attempts to use protected owner/developer environment keys fail at startup. If a configured trusted identity manifest is absent, invalid, or tampered with, privileged functions lock without deleting sessions or source files.
+
+A pairing number and the connected WhatsApp account **never** become Global Owner automatically. For pairing-code authentication, `PAIRING_NUMBER` must equal `BOT_CONNECTION_NUMBER`; the connected account is checked again after login. Keep `.env`, `AUTH_DIR`, `DATA_DIR`, and any trusted-manifest/HMAC inputs outside Git.
 
 ## Installation
 
+**Requirements:** Node.js **20.9+** (Node 20 LTS recommended), npm, and a WhatsApp account. Use only accounts and groups you own or administer.
+
 ```bash
-git clone <your-repository-url>
+git clone <repository-url>
 cd Bug-
 cp .env.example .env
-npm install
+# edit .env with real numbers
+npm ci
 npm start
 ```
 
-For a reproducible deployment after the lockfile is committed, use `npm ci` rather than `npm install`.
+Use `npm install` only when developing or intentionally updating dependencies. Validate configuration without opening WhatsApp:
+
+```bash
+BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
+npm run check
+npm test
+```
 
 ## Configuration
 
-All runtime configuration is centralized in [`system/config.js`](system/config.js) and can be overridden through environment variables. Copy `.env.example` and edit it; do not commit `.env`.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `BOT_NAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Optional instance label. It does not replace the GOATVERSE MD master header or protected identity. |
-| `INSTANCE_OWNER_NAME` | `Instance Owner` | Per-deployment display/branding name; it never grants authorization. |
-| `BOT_CONNECTION_NUMBER` | required | Per-deployment WhatsApp account; 7–15 digits including country code. Startup fails when absent/invalid, and the connected account must match it. |
-| `THEME` | `default` | Per-deployment branding metadata. It does not affect authorization. |
-| `OWNER_LINK` | `https://wa.me/BOT_CONNECTION_NUMBER` | Optional instance contact shown by `!owner`. |
-| `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
-| `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
-| `STICKER_PACKNAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Sticker pack name used by `!sticker`. |
-| `STICKER_AUTHOR` | `Only F!XA?? Dev` | Sticker publisher used by `!sticker`. |
-| `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
-| `AUTH_METHOD` | `pairing` | `pairing` or `qr`. |
-| `PAIRING_NUMBER` | unset | Required for pairing on a non-interactive host. |
-| `AUTH_DIR` | `./session` | Baileys credentials path; keep private and persistent. |
-| `DATA_DIR` | `./data` | Runtime data directory. |
-| `PREMIUM_DB_PATH` | `DATA_DIR/premium.json` | Optional custom premium database file path. |
-| `GROUP_SETTINGS_DB_PATH` | `DATA_DIR/groups.json` | Optional persistent group greeting settings file. |
-| `WELCOME_MESSAGE` | supplied default | Greeting template; supports `@user` and `@group`. |
-| `GOODBYE_MESSAGE` | supplied default | Farewell template; supports `@user` and `@group`. |
-| `GROQ_API_KEY` | unset | Optional secret used by `!ai`; do not commit it. |
-| `GROQ_MODEL` | `openai/gpt-oss-20b` | Groq model used by `!ai`. |
-| `RECONNECT_BASE_DELAY_MS` | `3000` | Initial reconnect delay. |
-| `RECONNECT_MAX_DELAY_MS` | `60000` | Maximum reconnect delay. |
-| `LOG_LEVEL` | `info` | Pino log level. |
-
-Configuration validates phone numbers, URLs, booleans, delays, prefixes, and authentication method at startup. Invalid values fail early with an actionable error.
-
-`!ai` is optional. It sends the command prompt to Groq only when you explicitly configure `GROQ_API_KEY`; do not submit secrets or sensitive personal data to an external AI provider.
-
-## Authentication and session handling
-
-### Pairing code
-
-For a cloud host, set a real linking phone number:
+Copy [`.env.example`](.env.example). The top **INSTANCE SETTINGS** block is the normal deployer-editable surface:
 
 ```dotenv
-INSTANCE_OWNER_NAME=your_deployment_name
-INSTANCE_OWNER_NUMBER=your_instance_owner_number
-BOT_CONNECTION_NUMBER=your_bot_connection_number
-AUTH_METHOD=pairing
-PAIRING_NUMBER=your_linking_phone_number
+BOT_NAME=My GOATVERSE Instance
+INSTANCE_OWNER_NAME=Your Name
+INSTANCE_OWNER_NUMBER=15551234567
+BOT_CONNECTION_NUMBER=15551234567
+THEME=default
 ```
 
-Replace the placeholders before starting the bot. `BOT_CONNECTION_NUMBER` is the account this deployment will authenticate as; `INSTANCE_OWNER_NAME` is display-only; `INSTANCE_OWNER_NUMBER` grants only instance-level owner features; `PAIRING_NUMBER` is the phone being linked and may be different. Each number must include its country code and contain digits only.
-
-### Instance configuration and protected authorization
-
-`BOT_NAME`, `INSTANCE_OWNER_NAME`, `INSTANCE_OWNER_NUMBER`, `BOT_CONNECTION_NUMBER`, `THEME`, and similar instance settings may be changed by a deployer. `BOT_NAME` and `THEME` are instance presentation inputs only; neither can replace the GOATVERSE MD master identity. They never grant Global Owner authorization. Global Owner and Developer identity are protected by `system/security.js`; normal environment variables such as `GLOBAL_OWNER_NUMBERS`, `DEVELOPER_IDENTITY`, `OWNER_NUMBER`, and `OWNER_NUMBERS` are rejected at startup. A connected bot account, pairing number, or Instance Owner is **not** automatically a Global Owner. Maintainers can provision authorization numbers only through an HMAC-SHA-256 verified identity manifest and a secret held outside this repository; an invalid, missing, or mismatched configured manifest locks privileged functions without changing source or session files.
-
-The source code is under the deployer's control, so local code changes cannot be made cryptographically tamper-proof without an external trust anchor. For a production Global Owner policy, maintainers must distribute reviewed/signed releases or use a remote verification service. The bot fails closed for attempted environment-based overrides and never deletes source, sessions, or authentication data.
-
-### QR code
-
-For an interactive local terminal:
-
-```dotenv
-AUTH_METHOD=qr
-```
-
-Run `npm start` and scan the terminal QR code.
-
-The `session/` directory contains authentication credentials and private keys. It is excluded from Git. If a session is invalid or logged out, stop the process, remove only the configured `AUTH_DIR`, restart, and pair again.
-
-## Authorized-device compatibility testing
-
-Use only WhatsApp accounts and groups you own or administer. After pairing a real account, test standard WhatsApp behaviors with `!menu`, `!ping`, `!owner`, and—inside an authorized group—`!hidetag` or `!tagall`. The bot uses standard text, message edits, mentions, and supported interactive-response parsing; it does not send malformed UI payloads. Automated tests validate the command parser and supported message shapes, but a real WhatsApp pairing/message exchange must be performed by the owner.
-
-## Commands
-
-Use the configured prefix (shown below as `!`).
-
-| Command | Access | Description |
+| Variable | Required | Description |
 | --- | --- | --- |
-| `!menu`, `!help` | Everyone in public mode | Show command help. |
-| `!ping` | Everyone in public mode | Check command latency. |
-| `!status`, `!alive`, `!runtime` | Everyone in public mode | Show basic process status. |
-| `!owner`, `!creator` | Everyone in public mode | Show configured owner/contact details. |
-| `!sticker`, `!s` | Everyone in public mode | Reply to an image to create a standard WebP sticker. |
-| `!toimg`, `!sticker2img` | Everyone in public mode | Reply to a sticker to convert it to an image. |
-| `!jid`, `!chatid` | Everyone in public mode | Show the current chat and sender JIDs. |
-| `!getpp`, `!pp`, `!profilepic`, `!avatar` | Everyone in public mode | Show a profile picture from a group, quoted/mentioned user, or number. |
-| `!setpp` | Owner | Reply to an image to update the bot profile picture. |
-| `!ai`, `!ask`, `!ia`, `!groq` | Everyone in public mode | Ask Groq AI when `GROQ_API_KEY` is configured. Premium users and owners receive a 10-second cooldown; other users receive a 30-second cooldown. |
-| `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
-| `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
-| `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
-| `!welcome`, `!goodbye`, `!greet` | Group admin/owner | Configure safe group greetings. |
-| `!group` | Group admin/owner | Show safe group management help. |
-| `!gname`, `!gdesc`, `!add`, `!kick`, `!promote`, `!demote`, `!lock`, `!unlock`, `!grouplink` | Group admin/owner + bot admin | Perform the named group action. |
-| `!idch <channel URL>` | Everyone in public mode | Look up a WhatsApp channel invite. |
-| `!public`, `!self` | Owner | Toggle command visibility. |
-| `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`; the duration must be at least `1s`. Premium access enables the shorter AI cooldown. |
-| `!delprem <number>` | Owner | Remove premium access. |
-| `!listprem` | Owner | List active premium records. |
-| `!restart` | Owner | Exit cleanly for a host-managed restart. |
+| `BOT_CONNECTION_NUMBER` | Yes | 7–15 digit WhatsApp account number, including country code; must match the authenticated account. |
+| `BOT_NAME`, `INSTANCE_OWNER_NAME`, `INSTANCE_OWNER_NUMBER`, `THEME` | No | Instance-only presentation/owner settings. `INSTANCE_OWNER_NUMBER` grants instance-level commands only. |
+| `AUTH_METHOD` | No | `pairing` (default) or `qr`. |
+| `PAIRING_NUMBER` | Cloud pairing | Same digits as `BOT_CONNECTION_NUMBER`; required on non-interactive pairing hosts. |
+| `AUTH_DIR`, `DATA_DIR` | No | Private persistent paths for credentials and runtime data. |
+| `COMMAND_PREFIX`, `PUBLIC_MODE`, `LOG_LEVEL` | No | Command/runtime controls validated at startup. |
+| `GROQ_API_KEY`, `GROQ_MODEL` | No | Optional AI provider configuration; never commit the API key. |
 
-## Local setup
+`OWNER_LINK`, sticker metadata, greeting templates, database path overrides, and reconnect delays are also documented in [`.env.example`](.env.example). Do **not** add `GLOBAL_OWNER_NUMBER`, `GLOBAL_OWNER_NUMBERS`, `OWNER_NUMBER`, `OWNER_NUMBERS`, or developer overrides: startup rejects them.
 
-```bash
-cp .env.example .env
-# edit .env
-npm install
-npm start
-```
+## Pairing
 
-To validate configuration and module loading without opening a WhatsApp connection:
+### Cloud pairing code
 
-```bash
-npm run start:dry
-npm test
-npm run check
-```
+Set `AUTH_METHOD=pairing`, `BOT_CONNECTION_NUMBER`, and the identical `PAIRING_NUMBER`. Start the worker, copy the code from its logs, then enter it under WhatsApp **Linked devices** for that account. Persist `AUTH_DIR` before restarting.
 
-## Termux setup
+### Local terminal QR
 
-Termux can run the bot if it provides Node.js 20.9 or newer and stays running:
+Set `AUTH_METHOD=qr`, run `npm start` from an interactive terminal, and scan the displayed QR code with the same account as `BOT_CONNECTION_NUMBER`.
 
-```bash
-pkg update && pkg upgrade
-pkg install nodejs-lts git
-git clone <your-repository-url>
-cd Bug-
-cp .env.example .env
-npm install
-npm start
-```
+A real WhatsApp login cannot be automated by this repository's tests. On an invalid session or logout, stop the worker, remove **only** the configured private `AUTH_DIR`, and pair again.
 
-Keep Termux awake/available if you need the bot to remain connected, and never upload its `session/` directory.
+## Deployment
 
-## Render deployment
+### 🚀 Deployment paths
 
-This is a WebSocket worker, not an HTTP application. Use the included [`render.yaml`](render.yaml) as a **Background Worker** blueprint.
+| Platform | Install | Start | Persistent storage | Status |
+| --- | --- | --- | --- | --- |
+| [Render](#render) | `npm ci` | `npm start` | Render disk at `/var/data` | NEEDS CONFIGURATION |
+| [Railway](#railway) | `npm ci` | `npm start` | Railway Volume at `/var/data` | NEEDS CONFIGURATION |
+| [Pterodactyl](#pterodactyl) | `npm ci` | `npm start` | Persistent server directory | NEEDS CONFIGURATION |
+| [VPS / Linux](#vps--linux) | `npm ci` | `npm start` | Host directory | NEEDS CONFIGURATION |
+| Docker | — | — | — | NOT SUPPORTED (no Dockerfile is supplied) |
+| Koyeb | — | — | — | NOT SUPPORTED (no repository deployment configuration is supplied) |
 
-- Build: `npm ci`
-- Start: `npm start`
-- Node: `20.19.5` in the supplied Blueprint
-- Persistent disk mount: `/var/data`
-- Required production paths: `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`
+> All supported paths require **one replica only**. Never share an `AUTH_DIR` between concurrent workers.
 
-Set `PAIRING_NUMBER` in Render before the first pairing. Render's filesystem is ephemeral without a disk, so a deployment/restart without persistent storage loses the WhatsApp session. A disk is required for durable state and is subject to Render plan availability/cost.
+### Render
 
-## Railway deployment
+The included [`render.yaml`](render.yaml) defines a Background Worker, not an HTTP service.
 
-Railway detects this Node.js project automatically and reads [`railway.toml`](railway.toml).
+1. Create a Render Blueprint from this repository and confirm `npm ci` / `npm start`.
+2. Keep the supplied 1 GB disk mounted at `/var/data`.
+3. Set `BOT_CONNECTION_NUMBER`, `PAIRING_NUMBER` (same value), and optional instance settings in Render's environment UI.
+4. Keep `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`, deploy one worker, then pair from logs.
+5. Restarts retain state only while that disk remains attached. For updates, pull the release, redeploy, and preserve the disk.
 
-- Build: `npm ci`
-- Start: `npm start`
-- Add a Railway Volume at `/var/data`
-- Set `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`
-- Set `PAIRING_NUMBER` before the first deployment
+Render disks and worker availability depend on the selected Render plan; see the [Render Background Worker documentation](https://render.com/docs/background-workers) and [persistent disk documentation](https://render.com/docs/disks).
 
-## Pterodactyl and generic Node.js hosting
+### Railway
 
-Select a Node.js 20+ runtime/image, retain a persistent writable directory for authentication, configure the environment variables, and use:
+[`railway.toml`](railway.toml) declares the `npm start` process.
 
-```text
-npm start
-```
+1. Create a project from this repository; Railway builds with Nixpacks.
+2. Add one Volume mounted at `/var/data`.
+3. Set `BOT_CONNECTION_NUMBER`, matching `PAIRING_NUMBER`, and `AUTH_DIR=/var/data/session`, `DATA_DIR=/var/data/data`.
+4. Deploy one replica and pair from logs. Preserve the Volume during redeploys and updates.
 
-For a VPS or other Node.js host:
+See [Railway Volumes](https://docs.railway.com/volumes) for the current volume workflow.
 
-```bash
-npm install
-npm start
-```
+### Pterodactyl
 
-Use a process manager/platform restart policy if you use the owner-only `!restart` command.
+Create one server using a Node.js **20.9+** egg/image and its ordinary persistent server filesystem. Upload or clone the repository, install with `npm ci`, set the configuration values in the server environment/startup panel, then use `npm start`. Pair from the console. Configure the panel's restart policy if you use `!restart`; it exits cleanly and does not restart itself.
+
+### VPS / Linux
+
+Install Node.js 20.9+, clone the repository, copy `.env.example`, run `npm ci`, and start with `npm start`. Set `AUTH_DIR` and `DATA_DIR` to protected directories that survive releases. Use a process manager such as systemd only after confirming `npm run start:dry`; configure it to restart failures and run one instance. For updates, stop the service, pull the reviewed release, run `npm ci`, validate with `npm run check` and `npm test`, then restart without deleting state.
+
+For complete step-by-step deployment and recovery instructions, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Troubleshooting
 
-- **No pairing code on a cloud host:** set `PAIRING_NUMBER` (digits only) or pair locally with `AUTH_METHOD=qr` and then securely move the session to persistent host storage.
-- **Bot is logged out/re-pairs on every deploy:** your `AUTH_DIR` is ephemeral or being overwritten. Attach a single persistent disk/volume and do not run multiple replicas.
-- **`Bad Session` / `connection replaced`:** stop the bot, delete only the configured authentication directory, restart, and link again. Automatic reconnect intentionally stops for these cases.
-- **Commands do not respond:** check `COMMAND_PREFIX`, `PUBLIC_MODE`, owner number formatting, and the connection logs.
-- **Premium data disappears:** persist `DATA_DIR` alongside `AUTH_DIR`.
-- **A command appears unavailable:** the unsafe crash/force-close payload commands from the supplied base were intentionally not migrated.
+| Symptom | Resolution |
+| --- | --- |
+| No cloud pairing code | Set a valid, matching `PAIRING_NUMBER`; QR needs an interactive terminal. |
+| Identity mismatch at connect | Pair/scan the account in `BOT_CONNECTION_NUMBER`; the bot intentionally exits rather than substitute an identity. |
+| Re-pair after deployment | Put both `AUTH_DIR` and `DATA_DIR` on the platform's persistent disk/volume. |
+| Commands do not respond | Check the prefix, `PUBLIC_MODE`, access policy, and worker logs. The linked account is not implicitly an owner. |
+| Bad session / logged out | Stop the worker, remove only configured `AUTH_DIR`, start once, and pair again. |
+| `!restart` stops the bot | Configure the host restart policy; the command intentionally exits. |
 
-For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
+## Commands
+
+Use the configured prefix (`!` by default).
+
+| Group | Commands |
+| --- | --- |
+| General | `menu`, `ping`, `status`, `owner`, `sticker`, `toimg`, `jid`, `getpp`, `ai`, `request` |
+| Group admin | `hidetag`, `tagall`, `welcome`, `goodbye`, `greet`, `group`, `gname`, `gdesc`, `add`, `kick`, `promote`, `demote`, `lock`, `unlock`, `grouplink` |
+| Instance-authorized owner | `setpp`, `public`, `self`, `addprem`, `delprem`, `listprem`, `restart` |
+
+`!ai` requires `GROQ_API_KEY`. Group mutations also require the bot to be a group admin. Run `!menu` in WhatsApp for exact usage and aliases.
+
+## Development
+
+```bash
+npm ci
+BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
+npm run check
+npm test
+```
+
+Tests cover configuration validation, protected-identity failure behavior, command parsing, message shapes, media conversion, LID handling, group settings, and premium storage. Do not use production session files or real secrets in tests.
+
+## Contribution
+
+Keep changes small and reviewed. Preserve the protected identity/security architecture, do not add destructive WhatsApp payloads, and add or update tests for behavior changes. Run the development checks before opening a pull request.
 
 ## Credits
 
-- Project configuration and migration: **RaShiD Hussain**
-- Global project owner: **Only F!XA?? Dev**
-- WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys) and its respective maintainers
-- The Apache-2.0 license file supplied with the base source is retained. Third-party dependency licenses remain with their respective authors.
+- **Protected developer brand:** Only F!XA?? Dev
+- **Protected developer identity:** RaShiD Hussain
+- **Community:** ONLY GOATS ?
+- WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys)
 
 ## License
 
-This repository is distributed under the [Apache License 2.0](LICENSE). Review the license and all third-party dependency licenses before redistribution.
+Distributed under the [Apache License 2.0](LICENSE). Third-party dependencies retain their own licenses.
