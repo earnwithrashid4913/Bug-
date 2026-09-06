@@ -22,7 +22,8 @@ const ELEMENT_IDS = [
   'themeTagline', 'themeQuote', 'themeCharacter', 'themeGrid', 'statusPill', 'statusText',
   'pairForm', 'phoneNumber', 'pairButton', 'formMessage', 'codeBox', 'codeValue',
   'copyButton', 'regenerateButton', 'linkedBox', 'linkedText', 'steps', 'particles',
-  'bgSlideA', 'bgSlideB', 'rotationNote', 'credit'
+  'bgSlideA', 'bgSlideB', 'rotationNote', 'credit',
+  'sessionCard', 'sessionHint', 'sessionExport', 'sessionValue', 'copySessionButton', 'sessionDisabledNote'
 ];
 
 const BOOTSTRAP = {
@@ -32,6 +33,7 @@ const BOOTSTRAP = {
   developer: 'Goats Mods',
   rotationIntervalMs: ROTATION_INTERVAL_MS,
   activeThemeId: 'gojo',
+  session: { exportEnabled: false, configured: false },
   themes: THEMES.map((theme) => ({
     id: theme.id,
     name: theme.name,

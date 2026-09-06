@@ -1,0 +1,61 @@
+{
+  "name": "Black Clover WhatsApp Bot",
+  "description": "Anime-themed WhatsApp bot with a built-in Web Pairing dashboard. Developed By: Goats Mods.",
+  "keywords": ["whatsapp", "baileys", "pairing-code", "anime", "bot"],
+  "stack": "heroku-24",
+  "success_url": "/",
+  "logo": "https://files.catbox.moe/gacz1y.jpg",
+  "env": {
+    "OWNER_NAME": {
+      "description": "Owner display name.",
+      "value": "Only Fixa Dev"
+    },
+    "BOT_NUMBER": {
+      "description": "WhatsApp number the bot links to. Country code included, WITHOUT the + (example: 923001234567).",
+      "value": ""
+    },
+    "SESSION_ID": {
+      "description": "Contents of session/creds.json (raw JSON or base64). Required on Heroku: the filesystem is wiped on every dyno restart.",
+      "value": ""
+    },
+    "EXPOSE_SESSION_ID": {
+      "description": "Allow the dashboard to show your SESSION_ID after pairing (true/false). Only enable on a private deployment.",
+      "value": "false"
+    },
+    "BOT_NAME": {
+      "description": "Bot display name.",
+      "value": "Black Clover ♣️"
+    },
+    "THEME": {
+      "description": "Startup theme: makima, nami, nezuko, shinobu, gojo, sukuna or asta.",
+      "value": "gojo"
+    },
+    "COMMAND_PREFIX": {
+      "description": "Command prefix (1-4 characters).",
+      "value": "!"
+    },
+    "PUBLIC_MODE": {
+      "description": "Respond in every chat (true) or only for the owner (false).",
+      "value": "true"
+    },
+    "AUTH_METHOD": {
+      "description": "Keep 'pairing'. The dashboard is web-pairing only.",
+      "value": "pairing"
+    },
+    "GROQ_API_KEY": {
+      "description": "Optional key for the !ai command. Never commit a real key.",
+      "value": ""
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ]
+}

@@ -27,6 +27,12 @@ services:
         value: /var/data/data
       - key: PUBLIC_MODE
         value: "true"
+      # Optional: restore a paired session when the disk is not attached.
+      # Raw JSON or base64 contents of session/creds.json.
+      - key: SESSION_ID
+        sync: false
+      - key: EXPOSE_SESSION_ID
+        value: "false"
     disk:
       name: black-clover-auth-data
       mountPath: /var/data

@@ -27,6 +27,9 @@ const DEFAULTS = Object.freeze({
   authMethod: 'pairing',
   authDir: './session',
   dataDir: './data',
+  // Credentials are never exported from the dashboard unless this is enabled.
+  exposeSessionId: false,
+  sessionOverwrite: false,
   theme: FALLBACK_THEME_ID,
   webHost: '0.0.0.0',
   webPort: 3_000,
@@ -97,9 +100,9 @@ function assertBotNumber(value, fieldName = 'BOT_NUMBER') {
 }
 
 function parseBotNumber(fallback) {
-  // PAIRING_NUMBER is the legacy name for the same setting and is only kept so
-  // existing deployments keep booting. It is not part of the user-facing docs.
-  const raw = readString('BOT_NUMBER', readString('PAIRING_NUMBER', ''));
+  // Legacy names for the same setting, kept so deployments copied from older
+  // bots keep booting. They are not part of the user-facing docs.
+  const raw = readString('BOT_NUMBER', readString('PAIRING_NUMBER', readString('OWNER_NUMBER', '')));
   return raw ? assertBotNumber(raw, 'BOT_NUMBER') : fallback;
 }
 
@@ -160,6 +163,7 @@ function loadConfig() {
   const dataDir = resolveRuntimePath(readString('DATA_DIR', DEFAULTS.dataDir));
   const premiumDbPath = resolveRuntimePath(readString('PREMIUM_DB_PATH', path.join(dataDir, 'premium.json')));
   const groupSettingsDbPath = resolveRuntimePath(readString('GROUP_SETTINGS_DB_PATH', path.join(dataDir, 'groups.json')));
+  const modeDbPath = resolveRuntimePath(readString('MODE_DB_PATH', path.join(dataDir, 'mode.json')));
 
   return Object.freeze({
     botName: readString('BOT_NAME', DEFAULTS.botName),
@@ -179,9 +183,15 @@ function loadConfig() {
     publicMode: parseBoolean('PUBLIC_MODE', DEFAULTS.publicMode),
     authMethod,
     authDir: resolveRuntimePath(readString('AUTH_DIR', DEFAULTS.authDir)),
+    // Raw creds.json (JSON or base64) used to restore a session on hosts with
+    // ephemeral storage. Never logged, never served by the dashboard.
+    sessionId: readString('SESSION_ID', ''),
+    sessionOverwrite: parseBoolean('SESSION_OVERWRITE', DEFAULTS.sessionOverwrite),
+    exposeSessionId: parseBoolean('EXPOSE_SESSION_ID', DEFAULTS.exposeSessionId),
     dataDir,
     premiumDbPath,
     groupSettingsDbPath,
+    modeDbPath,
     theme: parseTheme(DEFAULTS.theme),
     webHost: readString('WEB_HOST', DEFAULTS.webHost),
     webPort: parseInteger('PORT', DEFAULTS.webPort, 1, 65_535),

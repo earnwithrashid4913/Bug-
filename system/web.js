@@ -5,6 +5,7 @@ const http = require('node:http');
 const path = require('node:path');
 
 const { DEVELOPER_NAME, assertBotNumber } = require('./config');
+const { readSessionId } = require('./session');
 const { ROTATION_INTERVAL_MS } = require('./theme');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -223,6 +224,11 @@ function createWebServer({
         developer: DEVELOPER_NAME,
         rotationIntervalMs: ROTATION_INTERVAL_MS,
         activeThemeId: getActiveThemeId(),
+        session: {
+          // Whether a SESSION_ID can be copied out of this dashboard.
+          exportEnabled: Boolean(config.exposeSessionId),
+          configured: Boolean(config.sessionId)
+        },
         themes: themes.map((theme) => ({
           id: theme.id,
           name: theme.name,
@@ -244,6 +250,27 @@ function createWebServer({
 
     if (req.method === 'GET' && pathname === '/api/status') {
       sendJson(res, 200, getStatus());
+      return;
+    }
+
+    // Credentials export. Disabled unless EXPOSE_SESSION_ID=true: a SESSION_ID
+    // is a full WhatsApp login, so it is opt-in and never logged.
+    if (req.method === 'GET' && pathname === '/api/session') {
+      if (!config.exposeSessionId) {
+        sendJson(res, 403, {
+          ok: false,
+          error: 'Session export is disabled. Set EXPOSE_SESSION_ID=true on a private deployment to enable it.'
+        });
+        return;
+      }
+
+      const sessionId = readSessionId(config.authDir);
+      if (!sessionId) {
+        sendJson(res, 404, { ok: false, error: 'No session is stored yet. Pair WhatsApp first.' });
+        return;
+      }
+
+      sendJson(res, 200, { ok: true, sessionId });
       return;
     }
 

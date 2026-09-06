@@ -24,6 +24,8 @@
     rotationIntervalMs: 5000,
     connected: false,
     reducedMotion: false,
+    sessionExportEnabled: false,
+    sessionLoaded: false,
     particles: null
   };
 
@@ -65,7 +67,8 @@
       'themeTagline', 'themeQuote', 'themeCharacter', 'themeGrid', 'statusPill', 'statusText',
       'pairForm', 'phoneNumber', 'pairButton', 'formMessage', 'codeBox', 'codeValue',
       'copyButton', 'regenerateButton', 'linkedBox', 'linkedText', 'steps', 'particles',
-      'bgSlideA', 'bgSlideB', 'rotationNote', 'credit'
+      'bgSlideA', 'bgSlideB', 'rotationNote', 'credit',
+      'sessionCard', 'sessionHint', 'sessionExport', 'sessionValue', 'copySessionButton', 'sessionDisabledNote'
     ];
     for (const id of ids) el[id] = document.getElementById(id);
     el.stage = document.querySelector('.stage');
@@ -477,6 +480,7 @@
       el.pairButton.textContent = 'WhatsApp is linked';
       el.linkedText.textContent = status.message || 'WhatsApp is linked and the bot is live.';
       setStep(5);
+      loadSession();
       return;
     }
 
@@ -567,12 +571,46 @@
     }
   }
 
+  /* ------------------------------ session ------------------------------- */
+
+  // Credentials are only fetched once the bot is actually paired, and only when
+  // the owner opted in with EXPOSE_SESSION_ID=true.
+  async function loadSession() {
+    if (!state.sessionExportEnabled || state.sessionLoaded) return;
+    state.sessionLoaded = true;
+
+    try {
+      const result = await fetchJson('/api/session');
+      el.sessionValue.value = result.sessionId;
+      el.sessionExport.hidden = false;
+      el.sessionHint.hidden = true;
+    } catch {
+      state.sessionLoaded = false;
+    }
+  }
+
+  async function copySession() {
+    const value = el.sessionValue.value.trim();
+    if (!value) return;
+
+    try {
+      await navigator.clipboard.writeText(value);
+      el.copySessionButton.textContent = 'Copied';
+      setTimeout(() => {
+        el.copySessionButton.textContent = 'Copy SESSION_ID';
+      }, 1600);
+    } catch {
+      el.sessionValue.select();
+    }
+  }
+
   /* ------------------------------ lifecycle ----------------------------- */
 
   function bindEvents() {
     el.pairForm.addEventListener('submit', requestPairingCode);
     el.regenerateButton.addEventListener('click', requestPairingCode);
     el.copyButton.addEventListener('click', copyCode);
+    el.copySessionButton.addEventListener('click', copySession);
 
     const onVisibility = () => {
       if (document.hidden) {
@@ -632,6 +670,12 @@
     el.phoneNumber.value = bootstrap.botNumber;
     el.credit.textContent = `Developed By: ${bootstrap.developer}`;
     el.rotationNote.textContent = `background rotates every ${Math.round(bootstrap.rotationIntervalMs / 1000)}s`;
+
+    state.sessionExportEnabled = Boolean(bootstrap.session?.exportEnabled);
+    el.sessionDisabledNote.hidden = state.sessionExportEnabled;
+    if (state.sessionExportEnabled) {
+      el.sessionHint.textContent = 'Your session is paired. Copy the SESSION_ID below into your host environment so the bot survives redeploys.';
+    }
 
     renderThemeChips();
     bindEvents();

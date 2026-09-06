@@ -508,8 +508,34 @@ button { font: inherit; color: inherit; }
 .linked-title { font-weight: 700; color: #4ade80; }
 .linked-text { margin-top: 0.3rem; font-size: 0.82rem; color: var(--text-muted); }
 
-/* -------------------------------- themes -------------------------------- */
+/* -------------------------------- session ------------------------------- */
 
+.session { margin-top: clamp(1.25rem, 3vw, 2rem); }
+.session code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  transition: border-color var(--theme-transition), background-color var(--theme-transition);
+}
+.session-export { margin-top: 0.9rem; }
+.session-value {
+  margin-top: 0.5rem;
+  resize: vertical;
+  min-height: 5.5rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  letter-spacing: 0;
+  word-break: break-all;
+}
+.session-value:focus { outline: none; }
+.session .code-actions { margin-top: 0.6rem; }
+.session .field-hint { margin-top: 0.6rem; }
+
+/* -------------------------------- themes -------------------------------- */
 .themes { margin-top: clamp(1.25rem, 3vw, 2rem); }
 .themes-head { margin-bottom: 1rem; }
 
