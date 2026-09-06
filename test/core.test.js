@@ -32,7 +32,7 @@ const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = 
 const { GroupSettingsStore } = require('../system/lib/group-settings');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
-const { DEFAULT_THEME, getActiveTheme } = require('../system/theme');
+const { DEFAULT_THEME, GOJO_THEME, KAKASHI_THEME, formatThemeSummary, getActiveTheme, listThemes } = require('../system/theme');
 const sharp = require('sharp');
 
 test('deployment configuration requires an explicit BOT_NUMBER', () => {
@@ -127,7 +127,11 @@ test('premium authorization remains tied to authorized identities', () => {
 
 test('unknown theme IDs safely fall back without changing the master identity', () => {
   assert.equal(getActiveTheme('default'), DEFAULT_THEME);
+  assert.equal(getActiveTheme('GOJO'), GOJO_THEME);
+  assert.equal(getActiveTheme('kakashi'), KAKASHI_THEME);
   assert.equal(getActiveTheme('future-theme'), DEFAULT_THEME);
+  assert.deepEqual(listThemes().map((theme) => theme.id), ['default', 'gojo', 'kakashi']);
+  assert.match(formatThemeSummary(GOJO_THEME), /Satoru Gojo/);
   assert.equal(config.masterBotName, '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿');
 });
 
@@ -300,6 +304,28 @@ test('command handler dispatches a menu response', async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chatId, message.key.remoteJid);
   assert.match(sent[0].payload.text, /General commands/);
+});
+
+test('command handler displays the configured character theme', async () => {
+  const sent = [];
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
+    sendMessage: async (chatId, payload, options) => {
+      sent.push({ chatId, payload, options });
+      return { key: { id: 'test-message' } };
+    }
+  };
+
+  await handleMessage(socket, {
+    key: { remoteJid: '15551234568@s.whatsapp.net', participant: '15551234568@s.whatsapp.net', fromMe: false },
+    message: { conversation: '!theme' }
+  });
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].payload.text, /Available themes/);
+  assert.match(sent[0].payload.text, /gojo — Satoru Gojo/);
+  assert.match(sent[0].payload.text, /kakashi — Kakashi Hatake/);
 });
 
 test('sticker command provides usage text when no image is supplied', async () => {

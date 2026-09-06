@@ -18,7 +18,7 @@
 
 GOATVERSE MD is a Node.js WhatsApp bot built with Baileys. It runs as one long-lived outbound WebSocket worker, with pairing-code and terminal-QR authentication, persistent bot data, safe group administration, media conversion, and an optional Groq-powered AI command.
 
-`𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` is the only master bot name. `THEME` selects a presentation mode only; it never changes authorization or protected identity. The repository currently ships the `default` theme and is deliberately ready for reviewed future themes without bundling unimplemented assets.
+`𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` is the only master bot name. `THEME` selects a presentation mode only; it never changes authorization or protected identity. The built-in themes are `default`, `gojo` (Satoru Gojo), and `kakashi` (Kakashi Hatake). Themes change menu and theme-card presentation only; they do not download, send, or bundle character artwork.
 
 ## Features
 
@@ -79,13 +79,13 @@ Copy [`.env.example`](.env.example). The top **INSTANCE SETTINGS** block is the 
 INSTANCE_OWNER_NAME=Your Name
 INSTANCE_OWNER_NUMBER=15551234567
 BOT_NUMBER=15551234567
-THEME=default
+THEME=gojo
 ```
 
 | Variable | Required | Description |
 | --- | --- | --- |
 | `BOT_NUMBER` | Yes | 7–15 digit WhatsApp account number, including country code; must match the authenticated account. |
-| `INSTANCE_OWNER_NAME`, `THEME` | No | Instance display identity and active visual mode; neither grants protected authorization. |
+| `INSTANCE_OWNER_NAME`, `THEME` | No | Instance display identity and active visual mode (`default`, `gojo`, or `kakashi`); neither grants protected authorization. |
 | `INSTANCE_OWNER_NUMBER` | No | Separately grants instance-owner commands only; it is not Global Owner or Developer authorization. |
 | `AUTH_METHOD` | No | `pairing` (default) or `qr`. |
 | `AUTH_DIR`, `DATA_DIR` | No | Private persistent paths for credentials and runtime data. |
@@ -178,7 +178,7 @@ Use the configured prefix (`!` by default).
 
 | Group | Commands |
 | --- | --- |
-| General | `menu`, `ping`, `status`, `owner`, `sticker`, `toimg`, `jid`, `getpp`, `ai`, `request` |
+| General | `menu`, `theme`, `ping`, `status`, `owner`, `sticker`, `toimg`, `jid`, `getpp`, `ai`, `request` |
 | Group admin | `hidetag`, `tagall`, `welcome`, `goodbye`, `greet`, `group`, `gname`, `gdesc`, `add`, `kick`, `promote`, `demote`, `lock`, `unlock`, `grouplink` |
 | Instance-authorized owner | `setpp`, `public`, `self`, `addprem`, `delprem`, `listprem`, `restart` |
 
