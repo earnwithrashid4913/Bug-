@@ -1,4 +1,4 @@
-# Black Clover ♣️
+# 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿
 
 A clean, configurable WhatsApp bot built with Baileys and maintained under the **Only Fixa Dev** project.
 
@@ -6,7 +6,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 
 ## Project ownership
 
-- **Developed By:** Goats Mods
+- **Developed By:** GOATS MODS
 - **Global Owner:** configured by `OWNER_NAME`
 - **Owner WhatsApp:** derived from `BOT_NUMBER` (`https://wa.me/<BOT_NUMBER>`)
 - **WhatsApp Channel:** https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T
@@ -68,13 +68,13 @@ The bot has exactly one owner, so only these two values need to be set.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BOT_NAME` | `Black Clover ♣️` | Display name for logs and commands. |
+| `BOT_NAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Display name for logs and commands. |
 | `THEME` | `gojo` | Startup theme: `makima`, `nami`, `nezuko`, `shinobu`, `gojo`, `sukuna`, `asta`. |
 | `PORT` | `3000` | Dashboard port. Provided automatically by Render, Heroku and similar hosts. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
-| `STICKER_PACKNAME` | `Black Clover ♣️` | Sticker pack name used by `!sticker`. |
-| `STICKER_AUTHOR` | `Only Fixa Dev` | Sticker publisher used by `!sticker`. |
+| `STICKER_PACKNAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Sticker pack name used by `!sticker`. |
+| `STICKER_AUTHOR` | `Only F!xa Dev` | Sticker publisher used by `!sticker`. |
 | `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
 | `AUTH_METHOD` | `pairing` | Keep `pairing`. `qr` is an internal, terminal-only fallback that the dashboard never offers. |
 | `AUTH_DIR` | `./session` | Baileys credentials path; keep private and persistent. |
@@ -145,7 +145,7 @@ Theme configuration lives in one place: [`system/theme.js`](system/theme.js). It
 | Sukuna | Jujutsu Kaisen | blood red + black | rising cursed embers |
 | Asta | Black Clover | emerald + black | sharp anti-magic shards |
 
-- The active theme covers the **whole page**: full-screen artwork, dark overlay, theme gradient, glow, particles, cards, buttons, the pairing box and the *Developed By: Goats Mods* credit.
+- The active theme covers the **whole page**: full-screen artwork, dark overlay, theme gradient, glow, particles, cards, buttons, the pairing box and the *Developed By: GOATS MODS* credit.
 - Artwork rotates every **5 seconds** on a single controlled timer with a crossfade, subtle scale/blur and preloading of the next frame. Timers and animation frames are cancelled when the tab is hidden or the page unloads.
 - A frame that fails to load is skipped in favour of the next image **of the same theme**; if every image fails, the artwork layer hides and the themed gradient/glow/particles remain. No replacement URLs are ever invented.
 - Switching theme repaints colours, glow, particles and branding through CSS transitions — no reload, no flash, no layout jump. The choice persists in `localStorage` and is mirrored to the server.
@@ -295,7 +295,7 @@ For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Credits
 
-- **Developed By: Goats Mods**
+- **Developed By: GOATS MODS**
 - Global project owner: configured through `OWNER_NAME`
 - Character artwork is loaded from the project owner's hosted Catbox URLs listed in [`system/theme.js`](system/theme.js); no artwork is bundled in this repository.
 - WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys) and its respective maintainers

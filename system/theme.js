@@ -22,7 +22,14 @@ const CATBOX = 'https://files.catbox.moe';
 function catbox(...slugs) {
   // De-duplicates while preserving order so a repeated upload cannot produce a
   // visible "no change" frame during rotation.
-  return Object.freeze([...new Set(slugs.map((slug) => `${CATBOX}/${slug}.jpg`))]);
+  return [...new Set(slugs.map((slug) => `${CATBOX}/${slug}.jpg`))];
+}
+
+// Committed local artwork is painted first, so the dashboard always has art
+// even when the host has no outbound network. The hosted set then continues the
+// rotation, and a hosted frame that fails to load falls back through the list.
+function artwork(id, ...slugs) {
+  return Object.freeze([`/assets/characters/${id}.jpg`, ...catbox(...slugs)]);
 }
 
 const MAKIMA = Object.freeze({
@@ -34,7 +41,7 @@ const MAKIMA = Object.freeze({
   vibe: 'Control Aura',
   tagline: 'Cinematic authority wrapped in a quiet crimson thread.',
   quote: 'I like humans. In the same way that humans are fond of dogs.',
-  images: catbox('k93ipz', '2a0sf6', 'r2c9j4', '2f5y52', 'q42vuu'),
+  images: artwork('makima', 'k93ipz', '2a0sf6', 'r2c9j4', '2f5y52', 'q42vuu'),
   colors: Object.freeze({
     primary: '#ff5a5f',
     accent: '#8f1d24',
@@ -73,7 +80,7 @@ const NAMI = Object.freeze({
   vibe: 'Navigator',
   tagline: 'Ocean breeze, amber horizon, and a chart for every storm.',
   quote: 'I love money and tangerines, in that order.',
-  images: catbox('lh0255', '8yp9zw', 'y84zug', 'gijddp', 'rakgm1', 'vjdgrb'),
+  images: artwork('nami', 'lh0255', '8yp9zw', 'y84zug', 'gijddp', 'rakgm1', 'vjdgrb'),
   colors: Object.freeze({
     primary: '#4cc9f0',
     accent: '#f6b73c',
@@ -112,7 +119,7 @@ const NEZUKO = Object.freeze({
   vibe: 'Demon Aura',
   tagline: 'A gentle demon heart glowing through soft crimson petals.',
   quote: 'Even as a demon, I will protect humans.',
-  images: catbox('2sk71g', 'kiawc9', 'ats9kj', 'yia51b', '8dwfla'),
+  images: artwork('nezuko', '2sk71g', 'kiawc9', 'ats9kj', 'yia51b', '8dwfla'),
   colors: Object.freeze({
     primary: '#ff8fc0',
     accent: '#e11d48',
@@ -151,7 +158,7 @@ const SHINOBU = Object.freeze({
   vibe: 'Insect Hashira',
   tagline: 'Butterfly silence carrying an elegant, venomous grace.',
   quote: 'I am the only Hashira who cannot cut off a demon\'s head.',
-  images: catbox('3gra92', 'grmrgx', 'xo2isd', '5aiiwz', 'pqjpne', '9h9xko'),
+  images: artwork('shinobu', '3gra92', 'grmrgx', 'xo2isd', '5aiiwz', 'pqjpne', '9h9xko'),
   colors: Object.freeze({
     primary: '#a78bfa',
     accent: '#e9d5ff',
@@ -190,7 +197,7 @@ const GOJO = Object.freeze({
   vibe: 'Limitless',
   tagline: 'Limitless energy bending infinity into calm violet light.',
   quote: 'Throughout heaven and earth, I alone am the honored one.',
-  images: catbox('lar8xz', 'pfpc8n', 'bcfvml', '990bux', '88yu96', '06ktid', 'baa82q', '4s37uh'),
+  images: artwork('gojo', 'lar8xz', 'pfpc8n', 'bcfvml', '990bux', '88yu96', '06ktid', 'baa82q', '4s37uh'),
   colors: Object.freeze({
     primary: '#5fd3ff',
     accent: '#8b5cf6',
@@ -229,7 +236,7 @@ const SUKUNA = Object.freeze({
   vibe: 'King of Curses',
   tagline: 'Cursed flame rising through absolute black.',
   quote: 'Stand proud. You are strong.',
-  images: catbox('czb4r4', '98qe3k', '9yzxe3', '3sumdu', 'kmk86n', 'qn19a3', 'hz9hpf', '51skq5', 'dbvmyk'),
+  images: artwork('sukuna', 'czb4r4', '98qe3k', '9yzxe3', '3sumdu', 'kmk86n', 'qn19a3', 'hz9hpf', '51skq5', 'dbvmyk'),
   colors: Object.freeze({
     primary: '#ff2e2e',
     accent: '#7f0d0d',
@@ -268,7 +275,7 @@ const ASTA = Object.freeze({
   vibe: 'Anti-Magic',
   tagline: 'Anti-magic edge carving emerald energy through the dark.',
   quote: 'My magic is never giving up!',
-  images: catbox('c992om', 'qpgevn', 'lkz69j', '5du0vl', 'ajblon', 'w4jash', '55xjag', 'wvp7hp', 'j2y8tv', 'k1tt2o'),
+  images: artwork('asta', 'c992om', 'qpgevn', 'lkz69j', '5du0vl', 'ajblon', 'w4jash', '55xjag', 'wvp7hp', 'j2y8tv', 'k1tt2o'),
   colors: Object.freeze({
     primary: '#2ee6a8',
     accent: '#0b7a52',

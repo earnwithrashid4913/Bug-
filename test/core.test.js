@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { assertBotNumber, config } = require('../system/config');
+const { CANONICAL_IDENTITY } = require('../system/security');
 const handleMessage = require('../system/handler');
 const { commandFromText } = handleMessage;
 const {
@@ -28,13 +29,17 @@ test('owner configuration exposes a single owner and the bot number', () => {
   assert.equal(config.botNumber, '923448170040');
   assert.equal(config.ownerNumber, config.botNumber);
   assert.deepEqual([...config.ownerNumbers], [config.botNumber]);
-  assert.equal(config.developerName, 'Goats Mods');
-  assert.equal(config.authorName, 'Goats Mods');
+  // Identity comes from the canonical source in system/security.js, so it
+  // cannot drift from the protected project identity.
+  assert.equal(config.projectName, CANONICAL_IDENTITY.projectName);
+  assert.equal(config.developerBrand, CANONICAL_IDENTITY.organization);
+  assert.equal(config.developerName, CANONICAL_IDENTITY.developer);
+  assert.equal(config.authorName, CANONICAL_IDENTITY.author);
   assert.equal(config.ownerLink, `https://wa.me/${config.botNumber}`);
   assert.equal(config.commandPrefix, '!');
-  assert.equal(config.botName, 'Black Clover ♣️');
-  assert.equal(config.stickerPackname, 'Black Clover ♣️');
-  assert.equal(config.stickerAuthor, 'Only Fixa Dev');
+  assert.equal(config.botName, CANONICAL_IDENTITY.projectName);
+  assert.equal(config.stickerPackname, CANONICAL_IDENTITY.projectName);
+  assert.equal(config.stickerAuthor, CANONICAL_IDENTITY.developer);
   assert.equal(config.groqModel, 'openai/gpt-oss-20b');
   assert.equal(config.authMethod, 'pairing');
 });

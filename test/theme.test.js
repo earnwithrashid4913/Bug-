@@ -19,6 +19,7 @@ const EXPECTED_IDS = ['makima', 'nami', 'nezuko', 'shinobu', 'gojo', 'sukuna', '
 
 const EXPECTED_IMAGES = {
   makima: [
+    '/assets/characters/makima.jpg',
     'https://files.catbox.moe/k93ipz.jpg',
     'https://files.catbox.moe/2a0sf6.jpg',
     'https://files.catbox.moe/r2c9j4.jpg',
@@ -26,6 +27,7 @@ const EXPECTED_IMAGES = {
     'https://files.catbox.moe/q42vuu.jpg'
   ],
   nami: [
+    '/assets/characters/nami.jpg',
     'https://files.catbox.moe/lh0255.jpg',
     'https://files.catbox.moe/8yp9zw.jpg',
     'https://files.catbox.moe/y84zug.jpg',
@@ -34,6 +36,7 @@ const EXPECTED_IMAGES = {
     'https://files.catbox.moe/vjdgrb.jpg'
   ],
   nezuko: [
+    '/assets/characters/nezuko.jpg',
     'https://files.catbox.moe/2sk71g.jpg',
     'https://files.catbox.moe/kiawc9.jpg',
     'https://files.catbox.moe/ats9kj.jpg',
@@ -41,6 +44,7 @@ const EXPECTED_IMAGES = {
     'https://files.catbox.moe/8dwfla.jpg'
   ],
   shinobu: [
+    '/assets/characters/shinobu.jpg',
     'https://files.catbox.moe/3gra92.jpg',
     'https://files.catbox.moe/grmrgx.jpg',
     'https://files.catbox.moe/xo2isd.jpg',
@@ -49,6 +53,7 @@ const EXPECTED_IMAGES = {
     'https://files.catbox.moe/9h9xko.jpg'
   ],
   gojo: [
+    '/assets/characters/gojo.jpg',
     'https://files.catbox.moe/lar8xz.jpg',
     'https://files.catbox.moe/pfpc8n.jpg',
     'https://files.catbox.moe/bcfvml.jpg',
@@ -59,6 +64,7 @@ const EXPECTED_IMAGES = {
     'https://files.catbox.moe/4s37uh.jpg'
   ],
   sukuna: [
+    '/assets/characters/sukuna.jpg',
     'https://files.catbox.moe/czb4r4.jpg',
     'https://files.catbox.moe/98qe3k.jpg',
     'https://files.catbox.moe/9yzxe3.jpg',
@@ -70,6 +76,7 @@ const EXPECTED_IMAGES = {
     'https://files.catbox.moe/dbvmyk.jpg'
   ],
   asta: [
+    '/assets/characters/asta.jpg',
     'https://files.catbox.moe/c992om.jpg',
     'https://files.catbox.moe/qpgevn.jpg',
     'https://files.catbox.moe/lkz69j.jpg',
@@ -134,9 +141,12 @@ test('every theme owns only its own hosted artwork', () => {
   }
 });
 
-test('artwork URLs are untouched catbox links', () => {
+test('artwork is the committed local asset first, then untouched catbox links', () => {
   for (const theme of THEMES) {
-    for (const url of theme.images) {
+    assert.equal(theme.images[0], `/assets/characters/${theme.id}.jpg`,
+      `${theme.id} must paint its committed local artwork first`);
+
+    for (const url of theme.images.slice(1)) {
       assert.match(url, /^https:\/\/files\.catbox\.moe\/[a-z0-9]+\.jpg$/, `${theme.id} uses an unexpected URL: ${url}`);
     }
   }

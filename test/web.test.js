@@ -14,6 +14,7 @@ const test = require('node:test');
 const { after, before } = require('node:test');
 
 const { config } = require('../system/config');
+const { CANONICAL_IDENTITY } = require('../system/security');
 const { listThemes } = require('../system/theme');
 const { createWebServer } = require('../system/web');
 const app = require('../index');
@@ -58,13 +59,17 @@ after(async () => {
 test('dashboard reports real configuration, themes and connection state', async () => {
   const { status, payload, headers } = await call('/api/bootstrap');
   assert.equal(status, 200);
-  assert.equal(payload.developer, 'Goats Mods');
+  assert.equal(payload.developer, CANONICAL_IDENTITY.organization);
   assert.equal(payload.ownerName, 'F!xa Dev');
   assert.equal(payload.botNumber, '923001234567');
   assert.equal(payload.activeThemeId, 'gojo');
   assert.equal(payload.rotationIntervalMs, 5_000);
   assert.deepEqual(payload.themes.map((theme) => theme.id), ['makima', 'nami', 'nezuko', 'shinobu', 'gojo', 'sukuna', 'asta']);
-  assert.deepEqual(payload.themes.find((theme) => theme.id === 'gojo').images[0], 'https://files.catbox.moe/lar8xz.jpg');
+  // Hybrid artwork: the committed local asset paints first, the hosted set
+  // continues the rotation.
+  const gojo = payload.themes.find((theme) => theme.id === 'gojo');
+  assert.equal(gojo.images[0], '/assets/characters/gojo.jpg');
+  assert.equal(gojo.images[1], 'https://files.catbox.moe/lar8xz.jpg');
 
   // A dry-run process has no socket, so it must not claim to be connected.
   assert.equal(payload.connection.connected, false);
@@ -76,7 +81,7 @@ test('dashboard markup ships the developer credit and the number guidance', asyn
   const { status, headers, payload } = await call('/');
   assert.equal(status, 200);
   assert.match(headers.get('content-type'), /text\/html/);
-  assert.match(payload, /Developed By: Goats Mods/);
+  assert.match(payload, new RegExp(`Developed By: ${CANONICAL_IDENTITY.organization}`));
   assert.match(payload, /Enter your WhatsApp number with country code, without \+\./);
   assert.doesNotMatch(payload, /<select/i, 'the dashboard must not offer a country selector');
   assert.doesNotMatch(payload, /\bQR\b/, 'the dashboard must not offer QR pairing');

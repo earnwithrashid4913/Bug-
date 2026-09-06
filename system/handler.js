@@ -16,6 +16,7 @@ const { BotModeStore } = require('./lib/bot-mode');
 const { PremiumStore } = require('./lib/premium');
 const { requestRestart } = require('./lib/runtime');
 const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
+const { isAuthorizedAdmin } = require('./security');
 
 const premiumStore = new PremiumStore(config.premiumDbPath);
 const modeStore = new BotModeStore(config.modeDbPath, config.publicMode ? 'public' : 'self');
@@ -51,7 +52,10 @@ function ownerJids(socket) {
 }
 
 function isOwner(socket, sender) {
-  return ownerJids(socket).has(normalizeJid(socket, sender));
+  // The instance owner (BOT_NUMBER) and the linked account, plus any global
+  // owner or developer granted by the signed identity manifest in security.js.
+  return ownerJids(socket).has(normalizeJid(socket, sender))
+    || isAuthorizedAdmin(socket, sender, config.botNumber);
 }
 
 function formatDate(timestamp) {

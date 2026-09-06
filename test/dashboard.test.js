@@ -12,6 +12,7 @@ const test = require('node:test');
 
 const { PUBLIC_DIR } = require('../system/web');
 const { THEMES } = require('../system/theme');
+const { CANONICAL_IDENTITY } = require('../system/security');
 
 const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
 const script = fs.readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
@@ -82,7 +83,7 @@ test('web pairing is the only connection method offered', () => {
   assert.doesNotMatch(html, /country[- _]?(selector|picker|dropdown|list|input)/i, 'no country selector');
   assert.doesNotMatch(html, /\bQR\b/i, 'no QR pairing UI');
   assert.match(html, /Enter your WhatsApp number with country code, without \+\./);
-  assert.match(html, /Developed By: Goats Mods/);
+  assert.match(html, new RegExp(`Developed By: ${CANONICAL_IDENTITY.organization}`));
   assert.match(html, /type="tel"/);
   assert.match(html, /inputmode="numeric"/);
 });

@@ -2,7 +2,7 @@ services:
   # The bot keeps an outbound WhatsApp WebSocket open and also serves the
   # themed Web Pairing dashboard, so it is deployed as a web service.
   - type: web
-    name: black-clover-bot
+    name: goatverse-md
     runtime: node
     buildCommand: npm ci
     startCommand: npm start
@@ -34,6 +34,6 @@ services:
       - key: EXPOSE_SESSION_ID
         value: "false"
     disk:
-      name: black-clover-auth-data
+      name: goatverse-auth-data
       mountPath: /var/data
       sizeGB: 1

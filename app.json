@@ -1,7 +1,13 @@
 {
-  "name": "Black Clover WhatsApp Bot",
-  "description": "Anime-themed WhatsApp bot with a built-in Web Pairing dashboard. Developed By: Goats Mods.",
-  "keywords": ["whatsapp", "baileys", "pairing-code", "anime", "bot"],
+  "name": "Goatverse MD WhatsApp Bot",
+  "description": "Anime-themed WhatsApp bot with a built-in Web Pairing dashboard. Developed By: GOATS MODS.",
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "pairing-code",
+    "anime",
+    "bot"
+  ],
   "stack": "heroku-24",
   "success_url": "/",
   "logo": "https://files.catbox.moe/gacz1y.jpg",
@@ -24,7 +30,7 @@
     },
     "BOT_NAME": {
       "description": "Bot display name.",
-      "value": "Black Clover ♣️"
+      "value": "𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿"
     },
     "THEME": {
       "description": "Startup theme: makima, nami, nezuko, shinobu, gojo, sukuna or asta.",

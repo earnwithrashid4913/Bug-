@@ -2,25 +2,32 @@
 
 const path = require('node:path');
 const dotenv = require('dotenv');
+const { CANONICAL_IDENTITY, assertProtectedSecurityEnvironment } = require('./security');
 const { FALLBACK_THEME_ID, isThemeId, resolveTheme } = require('./theme');
 
 dotenv.config();
 
-// Project branding. The developer credit is part of the project identity and is
-// intentionally not a deployer-tunable setting.
-const DEVELOPER_NAME = 'Goats Mods';
+// Project identity is canonical, not deployer-tunable. `security.js` refuses to
+// start when a protected identity key (OWNER_NUMBER, DEVELOPER_*, GLOBAL_OWNER*)
+// is supplied through the environment, so identity cannot be spoofed by config.
+assertProtectedSecurityEnvironment();
+
+const DEVELOPER_NAME = CANONICAL_IDENTITY.organization;
+const DEVELOPER_HANDLE = CANONICAL_IDENTITY.developer;
+const AUTHOR_NAME = CANONICAL_IDENTITY.author;
+const PROJECT_NAME = CANONICAL_IDENTITY.projectName;
 
 // User-facing configuration is limited to OWNER_NAME and BOT_NUMBER.
 // Everything below is internal/optional and has a safe default.
 const DEFAULTS = Object.freeze({
-  botName: 'Black Clover ♣️',
+  botName: PROJECT_NAME,
   ownerName: 'Only Fixa Dev',
   // Digits only, country code included, never prefixed with "+".
   botNumber: '923448170040',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
-  stickerPackname: 'Black Clover ♣️',
-  stickerAuthor: 'Only Fixa Dev',
+  stickerPackname: PROJECT_NAME,
+  stickerAuthor: DEVELOPER_HANDLE,
   publicMode: true,
   // The dashboard is web-pairing only. "qr" stays available as an internal
   // escape hatch for local terminals; it is never offered by the web UI.
@@ -100,9 +107,9 @@ function assertBotNumber(value, fieldName = 'BOT_NUMBER') {
 }
 
 function parseBotNumber(fallback) {
-  // Legacy names for the same setting, kept so deployments copied from older
-  // bots keep booting. They are not part of the user-facing docs.
-  const raw = readString('BOT_NUMBER', readString('PAIRING_NUMBER', readString('OWNER_NUMBER', '')));
+  // PAIRING_NUMBER is a legacy alias for the same setting. OWNER_NUMBER is not
+  // accepted: it is a protected identity key guarded by security.js.
+  const raw = readString('BOT_NUMBER', readString('PAIRING_NUMBER', ''));
   return raw ? assertBotNumber(raw, 'BOT_NUMBER') : fallback;
 }
 
@@ -172,8 +179,11 @@ function loadConfig() {
     // Derived from BOT_NUMBER — never configured separately.
     ownerNumber: botNumber,
     ownerNumbers: Object.freeze([botNumber]),
-    developerName: DEVELOPER_NAME,
-    authorName: DEVELOPER_NAME,
+    // Canonical project identity from system/security.js — not deployer-tunable.
+    projectName: PROJECT_NAME,
+    developerName: DEVELOPER_HANDLE,
+    developerBrand: DEVELOPER_NAME,
+    authorName: AUTHOR_NAME,
     authorNumber: botNumber,
     ownerLink: `https://wa.me/${botNumber}`,
     whatsappChannel: parseUrl('WHATSAPP_CHANNEL', DEFAULTS.whatsappChannel),
@@ -211,6 +221,9 @@ const config = loadConfig();
 module.exports = {
   DEFAULTS,
   DEVELOPER_NAME,
+  DEVELOPER_HANDLE,
+  AUTHOR_NAME,
+  PROJECT_NAME,
   BOT_NUMBER_HINT,
   assertBotNumber,
   config,
