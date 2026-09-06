@@ -111,6 +111,10 @@ function loadConfig() {
   if (!['pairing', 'qr'].includes(authMethod)) {
     throw new Error('AUTH_METHOD must be either "pairing" or "qr".');
   }
+  const pairingNumber = parseOptionalPhoneNumber('PAIRING_NUMBER');
+  if (authMethod === 'pairing' && pairingNumber && pairingNumber !== botConnectionNumber) {
+    throw new Error('PAIRING_NUMBER must match BOT_CONNECTION_NUMBER. The paired WhatsApp account is the bot connection identity.');
+  }
 
   const reconnectBaseDelayMs = parseInteger(
     'RECONNECT_BASE_DELAY_MS',
@@ -152,7 +156,7 @@ function loadConfig() {
     stickerAuthor: readString('STICKER_AUTHOR', DEFAULTS.stickerAuthor),
     publicMode: parseBoolean('PUBLIC_MODE', DEFAULTS.publicMode),
     authMethod,
-    pairingNumber: parseOptionalPhoneNumber('PAIRING_NUMBER'),
+    pairingNumber,
     authDir: resolveRuntimePath(readString('AUTH_DIR', DEFAULTS.authDir)),
     dataDir,
     premiumDbPath,

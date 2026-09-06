@@ -1,171 +1,133 @@
-# 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿 Deployment Guide
+# 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿 — Deployment Guide
 
-This application is a long-running WhatsApp client. It is best deployed as a **single background worker** with persistent storage. It does not provide an HTTP website, so a web-service deployment is not the appropriate default.
+GOATVERSE MD is a single long-running WhatsApp WebSocket worker. It is **not** an HTTP web application. Every supported deployment must use Node.js **20.9+**, one running replica, and persistent private storage for both authentication and runtime data.
 
-## 1. Clone the repository
+## Before deploying
 
-```bash
-git clone <your-repository-url>
-cd Bug-
-```
+1. Use Node.js 20.9+ (`node --version`).
+2. Install from the lockfile: `npm ci`.
+3. Copy `.env.example` locally or configure the same values in the platform environment UI.
+4. Set `BOT_CONNECTION_NUMBER` to the WhatsApp account that will run the bot.
+5. For a cloud pairing code, set `PAIRING_NUMBER` to **the same number** as `BOT_CONNECTION_NUMBER`.
+6. Keep `AUTH_DIR` and `DATA_DIR` on a private persistent disk/volume. Do not run a second copy against the same `AUTH_DIR`.
 
-## 2. Install a supported Node.js version
-
-Use Node.js **20.9+ LTS** (or a newer Node.js release that satisfies `package.json`'s `>=20.9` engine requirement).
-
-```bash
-node --version
-npm --version
-```
-
-## 3. Install dependencies
-
-For a normal local install:
-
-```bash
-npm install
-```
-
-For a reproducible CI/hosting install after `package-lock.json` is present:
-
-```bash
-npm ci
-```
-
-## 4. Configure the bot
-
-```bash
-cp .env.example .env
-```
-
-At minimum, set `BOT_NAME`, `INSTANCE_OWNER_NAME`, `INSTANCE_OWNER_NUMBER` (when owner features are needed), and the required `BOT_CONNECTION_NUMBER` (7–15 digits, including country code). The bot refuses to start without a valid connection number and verifies it against the authenticated WhatsApp account. `INSTANCE_OWNER_NAME` is display-only; `INSTANCE_OWNER_NUMBER` grants only instance-level features and does not grant Global Owner or Developer authorization.
-
-Keep `.env`, `session/`, and `data/` private. They are intentionally ignored by Git.
-
-## 5. Start and pair WhatsApp
-
-### Pairing-code flow (recommended for cloud hosts)
-
-Set these values in `.env` or your host's environment-variable page:
+Minimal cloud configuration:
 
 ```dotenv
-INSTANCE_OWNER_NAME=your_deployment_name
-INSTANCE_OWNER_NUMBER=your_instance_owner_number
-BOT_CONNECTION_NUMBER=your_bot_connection_number
+BOT_NAME=My GOATVERSE Instance
+INSTANCE_OWNER_NAME=Your Name
+INSTANCE_OWNER_NUMBER=15551234567
+BOT_CONNECTION_NUMBER=15551234567
 AUTH_METHOD=pairing
-PAIRING_NUMBER=your_linking_phone_number
+PAIRING_NUMBER=15551234567
+AUTH_DIR=/var/data/session
+DATA_DIR=/var/data/data
 ```
 
-`BOT_CONNECTION_NUMBER` is required and identifies the account this deployment will authenticate as. `PAIRING_NUMBER` is the phone that will be linked to the bot. Replace both placeholders with real numbers; they may be different. Each must contain digits only and include the country code. Do not set `GLOBAL_OWNER_NUMBER`, `GLOBAL_OWNER_NUMBERS`, `OWNER_NUMBER`, or `OWNER_NUMBERS`: protected Global Owner policy is not configurable through deployment environment variables.
+`INSTANCE_OWNER_NUMBER` is instance-level authorization only. It does not become Global Owner, and neither the connected account nor pairing number grants Global Owner access. Do not configure protected owner/developer environment keys; startup rejects them.
 
-Start the process:
+## Validation and first pairing
+
+Run the non-network validation before a first deploy:
 
 ```bash
+BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
+npm run check
+npm test
+```
+
+Start with `npm start`. For `AUTH_METHOD=pairing`, copy the printed code into WhatsApp **Linked devices** for `BOT_CONNECTION_NUMBER`. For local `AUTH_METHOD=qr`, scan the terminal QR with that same account. After the connection log appears, test `!menu`, `!ping`, and `!owner`.
+
+## Render
+
+**Requirements:** Render Background Worker, Node 20.19.5 (set in `render.yaml`), one persistent disk.
+
+The included [`render.yaml`](render.yaml) is a worker Blueprint with `npm ci`, `npm start`, and a `/var/data` disk.
+
+1. Create a Blueprint from the repository.
+2. Keep the 1 GB disk at `/var/data` and one worker instance.
+3. Add `BOT_CONNECTION_NUMBER` and matching `PAIRING_NUMBER` in the Render environment UI; set optional instance settings there too.
+4. Keep `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`.
+5. Deploy, pair from logs, and preserve the disk across restarts and updates.
+
+**Common error:** without the disk, Render's filesystem is ephemeral and the session/data disappear on redeploy. Consult [Render Background Workers](https://render.com/docs/background-workers) and [Render disks](https://render.com/docs/disks) for plan and disk details.
+
+**Update:** redeploy the reviewed revision; do not delete or replace the persistent disk.
+
+## Railway
+
+**Requirements:** Railway Node/Nixpacks build, one Volume mounted at `/var/data`.
+
+[`railway.toml`](railway.toml) starts the process with `npm start`; Nixpacks installs the project from `package.json`/the lockfile.
+
+1. Create a project from the repository and add one Volume at `/var/data`.
+2. Set `BOT_CONNECTION_NUMBER`, matching `PAIRING_NUMBER`, optional instance settings, `AUTH_DIR=/var/data/session`, and `DATA_DIR=/var/data/data`.
+3. Deploy one replica and obtain the pairing code from logs.
+4. Keep the Volume attached for restarts and updates.
+
+**Common error:** multiple replicas or a missing Volume can corrupt or lose the persistent login state. See [Railway Volumes](https://docs.railway.com/volumes).
+
+**Update:** deploy the reviewed revision while retaining the same Volume.
+
+## Pterodactyl
+
+**Requirements:** one server with a Node.js 20.9+ egg/image and persistent server storage.
+
+1. Upload/clone the repository into the server directory.
+2. Run `npm ci` in the installation step.
+3. Add the configuration values in the Pterodactyl environment/startup panel.
+4. Use `npm start` as the startup command.
+5. Keep `AUTH_DIR` and `DATA_DIR` inside the server's persistent filesystem, then pair from the console.
+
+**Restart:** configure Pterodactyl's normal restart policy if using `!restart`; the command exits cleanly for the host to restart.
+
+**Update:** stop the server, replace with the reviewed release, run `npm ci`, run `npm run check`, then start it again without deleting state.
+
+## VPS / Linux
+
+**Requirements:** Linux, Node.js 20.9+, npm, and a process supervisor for production availability.
+
+```bash
+git clone <repository-url>
+cd Bug-
+cp .env.example .env
+# edit .env; use private persistent paths for AUTH_DIR and DATA_DIR
+npm ci
+BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
 npm start
 ```
 
-Copy the pairing code from the logs, then enter it in WhatsApp on the phone being linked. WhatsApp stores credentials in `AUTH_DIR`; do not delete that directory after a successful link.
+For production, run one process under your existing systemd/PM2-equivalent policy after the dry run succeeds. The supervisor should restart failures; it must not start concurrent copies sharing a session path.
 
-### QR flow (best for an interactive local terminal)
+**Update:** stop the process, fetch the reviewed revision, run `npm ci`, `npm run check`, and `npm test`, then restart. Preserve `.env`, `AUTH_DIR`, and `DATA_DIR`.
 
-```dotenv
-AUTH_METHOD=qr
-```
+## Unsupported paths
 
-Run `npm start` and scan the terminal QR code. Pairing/QR login requires real WhatsApp credentials and cannot be completed by the repository's automated tests.
+- **Docker:** no Dockerfile or compose file is included, so Docker is not claimed as a supported path.
+- **Koyeb:** no Koyeb configuration is included, so Koyeb is not claimed as a supported path.
+- **HTTP web services:** not appropriate; this project has no HTTP listener.
 
-## 6. Verify the connection
+## Recovery and troubleshooting
 
-After logs report that the bot is connected, send:
-
-```text
-!menu
-!ping
-!owner
-```
-
-Use the prefix configured by `COMMAND_PREFIX` if it is not `!`.
-
-## 7. Deploy to Render
-
-`render.yaml` defines a **Background Worker**, which matches this bot's architecture.
-
-1. Push this repository to your Git provider.
-2. In Render, create a Blueprint from the repository (or create a Background Worker manually).
-3. Confirm the build command is `npm ci` and start command is `npm start`.
-4. Attach a persistent disk at `/var/data`. The included Blueprint requests a 1 GB disk.
-5. Configure these environment variables in Render:
-   - `BOT_NAME`
-   - `AUTH_METHOD=pairing`
-   - `PAIRING_NUMBER` for the first link
-   - `AUTH_DIR=/var/data/session`
-   - `DATA_DIR=/var/data/data`
-6. Deploy and complete pairing from the worker logs.
-
-Render services use an ephemeral filesystem unless a persistent disk is attached. A durable session therefore requires the disk. Keep one worker instance: a Baileys session directory must not be shared or written by multiple running bot instances. Persistent disks are a paid Render feature, so check your Render plan before relying on them.
-
-## 8. Deploy to Railway
-
-Railway discovers the application through `package.json`; `railway.toml` sets the same build and start commands.
-
-1. Create a Railway project from this repository.
-2. Add a **Volume** mounted at `/var/data`.
-3. Add the same environment variables used for Render:
-
-   ```dotenv
-   INSTANCE_OWNER_NAME=your_deployment_name
-   INSTANCE_OWNER_NUMBER=your_instance_owner_number
-   BOT_CONNECTION_NUMBER=your_bot_connection_number
-   AUTH_METHOD=pairing
-   PAIRING_NUMBER=your_linking_phone_number
-   AUTH_DIR=/var/data/session
-   DATA_DIR=/var/data/data
-   ```
-
-4. Set `BOT_NAME` and any other configuration values you want to override.
-5. Deploy and obtain the pairing code from Railway logs.
-
-A Railway volume is required if you want the WhatsApp session, premium database, and group greeting settings to survive redeployments.
-
-## 9. Deploy to Pterodactyl
-
-This project needs no custom Docker image as long as the selected Node.js egg/image provides Node 20 or newer.
-
-1. Create one server with a Node.js 20.9+ image and persistent server storage.
-2. Upload/clone the repository.
-3. Install dependencies with `npm install` (or `npm ci` when using the lockfile).
-4. Set the environment variables in Pterodactyl's startup/configuration panel.
-5. Use this startup command:
-
-   ```text
-   npm start
-   ```
-
-6. Pair through the server console and keep `AUTH_DIR` inside the server's persistent volume.
-
-## 10. Generic Node.js host or VPS
-
-Use a process manager that restarts a failed process, then run:
-
-```bash
-npm install
-npm start
-```
-
-Set `AUTH_DIR` and `DATA_DIR` to paths that survive restarts and deployments. Do not run a second copy of the bot against the same authentication directory.
-
-## Troubleshooting
-
-| Symptom | Cause and resolution |
+| Problem | Action |
 | --- | --- |
-| `PAIRING_NUMBER is not set` | Set it on non-interactive/cloud hosts, or use `AUTH_METHOD=qr` in a local terminal. |
-| Bot asks to pair again after deployment | `AUTH_DIR` is on ephemeral storage. Attach a volume/disk and point `AUTH_DIR` to it. |
-| `Bad Session` or `logged out` | Stop the bot, remove only the configured authentication directory, restart, then pair again. |
-| Bot ignores commands | Verify the configured prefix and `PUBLIC_MODE`. In self mode, only authorized Global Owner, Developer, or Instance Owner identities can use commands. The linked account is not automatically authorized. |
-| Bot stops with a connection identity mismatch | Set `BOT_CONNECTION_NUMBER` to the number of the actual authenticated WhatsApp account. The bot will not substitute another identity. |
-| `npm ci` fails | Commit/use the generated `package-lock.json`, or use `npm install` for local development. |
-| `restart` stops the bot | Configure the platform/process manager to restart exited processes. The command intentionally does not delete your saved session. |
+| No pairing code in cloud logs | Set `PAIRING_NUMBER` to valid digits matching `BOT_CONNECTION_NUMBER`. |
+| Connection identity mismatch | Pair the exact account in `BOT_CONNECTION_NUMBER`; this is an intentional fail-closed check. |
+| Session disappears after deploy | Mount persistent storage and point both `AUTH_DIR` and `DATA_DIR` to it. |
+| `Bad Session` / logout | Stop the process, remove only configured `AUTH_DIR`, restart, and pair again. |
+| Commands ignored | Check `COMMAND_PREFIX`, `PUBLIC_MODE`, authorization settings, and worker logs. |
+| `!restart` leaves bot stopped | Configure the host/supervisor restart policy. |
+| Protected identity verification fails | Investigate the trusted manifest/HMAC outside the repository; privileged functions stay locked and no files are deleted. |
 
-## Recommended hosting method
+## Deployment matrix
 
-A single Railway service with a persistent volume or a Render Background Worker with a persistent disk is recommended. Both match a long-running WebSocket process and can retain the WhatsApp authentication state. A local machine/Termux installation is suitable for testing, but it must remain online for the bot to remain connected.
+| Platform | Install | Start | Persistent Storage | Status |
+| --- | --- | --- | --- | --- |
+| Render | `npm ci` (manifest) | `npm start` (manifest) | `/var/data` disk | NEEDS CONFIGURATION |
+| Railway | Nixpacks/lockfile | `npm start` (manifest) | `/var/data` Volume | NEEDS CONFIGURATION |
+| Pterodactyl | `npm ci` | `npm start` | Server filesystem | NEEDS CONFIGURATION |
+| VPS/Linux | `npm ci` | `npm start` | Host filesystem | NEEDS CONFIGURATION |
+| Docker | — | — | — | NOT SUPPORTED |
+| Koyeb | — | — | — | NOT SUPPORTED |
+
+The `NEEDS CONFIGURATION` status is intentional: live WhatsApp authentication and each provider's disk/volume attachment require the deployer's account and cannot be validated in repository CI.
