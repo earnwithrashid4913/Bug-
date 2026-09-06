@@ -67,7 +67,11 @@ npm run check
 npm test
 ```
 
-## Configuration
+```bash
+BOT_CONNECTION_NUMBER=15551234567 npm run start:dry
+npm run check
+npm test
+```
 
 Copy [`.env.example`](.env.example). The top **INSTANCE SETTINGS** block is the normal deployer-editable surface:
 
