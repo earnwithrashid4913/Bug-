@@ -89,6 +89,7 @@ function helpText() {
     `${p}ai <question> — ask the configured AI provider`,
     `${p}request <message> — send a feature request to the owner`,
     `${p}theme — show the active character theme`,
+    `${p}idch <WhatsApp channel URL> — inspect public channel metadata`,
     '',
     '*Group admin commands*',
     `${p}hidetag <message> — send a hidden mention to the group`,
@@ -752,3 +753,4 @@ module.exports = handleMessage;
 module.exports.commandFromText = commandFromText;
 module.exports.helpText = helpText;
 module.exports.themeText = themeText;
+module.exports.getPublicMode = () => publicMode;

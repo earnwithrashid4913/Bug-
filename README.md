@@ -22,11 +22,11 @@ GOATVERSE MD is a high-performance Node.js WhatsApp bot built on Baileys v7. It 
 
 ## Web Pairing & Anime Interface
 
-GOATVERSE MD includes an interactive anime-inspired Web Pairing interface running on port `3000`.
+GOATVERSE MD starts an interactive anime-inspired Web Pairing interface on `PORT` (default `3000`). It is reachable only where the deployment platform exposes inbound HTTP; Render is configured as a background worker, so pair there from logs instead.
 
 ### The 4-Step Pairing Flow
 
-1. **Step 1 — Enter Phone Number**: Select your country code or enter custom digits with instant international format validation.
+1. **Step 1 — Confirm Phone Number**: Enter the international digits for the account configured as `BOT_NUMBER`; the interface rejects a different account to preserve the connection-identity check.
 2. **Step 2 — Anime Aura Generation**: Character aura builds and energy particles surge as the real Baileys socket pairing handshake is dispatched (`POST /api/pairing/request`).
 3. **Step 3 — Pairing Code Reveal**: Large 8-character monospace tiles with one-click clipboard copy, refresh action, and clear step-by-step WhatsApp linking instructions.
 4. **Step 4 — Real-time Connection Pipeline**: Visual 5-stage timeline (`01 Number Submitted` → `02 Code Generated` → `03 Device Approval` → `04 WhatsApp Connection` → `05 Bot Online`) dynamically tracked via live polling.
@@ -105,7 +105,7 @@ THEME=gojo
 | `INSTANCE_OWNER_NUMBER` | No | Separately grants instance-owner commands only; it is not Global Owner or Developer authorization. |
 | `AUTH_METHOD` | No | `pairing` (default) or `qr`. |
 | `AUTH_DIR`, `DATA_DIR` | No | Private persistent paths for credentials and runtime data. |
-| `COMMAND_PREFIX`, `PUBLIC_MODE`, `LOG_LEVEL` | No | Command/runtime controls validated at startup. |
+| `COMMAND_PREFIX`, `PUBLIC_MODE`, `LOG_LEVEL`, `PORT` | No | Command/runtime controls validated at startup; `PORT` is the HTTP interface port (1–65535, default `3000`). |
 | `GROQ_API_KEY`, `GROQ_MODEL` | No | Optional AI provider configuration; never commit the API key. |
 
 `OWNER_LINK`, sticker metadata, greeting templates, database path overrides, and reconnect delays are also documented in [`.env.example`](.env.example). Do **not** add `GLOBAL_OWNER_NUMBER`, `GLOBAL_OWNER_NUMBERS`, `OWNER_NUMBER`, `OWNER_NUMBERS`, or developer overrides: startup rejects them.
@@ -148,7 +148,7 @@ Docker and Koyeb are not presented as deployment buttons because this repository
 
 The included [`render.yaml`](render.yaml) defines a Background Worker, not an HTTP service.
 
-1. Create a Render Blueprint from this repository and confirm `npm ci` / `npm start`.
+1. Create a Render Blueprint from this repository and confirm `npm ci` / `npm start`. The included service is a Background Worker, so use pairing codes from worker logs rather than a public browser interface.
 2. Keep the supplied 1 GB disk mounted at `/var/data`.
 3. Set `BOT_NUMBER` and optional instance settings in Render's environment UI.
 4. Keep `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`, deploy one worker, then pair from logs.
@@ -194,11 +194,11 @@ Use the configured prefix (`!` by default).
 
 | Group | Commands |
 | --- | --- |
-| General | `menu`, `theme`, `ping`, `status`, `owner`, `sticker`, `toimg`, `jid`, `getpp`, `ai`, `request` |
+| General | `menu`, `theme`, `ping`, `status`, `owner`, `sticker`, `toimg`, `jid`, `idch`, `getpp`, `ai`, `request` |
 | Group admin | `hidetag`, `tagall`, `welcome`, `goodbye`, `greet`, `group`, `gname`, `gdesc`, `add`, `kick`, `promote`, `demote`, `lock`, `unlock`, `grouplink` |
 | Instance-authorized owner | `setpp`, `public`, `self`, `addprem`, `delprem`, `listprem`, `restart` |
 
-`!ai` requires `GROQ_API_KEY`. Group mutations also require the bot to be a group admin. Run `!menu` in WhatsApp for exact usage and aliases.
+`!ai` requires `GROQ_API_KEY`; premium records shorten the AI cooldown but do not grant owner or group-admin permissions. Group mutations also require the bot to be a group admin. Run `!menu` in WhatsApp for exact usage and aliases.
 
 ## Development
 

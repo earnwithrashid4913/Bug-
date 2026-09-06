@@ -282,7 +282,7 @@ function shutdown(signal) {
   setTimeout(() => process.exit(process.exitCode || 0), 5_000).unref();
 }
 
-function startServer(port = 3000, host = '0.0.0.0') {
+function startServer(port = config.webPort, host = '0.0.0.0') {
   if (httpServer) return httpServer;
   httpServer = createWebServer({
     config,
@@ -290,17 +290,19 @@ function startServer(port = 3000, host = '0.0.0.0') {
     recentLogs,
     getActiveTheme,
     listThemes,
+    getPublicMode: handleMessage.getPublicMode,
     port,
     host,
     onRefreshPairingCode: async (phoneNumber) => {
       let targetNumber = config.botNumber;
       if (phoneNumber && typeof phoneNumber === 'string' && phoneNumber.trim()) {
         try {
-          targetNumber = normalizePhoneNumber(phoneNumber);
-          config.botNumber = targetNumber;
-          liveStatus.botNumber = targetNumber;
+          const requestedNumber = normalizePhoneNumber(phoneNumber, 'Pairing phone number');
+          if (requestedNumber !== config.botNumber) {
+            throw new Error('The web pairing interface can only request a code for the configured BOT_NUMBER.');
+          }
         } catch (err) {
-          logEvent('warn', `Invalid phone number format: ${err.message}`);
+          logEvent('warn', `Invalid pairing request: ${err.message}`);
           throw err;
         }
       }
