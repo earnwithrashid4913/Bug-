@@ -132,6 +132,16 @@ function parseUrl(name, fallback) {
   }
 }
 
+function parseTelegramLink() {
+  const value = readString('TELEGRAM_BOT_LINK', '');
+  if (!value) return '';
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || !['t.me', 'telegram.me'].includes(parsed.hostname)) throw new Error('Use an HTTPS t.me link.');
+    return parsed.toString();
+  } catch (error) { throw new Error(`TELEGRAM_BOT_LINK must be a valid HTTPS Telegram bot link. ${error.message}`); }
+}
+
 function resolveRuntimePath(value) {
   return path.resolve(process.cwd(), value);
 }
@@ -172,6 +182,12 @@ function loadConfig() {
   const premiumDbPath = resolveRuntimePath(readString('PREMIUM_DB_PATH', path.join(dataDir, 'premium.json')));
   const groupSettingsDbPath = resolveRuntimePath(readString('GROUP_SETTINGS_DB_PATH', path.join(dataDir, 'groups.json')));
   const modeDbPath = resolveRuntimePath(readString('MODE_DB_PATH', path.join(dataDir, 'mode.json')));
+  const telegramControllerDbPath = resolveRuntimePath(readString('TELEGRAM_CONTROLLER_DB_PATH', path.join(dataDir, 'telegram-controllers.json')));
+  const telegramOwnerIds = readString('TELEGRAM_OWNER_IDS', '')
+    .split(',').map((id) => id.trim()).filter(Boolean);
+  if (telegramOwnerIds.some((id) => !/^\d{1,20}$/.test(id))) {
+    throw new Error('TELEGRAM_OWNER_IDS must be a comma-separated list of numeric Telegram IDs.');
+  }
 
   return Object.freeze({
     botName: readString('BOT_NAME', DEFAULTS.botName),
@@ -203,6 +219,10 @@ function loadConfig() {
     premiumDbPath,
     groupSettingsDbPath,
     modeDbPath,
+    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', ''),
+    telegramBotLink: parseTelegramLink(),
+    telegramOwnerIds: Object.freeze(telegramOwnerIds),
+    telegramControllerDbPath,
     theme: parseTheme(DEFAULTS.theme),
     webHost: readString('WEB_HOST', DEFAULTS.webHost),
     webPort: parseInteger('PORT', DEFAULTS.webPort, 1, 65_535),

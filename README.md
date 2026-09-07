@@ -24,6 +24,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 - Safe command handler for menu, ping, status, owner details, group mentions, group greetings, safe group administration, channel lookup, request forwarding, premium records, sticker conversion, and sticker-to-image conversion
 - Owner-only public/self mode, premium management, and host-managed restart command
 - Persistent premium and group-greeting data with atomic writes
+- Optional authorized Telegram controller for pairing-code requests and single-session status/control; it delegates to the existing Baileys socket rather than creating a second WhatsApp client
 - Deployment manifests for the supported managed hosts: Render (`render.yaml`) and Heroku (`app.json` + `Procfile`)
 
 ## Safety boundary
@@ -114,6 +115,12 @@ The bot has exactly one owner, so only these two values need to be set.
 Configuration validates phone numbers, URLs, booleans, delays, prefixes, and authentication method at startup. Invalid values fail early with an actionable error.
 
 `!ai` is optional. It sends the command prompt to Groq only when you explicitly configure `GROQ_API_KEY`; do not submit secrets or sensitive personal data to an external AI provider.
+
+### Optional Telegram controller
+
+Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_LINK`, and at least one numeric `TELEGRAM_OWNER_IDS` value to enable long-polling control. Bootstrap owners are configured only through the environment; extra controllers added with `/addowner <telegram_id>` are persisted in `data/telegram-controllers.json` with private file permissions. The controller supports `/pair <number>`, `/sessions`, `/status`, `/addowner <telegram_id>`, `/delowner <telegram_id>`, `/stop <number>`, and `/help`. WhatsApp users can use `!pairing`, `!tgpair`, or `!telegram` to receive the configured controller link.
+
+It controls the **same** Baileys socket as the dashboard. `/pair` therefore returns a real code only while that socket is ready and unpaired. `/stop` only removes an unpaired, matching local session and refuses to remove a connected account remotely, avoiding accidental logout and a competing multi-session architecture.
 
 ## Authentication and session handling
 
