@@ -1,4 +1,5 @@
 services:
+  # Long-running WhatsApp worker with optional Telegram pairing controller.
   # The bot keeps an outbound WhatsApp WebSocket open and also serves the
   # WhatsApp WebSocket and optional Telegram pairing controller.
   - type: web
@@ -6,16 +7,12 @@ services:
     runtime: node
     buildCommand: npm ci
     startCommand: npm start
-    healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: 20.19.5
       # Optional display name for the person operating this deployment.
       - key: OWNER_NAME
         sync: false
-      # makima | nami | nezuko | shinobu | gojo | sukuna | asta
-      - key: THEME
-        value: gojo
       - key: AUTH_METHOD
         value: pairing
       - key: WEB_PAIRING_ENABLED

@@ -1577,24 +1577,6 @@ async function handleMessage(socket, rawMessage) {
       }, { quoted: context.raw });
       break;
 
-    case 'theme':
-    case 'settheme': {
-      if (!(await requireOwner(socket, context))) break;
-      const themeId = command.args[0]?.toLowerCase();
-      if (!themeId) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}theme <makima|nami|nezuko|shinobu|gojo|sukuna|asta>` }, { quoted: context.raw });
-        break;
-      }
-      try {
-        const { setActiveTheme } = require('../index');
-        const theme = setActiveTheme(themeId);
-        await socket.sendMessage(context.chatId, { text: `*Theme changed*\n${theme.icon} ${theme.name} is now active on the pairing dashboard.` }, { quoted: context.raw });
-      } catch (error) {
-        await socket.sendMessage(context.chatId, { text: `Could not change theme: ${error.message}` }, { quoted: context.raw });
-      }
-      break;
-    }
-
     case 'restart':
     case 'rst': {
       if (!(await requireOwner(socket, context))) break;

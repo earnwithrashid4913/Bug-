@@ -21,9 +21,7 @@ const { handleGroupParticipantsUpdate } = require('./system/group-events');
 const handleMessage = require('./system/handler');
 const { MemoryCache } = require('./system/lib/cache');
 const { prepareSession } = require('./system/session');
-const { getTheme, isThemeId, listThemes, resolveTheme } = require('./system/theme');
 const { sendButtons } = require('./system/lib/ui');
-const { createWebServer } = require('./system/web');
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
 const { TelegramPairingManager } = require('./system/lib/telegram-pairing-manager');
@@ -43,7 +41,6 @@ const isChildProcess = process.argv.includes(CHILD_FLAG);
 // gives up instead of looping forever.
 const MAX_WORKER_RESTARTS_PER_MINUTE = 5;
 let workerExits = [];
-const PAIRING_CODE_TTL_MS = 5 * 60_000;
 
 // WhatsApp/socket noise that must never take the whole process down. The
 // connection layer filters these; each one is already handled by the
@@ -60,22 +57,19 @@ const IGNORED_PROCESS_ERRORS = Object.freeze([
 ]);
 
 let activeSocket;
-let webServer;
 let childProcess;
 let workerLaunchTimer;
 let reconnectTimer;
-let pairingExpiryTimer;
+let idleKeepAliveTimer;
 let reconnectAttempts = 0;
 let stopping = false;
 let resetting = false;
-let currentPairingState;
 let telegramController;
 let telegramPairingManager;
 let connectionCardSent = false;
 
-// Live mirror of the WhatsApp socket state. The dashboard renders this object
-// verbatim, so it is only ever written from real socket events — the UI never
-// shows "connected" unless WhatsApp actually reported an open connection.
+// Live mirror of the primary WhatsApp socket state. Telegram pairing sessions
+// expose their own owner-scoped status through TelegramPairingManager.
 const liveStatus = {
   state: 'starting',
   connected: false,
@@ -89,7 +83,6 @@ const liveStatus = {
   updatedAt: Date.now()
 };
 
-let activeTheme = resolveTheme(config.theme);
 
 const disconnectLabels = Object.freeze({
   [DisconnectReason.badSession]: 'The saved WhatsApp session is invalid.',
@@ -148,30 +141,12 @@ function setStatus(state, message, extra = {}) {
   });
 }
 
-function clearPairingAttempt(pairingState, message) {
-  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
-  pairingExpiryTimer = undefined;
-  if (pairingState) pairingState.requested = false;
-  setStatus('pairing', message, { pairingCode: null, pairingNumber: null, pairingRequestedAt: null });
-}
-
-function schedulePairingExpiry(pairingState, number) {
-  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
-  pairingExpiryTimer = setTimeout(() => {
-    pairingExpiryTimer = undefined;
-    if (pairingState === currentPairingState && !pairingState.registered && liveStatus.pairingNumber === number) {
-      clearPairingAttempt(pairingState, 'The previous pairing code expired. Enter a number to request a new code.');
-    }
-  }, PAIRING_CODE_TTL_MS);
-  pairingExpiryTimer.unref();
-}
-
 function renderQrCode(qr, pairingState) {
   if (pairingState.lastQr === qr) return;
   pairingState.lastQr = qr;
 
   if (!output.isTTY) {
-    console.warn('[qr] A QR code was received, but this host is non-interactive. Use the web dashboard pairing flow instead.');
+    console.warn('[qr] A QR code was received, but this host is non-interactive. Use Telegram /pair <number> instead.');
     return;
   }
 
@@ -183,75 +158,6 @@ function renderQrCode(qr, pairingState) {
 // two groups of four characters separated by a dash.
 function formatPairingCode(code) {
   return code?.match(/.{1,4}/g)?.join('-') || code;
-}
-
-async function requestPairingCode(socket, pairingState, targetNumber) {
-  if (!socket || pairingState.registered) return liveStatus.pairingCode;
-  // Web and Telegram controls share this one promise. This prevents two
-  // requestPairingCode IQs when a user taps twice or a web request overlaps
-  // with an authorized Telegram controller request.
-  if (pairingState.requestPromise) return pairingState.requestPromise;
-
-  const number = String(targetNumber || '').trim();
-  if (!number) throw Object.assign(new Error('Enter a WhatsApp number to request a pairing code.'), { status: 400 });
-  if (liveStatus.pairingNumber && liveStatus.pairingNumber !== number) {
-    throw Object.assign(new Error('A pairing attempt is already active. Complete it or wait for it to expire before pairing another number.'), { status: 409 });
-  }
-  pairingState.pending = true;
-  pairingState.requestPromise = (async () => {
-    try {
-      const code = await socket.requestPairingCode(number);
-      pairingState.requested = true;
-      pairingState.lastQr = undefined;
-      liveStatus.pairingCode = code;
-      liveStatus.pairingNumber = number;
-      liveStatus.pairingRequestedAt = Date.now();
-      setStatus('pairing', `Enter the pairing code in WhatsApp on ${number}.`);
-      schedulePairingExpiry(pairingState, number);
-      console.log(chalk.green(`[pairing] Enter this code in WhatsApp (${number}): ${formatPairingCode(code)}`));
-      return code;
-    } catch (error) {
-      console.error(`[pairing] Could not request a pairing code: ${error.message}`);
-      throw error;
-    } finally {
-      pairingState.pending = false;
-      pairingState.requestPromise = undefined;
-    }
-  })();
-  return pairingState.requestPromise;
-}
-
-// Called by the dashboard. Real errors surface to the user; nothing is faked.
-async function handlePairingRequest(number) {
-  if (liveStatus.connected || currentPairingState?.registered) {
-    throw Object.assign(new Error('WhatsApp is already connected.'), { status: 409 });
-  }
-  // A pairing code can only be requested once the WhatsApp handshake finished
-  // (the socket reported a QR / reached the pairing stage).
-  if (!activeSocket || !currentPairingState?.readyForPairing) {
-    throw Object.assign(
-      new Error('The WhatsApp client is still connecting. Try again in a few seconds.'),
-      { status: 503 }
-    );
-  }
-
-  return requestPairingCode(activeSocket, currentPairingState, number);
-}
-
-async function stopPairingSession(number) {
-  const target = String(number).replace(/\D/g, '');
-  const activeNumber = String(liveStatus.botUser || liveStatus.pairingNumber || '').replace(/\D/g, '');
-  if (!target || target !== activeNumber) {
-    throw new Error('No matching active ANIME MD session exists for that number.');
-  }
-  if (liveStatus.connected) {
-    throw new Error('Refusing to remove a connected session remotely. Log out from WhatsApp Linked devices first.');
-  }
-  try { activeSocket?.ws?.close(); } catch { /* close best effort */ }
-  await require('node:fs/promises').rm(config.authDir, { recursive: true, force: true });
-  activeSocket = undefined;
-  currentPairingState = undefined;
-  setStatus('stopped', `Session for ${target} was removed.`, { pairingCode: null, session: 'none' });
 }
 
 function startTelegramController() {
@@ -267,6 +173,23 @@ function startTelegramController() {
     console.error('[telegram] TELEGRAM_BOT_TOKEN is set but TELEGRAM_OWNER_IDS is empty; controller is disabled.');
     return;
   }
+  telegramPairingManager = new TelegramPairingManager({
+    authDir: config.authDir,
+    onSocket: async (socket) => {
+      socket.decodeJid = decodeJid;
+      socket.public = (await handleMessage.initializeMode(socket)) === 'public';
+      socket.ev.on('messages.upsert', (upsert) => {
+        if (upsert.type !== 'notify') return;
+        for (const rawMessage of upsert.messages || []) {
+          if (!rawMessage?.message || rawMessage.key?.remoteJid === 'status@broadcast') continue;
+          void handleMessage(socket, rawMessage).catch((error) => console.error('[message] Failed to process Telegram-paired session message:', error));
+        }
+      });
+      socket.ev.on('group-participants.update', (update) => {
+        void handleGroupParticipantsUpdate(socket, update).catch((error) => console.error('[group-events] Failed to process Telegram-paired session update:', error));
+      });
+    }
+  });
   telegramPairingManager = new TelegramPairingManager({ authDir: config.authDir });
   telegramController = new TelegramController({
     token: config.telegramBotToken,
@@ -293,15 +216,6 @@ function startTelegramController() {
       telegramController = undefined;
       console.error(`[telegram] Controller failed to start: ${error.message}. Check TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_IDS, and Telegram network access.`);
     });
-}
-
-function setActiveTheme(themeId) {
-  if (!isThemeId(themeId)) {
-    throw new Error(`Unknown theme "${themeId}". Available themes: ${listThemes().map((theme) => theme.id).join(', ')}.`);
-  }
-  activeTheme = getTheme(themeId);
-  console.log(`[theme] Active theme is now ${activeTheme.name}.`);
-  return activeTheme;
 }
 
 async function sendConnectionSuccess(socket) {
@@ -344,9 +258,9 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     pairingState.readyForPairing = true;
 
     if (config.authMethod === 'pairing') {
-      setStatus('pairing', 'Ready for a pairing request from the web dashboard or authorized Telegram controller.');
+      setStatus('pairing', 'Telegram Pairing is available to authorized controllers.');
     } else {
-      // Internal, terminal-only fallback. The dashboard never offers QR.
+      // Terminal-only QR fallback for directly managed primary sessions.
       setStatus('connecting', 'Scan the QR code printed in the server terminal.');
       renderQrCode(update.qr, pairingState);
     }
@@ -355,8 +269,6 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   if (update.connection === 'open') {
     reconnectAttempts = 0;
     pairingState.registered = true;
-    if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
-    pairingExpiryTimer = undefined;
     setStatus('connected', `${config.botName} is connected to WhatsApp.`, {
       pairingCode: null,
       pairingRequestedAt: null,
@@ -387,8 +299,6 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   pairingState.readyForPairing = false;
   const reason = disconnectStatusCode(update.lastDisconnect);
   const label = disconnectLabels[reason] || `Unknown disconnect reason: ${reason ?? 'not supplied'}.`;
-  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
-  pairingExpiryTimer = undefined;
   setStatus(reason === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected', label, {
     pairingCode: null,
     pairingNumber: null,
@@ -403,7 +313,7 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   }
 
   if (reason === DisconnectReason.loggedOut) {
-    console.error('[connection] This device was logged out. Pair again from the dashboard, or set a fresh SESSION_ID, then restart the bot.');
+    console.error('[connection] This device was logged out. Pair again through Telegram, or set a fresh SESSION_ID, then restart the bot.');
     return;
   }
 
@@ -433,17 +343,30 @@ function bootstrapSession() {
     liveStatus.session = result === 'empty' ? 'none' : result;
     return result;
   } catch (error) {
-    // A bad SESSION_ID must not brick the deployment: keep serving the
-    // dashboard so the owner can pair again from the browser.
+    // A bad SESSION_ID must not brick the deployment: Telegram Pairing remains
+    // available for authorized controllers.
     liveStatus.session = 'invalid';
     console.error(chalk.red(`[session] ${error.message}`));
-    console.error('[session] The dashboard is still available so you can pair again from the browser.');
+    console.error('[session] Telegram Pairing remains available so you can pair again with /pair.');
     return 'invalid';
   }
 }
 
 async function startBot() {
   if (stopping) return;
+
+  // Telegram owns new pairing sessions. Do not create an unauthenticated
+  // primary socket when there is no restored primary session: it cannot serve
+  // a pairing request and was the source of needless timeout/reconnect noise.
+  if (config.authMethod === 'pairing' && !['existing', 'created', 'overwritten'].includes(liveStatus.session)) {
+    setStatus('telegram_pairing', 'No primary session is restored. Use an authorized Telegram controller to pair a session.');
+    // With no restored primary session and no Telegram token, Node otherwise
+    // has no active handles and the supervisor would repeatedly restart the
+    // healthy worker. Keep the process alive for later panel/env configuration.
+    if (!idleKeepAliveTimer) idleKeepAliveTimer = setInterval(() => {}, 60 * 60_000);
+    console.info('[startup] Primary WhatsApp socket is idle; Telegram Pairing owns new sessions.');
+    return;
+  }
 
   try {
     // Pin the socket to the newest published WhatsApp Web
@@ -486,13 +409,12 @@ async function startBot() {
       readyForPairing: false,
       lastQr: undefined
     };
-    currentPairingState = pairingState;
 
     setStatus(
       pairingState.registered ? 'connecting' : 'pairing',
       pairingState.registered
         ? 'Restoring the saved WhatsApp session…'
-        : 'Waiting for a WhatsApp number from the web dashboard or authorized Telegram controller.'
+        : 'Telegram Pairing is ready for authorized controllers.'
     );
 
     socket.ev.on('creds.update', () => {
@@ -513,49 +435,19 @@ async function startBot() {
     console.log(chalk.cyan(`[startup] ${config.botName} started. Auth directory: ${config.authDir}`));
   } catch (error) {
     activeSocket = undefined;
-    currentPairingState = undefined;
     setStatus('error', `WhatsApp failed to initialize: ${error.message}`);
     console.error('[startup] Failed to initialize WhatsApp:', error);
     scheduleReconnect();
   }
 }
 
-function startWebServer() {
-  webServer = createWebServer({
-    config,
-    themes: listThemes(),
-    getActiveThemeId: () => activeTheme?.id || null,
-    setActiveTheme,
-    getStatus: () => ({ ...liveStatus, uptimeMs: Date.now() - liveStatus.startedAt }),
-    requestPairing: handlePairingRequest
-  });
-
-  webServer.on('error', (error) => {
-    if (error.code === 'EADDRINUSE') {
-      console.error(`[web] Port ${config.webPort} is already in use. Set PORT to a free port.`);
-      return;
-    }
-    console.error('[web] Dashboard server error:', error);
-  });
-
-  webServer.listen(config.webPort, config.webHost, () => {
-    console.log(chalk.cyan(`[web] Pairing dashboard listening on http://${config.webHost}:${config.webPort}${activeTheme ? ` (theme: ${activeTheme.name})` : ' (choose a theme)'}.`));
-  });
-}
-
 function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
+  if (idleKeepAliveTimer) clearInterval(idleKeepAliveTimer);
   if (workerLaunchTimer) clearTimeout(workerLaunchTimer);
   console.log(`[shutdown] Received ${signal}; closing the bot process.`);
-
-  try {
-    webServer?.close();
-  } catch (error) {
-    console.error('[shutdown] Failed to close the dashboard server cleanly:', error);
-  }
 
   try {
     activeSocket?.ws?.close();
@@ -687,10 +579,6 @@ module.exports = {
   decodeJid,
   disconnectStatusCode,
   formatPairingCode,
-  getActiveThemeId: () => activeTheme?.id || null,
-  handlePairingRequest,
-  stopPairingSession,
   liveStatus,
-  setActiveTheme,
   shouldReconnect
 };

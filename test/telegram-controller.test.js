@@ -30,6 +30,24 @@ test('Telegram controller allows bootstrap owners to pair and rejects strangers'
   assert.match(replies.pop().text, /not authorized/);
 });
 
+test('Telegram start menu callbacks are authorized and route to owner-scoped status', async () => {
+  const replies = [];
+  const seenOwners = [];
+  const controller = new TelegramController({
+    token: 'token', owners: ['10'], controllerStore: { has: async () => false },
+    pairing: { requestPairing: async () => 'code', getStatus: async (ownerId) => { seenOwners.push(String(ownerId)); return { state: 'ready', connected: false, startedAt: Date.now() }; }, stopSession: async () => {} },
+    fetchImpl: async (_url, init) => ({ ok: true, json: async () => ({ ok: true, result: JSON.parse(init.body) }) })
+  });
+  controller.reply = async (_chatId, text, markup) => replies.push({ text, markup });
+  controller.replyPhoto = async () => {};
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/start' } });
+  assert.equal(replies.pop().markup.inline_keyboard[0][0].callback_data, 'pair_help');
+  await controller.handleUpdate({ callback_query: { id: 'callback', from: { id: 10 }, data: 'status', message: { chat: { id: 1 } } } });
+  assert.deepEqual(seenOwners, ['10']);
+  await controller.handleUpdate({ callback_query: { id: 'callback2', from: { id: 11 }, data: 'status', message: { chat: { id: 1 } } } });
+  assert.match(replies.pop().text, /not authorized/);
+});
+
 test('Telegram controller reports status and can remove only persisted controllers', async () => {
   const replies = [];
   const removed = [];

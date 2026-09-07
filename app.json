@@ -9,7 +9,6 @@
     "bot"
   ],
   "stack": "heroku-24",
-  "success_url": "/",
   "logo": "https://files.catbox.moe/gacz1y.jpg",
   "env": {
     "OWNER_NAME": {
@@ -23,10 +22,6 @@
     "BOT_NAME": {
       "description": "Bot display name.",
       "value": "ANIME MD"
-    },
-    "THEME": {
-      "description": "Startup theme: makima, nami, nezuko, shinobu, gojo, sukuna or asta.",
-      "value": "gojo"
     },
     "COMMAND_PREFIX": {
       "description": "Command prefix (1-4 characters).",
@@ -50,7 +45,7 @@
     }
   },
   "formation": {
-    "web": {
+    "worker": {
       "quantity": 1,
       "size": "basic"
     }

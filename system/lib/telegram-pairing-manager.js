@@ -27,11 +27,13 @@ function safeSessionDirectory(root, telegramId) {
 }
 
 class TelegramPairingManager {
+  constructor({ authDir, log = console, onSocket, baileys = {} }) {
   constructor({ authDir, log = console, baileys = {} }) {
     this.root = path.resolve(authDir, 'telegram-pairings');
     this.log = log;
     this.sessions = new Map();
     this.onConnected = undefined;
+    this.onSocket = onSocket;
     this.baileys = {
       makeWASocket: baileys.makeWASocket || makeWASocket,
       useMultiFileAuthState: baileys.useMultiFileAuthState || useMultiFileAuthState,
@@ -74,6 +76,7 @@ class TelegramPairingManager {
     entry.ready = new Promise((resolve) => { entry.readyResolve = resolve; });
     socket.ev.on('creds.update', () => { void saveCreds().catch(() => this.log.error?.('[telegram-pairing] Could not save WhatsApp credentials.')); });
     socket.ev.on('connection.update', (update) => this.connectionUpdate(entry, update));
+    await this.onSocket?.(socket, entry.id);
     return entry;
   }
 

@@ -13,7 +13,7 @@ Thank you for improving ANIME MD. Keep contributions focused, tested, and safe f
 
 Do not weaken or bypass `system/security.js`, the protected identity manifest verification, sender normalization, or group/bot-admin checks. Never commit `.env`, session files, private keys, API keys, trusted identity manifests, or HMAC secrets.
 
-`OWNER_NAME` and `THEME` are deployer instance settings. The linked WhatsApp account is selected only through the pairing flow. These settings must not become Global Owner or Developer identity. New themes must remain data-only and must not duplicate core authorization or command logic.
+`OWNER_NAME` is a deployer display setting. The linked WhatsApp account is selected only through the authorized Telegram pairing flow. This setting must not become Global Owner or Developer identity.
 
 ## Scope and tests
 

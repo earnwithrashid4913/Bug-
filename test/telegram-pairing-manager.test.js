@@ -25,6 +25,12 @@ function fakeBaileys() {
 
 test('Telegram pairing sessions are isolated by Telegram owner', async () => {
   const fake = fakeBaileys();
+  const initialized = [];
+  const manager = new TelegramPairingManager({ authDir: path.join(os.tmpdir(), `anime-md-${Date.now()}`), onSocket: async (_socket, ownerId) => initialized.push(ownerId), baileys: fake });
+  assert.equal(await manager.requestPairing('10', '923001234567'), 'code-923001234567');
+  assert.equal(await manager.requestPairing('20', '923009876543'), 'code-923009876543');
+  assert.equal(fake.sockets.length, 2);
+  assert.deepEqual(initialized, ['10', '20']);
   const manager = new TelegramPairingManager({ authDir: path.join(os.tmpdir(), `anime-md-${Date.now()}`), baileys: fake });
   assert.equal(await manager.requestPairing('10', '923001234567'), 'code-923001234567');
   assert.equal(await manager.requestPairing('20', '923009876543'), 'code-923009876543');

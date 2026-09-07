@@ -65,6 +65,16 @@ test('Telegram configuration uses the documented canonical environment variables
   }
 });
 
+test('configuration permits Telegram pairing without a deployment phone number', () => {
+  const saved = Object.fromEntries(['TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TELEGRAM_OWNER_IDS'].map((key) => [key, process.env[key]]));
+  try {
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.TELEGRAM_BOT_LINK;
+    delete process.env.TELEGRAM_OWNER_IDS;
+    const withoutBotNumber = loadConfig();
+    assert.equal(withoutBotNumber.telegramBotToken, '');
+    assert.equal(withoutBotNumber.telegramBotLink, '');
+    assert.deepEqual(withoutBotNumber.telegramOwnerIds, []);
 test('configuration has no deployment bot-number dependency or Telegram aliases', () => {
   const saved = Object.fromEntries(['BOT_NUMBER', 'PAIRING_NUMBER', 'TELEGRAM_BOT_TOKEN', 'BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TG_BOT_LINK', 'TELEGRAM_OWNER_IDS', 'BOT_OWNER_ID'].map((key) => [key, process.env[key]]));
   try {

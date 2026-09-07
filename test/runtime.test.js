@@ -125,16 +125,6 @@ test('the real supervisor keeps a worker process alive and respawns it', async (
   const os = require('node:os');
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-supervisor-'));
-  // The bot validates PORT as a real port number, so reserve one before booting.
-  const freePort = await new Promise((resolve, reject) => {
-    const probe = require('node:net').createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
-
   const parent = spawn(process.execPath, [path.join(__dirname, '..', 'index.js')], {
     cwd: path.join(__dirname, '..'),
     env: {
@@ -143,7 +133,6 @@ test('the real supervisor keeps a worker process alive and respawns it', async (
       OWNER_NAME: 'F!xa Dev',
       AUTH_DIR: path.join(workDir, 'session'),
       DATA_DIR: path.join(workDir, 'data'),
-      PORT: String(freePort),
       RECONNECT_BASE_DELAY_MS: '60000'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -160,6 +149,7 @@ test('the real supervisor keeps a worker process alive and respawns it', async (
   }
 
   try {
+    assert.ok(await waitFor(() => output.includes('[startup] Primary WhatsApp socket is idle; Telegram Pairing owns new sessions.'), 25000),
     assert.ok(await waitFor(() => output.includes('[startup] ANIME MD started.'), 25000),
       `worker never started; output:\n${output}`);
 
