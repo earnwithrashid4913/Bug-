@@ -31,7 +31,7 @@ test('package and supported host manifests use the production start command', ()
 });
 
 test('deployment manifests expose the required pairing configuration', () => {
-  for (const key of ['OWNER_NAME', 'BOT_NUMBER', 'SESSION_ID', 'EXPOSE_SESSION_ID', 'AUTH_METHOD']) {
+  for (const key of ['OWNER_NAME', 'BOT_NUMBER', 'SESSION_ID', 'AUTH_METHOD']) {
     assert.ok(Object.hasOwn(heroku.env, key), `app.json is missing ${key}`);
     assert.match(render, new RegExp(`- key: ${key}`), `render.yaml is missing ${key}`);
     assert.match(envExample, new RegExp(`^${key}=|^# ${key}=`, 'm'), `.env.example is missing ${key}`);
@@ -46,7 +46,7 @@ test('documentation, metadata, and committed assets match the current bot', () =
   assert.match(readme, /ANIME MD/);
   assert.match(deployment, /^# ANIME MD Deployment Guide$/m);
   assert.match(deployment, /`>=20\.9` engine requirement/);
-  assert.match(readme, /committed local fallback assets plus/);
+  assert.match(readme, /supplied Catbox artwork/);
   assert.doesNotMatch(JSON.stringify(metadata), /gemini/i);
   assert.deepEqual(metadata.majorCapabilities, []);
 

@@ -1,12 +1,12 @@
 # ANIME MD
 
-A clean, configurable WhatsApp bot built with Baileys and maintained under the **Only Fixa Dev** project.
+A clean, configurable WhatsApp bot built with Baileys and maintained by **F!xa Dev**.
 
 > Change the displayed bot name in `.env` with `BOT_NAME`. It is intentionally not hard-coded throughout the source.
 
 ## Project ownership
 
-- **Developed By:** GOATS MODS
+- **Developed By:** F!xa Dev
 - **Global Owner:** configured by `OWNER_NAME`
 - **Owner WhatsApp:** derived from `BOT_NUMBER` (`https://wa.me/<BOT_NUMBER>`)
 - **WhatsApp Channel:** https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T
@@ -81,10 +81,10 @@ The bot has exactly one owner, so only these two values need to be set.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OWNER_NAME` | `Enter Your Name` | Global owner display name. |
-| `BOT_NUMBER` | `923001234567` | The WhatsApp number the bot links to. **Country code included, no `+`.** |
+| `OWNER_NAME` | `Rashid Hussain` | Owner display name. |
+| `BOT_NUMBER` | `923448170040` | The WhatsApp number the bot links to. **Country code included, no `+`.** |
 
-`BOT_NUMBER` is validated strictly: `923001234567` is accepted, `+923001234567` is rejected with the guidance *"Enter your WhatsApp number with country code, without +."* There is no country selector or separate country-code field anywhere — the country code is part of the number. The owner number, owner link, and developer contact are all derived from it, so there are no duplicate identity fields. `PAIRING_NUMBER` is still read as a legacy alias for `BOT_NUMBER` so older deployments keep booting.
+`BOT_NUMBER` is validated strictly: `923448170040` is accepted, `+923001234567` is rejected with the guidance *"Enter your WhatsApp number with country code, without +."* There is no country selector or separate country-code field anywhere — the country code is part of the number. The owner number and owner link are derived from it. The permanent developer identity is source-controlled as **F!xa Dev** and is never derived from owner configuration. `PAIRING_NUMBER` is still read as a legacy alias for `BOT_NUMBER` so older deployments keep booting.
 
 ### Internal settings (optional, safe defaults built in)
 
@@ -96,7 +96,7 @@ The bot has exactly one owner, so only these two values need to be set.
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
 | `STICKER_PACKNAME` | `ANIME MD` | Sticker pack name used by `!sticker`. |
-| `STICKER_AUTHOR` | `Only F!xa Dev` | Sticker publisher used by `!sticker`. |
+| `STICKER_AUTHOR` | `F!xa Dev` | Sticker publisher used by `!sticker`. |
 | `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
 | `AUTH_METHOD` | `pairing` | Keep `pairing`. `qr` is an internal, terminal-only fallback that the dashboard never offers. |
 | `AUTH_DIR` | `./session` | Baileys credentials path; keep private and persistent. |
@@ -146,13 +146,13 @@ There is no QR option and no country selector in the dashboard: the country code
 
 Heroku and a Render service without its persistent disk wipe `session/` on every restart. `SESSION_ID` is the contents of `session/creds.json` — raw JSON or its base64 form (a `PREFIX~~<base64>` wrapper is also accepted).
 
-1. Pair WhatsApp once with `EXPOSE_SESSION_ID=true`.
-2. Open the dashboard's **Session** card and copy the `SESSION_ID` (or copy `session/creds.json` from disk).
-3. Store it as the `SESSION_ID` environment variable, set `EXPOSE_SESSION_ID=false`, and restart.
+1. Pair WhatsApp once on a private host.
+2. Copy `session/creds.json` securely from the host filesystem.
+3. Store it as the `SESSION_ID` environment variable and restart.
 
 The bot writes it to `AUTH_DIR/creds.json` at startup — the log shows `[session] Wrote credentials from SESSION_ID to …` — and reuses it on every later boot. An invalid `SESSION_ID` is reported in the log without crashing, so the dashboard stays reachable for a fresh pairing.
 
-A `SESSION_ID` is a complete WhatsApp login. Never commit it, never paste it into a public chat, and re-pair if it leaks. Session export is off by default and requires an explicit `EXPOSE_SESSION_ID=true`.
+A `SESSION_ID` is a complete WhatsApp login. Never commit it, paste it into a public chat, or expose it through a web endpoint. Re-pair if it leaks.
 
 ### Terminal QR (internal fallback)
 
@@ -174,7 +174,7 @@ Theme configuration lives in one place: [`system/theme.js`](system/theme.js). It
 | Sukuna | Jujutsu Kaisen | blood red + black | rising cursed embers |
 | Asta | Black Clover | emerald + black | sharp anti-magic shards |
 
-- The active theme covers the **whole page**: full-screen artwork, dark overlay, theme gradient, glow, particles, cards, buttons, the pairing box and the *Developed By: GOATS MODS* credit.
+- The active theme covers the **whole page**: full-screen artwork, dark overlay, theme gradient, glow, particles, cards, buttons, the pairing box and the *Developed By: F!xa Dev* credit.
 - Artwork rotates every **5 seconds** on a single controlled timer with a crossfade, subtle scale/blur and preloading of the next frame. Timers and animation frames are cancelled when the tab is hidden or the page unloads.
 - A frame that fails to load is skipped in favour of the next image **of the same theme**; if every image fails, the artwork layer hides and the themed gradient/glow/particles remain. No replacement URLs are ever invented.
 - Switching theme repaints colours, glow, particles and branding through CSS transitions — no reload, no flash, no layout jump. The choice persists in `localStorage` and is mirrored to the server.
@@ -244,7 +244,7 @@ The bot keeps an outbound WhatsApp WebSocket **and** serves the pairing dashboar
 - Required production paths: `AUTH_DIR=/var/data/session` and `DATA_DIR=/var/data/data`
 - Set `OWNER_NAME` and `BOT_NUMBER` (country code, no `+`) before the first pairing
 
-Render injects `PORT` automatically; the dashboard binds `0.0.0.0` on that port. Render's filesystem is ephemeral without a disk, so a deployment/restart without persistent storage loses the WhatsApp session. Either attach a disk or pair once with `EXPOSE_SESSION_ID=true`, copy the SESSION_ID from the dashboard, and store it in the Render environment.
+Render injects `PORT` automatically; the dashboard binds `0.0.0.0` on that port. Render's filesystem is ephemeral without a disk, so a deployment/restart without persistent storage loses the WhatsApp session. Attach a disk, or securely copy `session/creds.json` from a private host and store it as `SESSION_ID` in the Render environment.
 
 ## Heroku deployment
 
@@ -252,9 +252,8 @@ Heroku wipes its filesystem on every dyno restart, so this host always runs from
 
 1. Click **Deploy to Heroku** on the repository (or `heroku create` + `git push heroku main`) so `app.json` supplies the template.
 2. Fill in `OWNER_NAME` and `BOT_NUMBER`, choose the `THEME`, and leave `SESSION_ID` empty for now.
-3. Set `EXPOSE_SESSION_ID=true`, deploy, and open the generated `*.herokuapp.com` URL.
-4. Pair WhatsApp from the dashboard, then copy the **SESSION_ID** shown in the Session card.
-5. Paste it into the `SESSION_ID` config var, set `EXPOSE_SESSION_ID=false`, and restart the dyno.
+3. Pair WhatsApp on a private host and securely copy its `session/creds.json`.
+4. Paste that credential as the `SESSION_ID` config var and restart the dyno.
 
 The bot restores that session on every boot, so redeploys no longer log it out.
 
@@ -273,9 +272,9 @@ For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Credits
 
-- **Developed By: GOATS MODS**
+- **Developed By: F!xa Dev**
 - Global project owner: configured through `OWNER_NAME`
-- Character artwork uses committed local fallback assets plus the project owner's hosted Catbox URLs listed in [`system/theme.js`](system/theme.js).
+- Character artwork uses only the supplied Catbox artwork URLs listed in [`system/theme.js`](system/theme.js).
 - WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys) and its respective maintainers
 - The Apache-2.0 license and third-party dependency licenses remain with their respective authors.
 

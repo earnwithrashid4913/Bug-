@@ -60,16 +60,15 @@ test('dashboard reports real configuration, themes and connection state', async 
   const { status, payload, headers } = await call('/api/bootstrap');
   assert.equal(status, 200);
   assert.equal(payload.developer, CANONICAL_IDENTITY.organization);
+  // This isolated server intentionally verifies deployer overrides without
+  // affecting the immutable developer credit.
   assert.equal(payload.ownerName, 'F!xa Dev');
   assert.equal(payload.botNumber, '923001234567');
   assert.equal(payload.activeThemeId, 'gojo');
   assert.equal(payload.rotationIntervalMs, 5_000);
   assert.deepEqual(payload.themes.map((theme) => theme.id), ['makima', 'nami', 'nezuko', 'shinobu', 'gojo', 'sukuna', 'asta']);
-  // Hybrid artwork: the committed local asset paints first, the hosted set
-  // continues the rotation.
   const gojo = payload.themes.find((theme) => theme.id === 'gojo');
-  assert.equal(gojo.images[0], '/assets/characters/gojo.jpg');
-  assert.equal(gojo.images[1], 'https://files.catbox.moe/lar8xz.jpg');
+  assert.equal(gojo.images[0], 'https://files.catbox.moe/lar8xz.jpg');
 
   // A dry-run process has no socket, so it must not claim to be connected.
   assert.equal(payload.connection.connected, false);
@@ -174,87 +173,8 @@ test('status endpoint mirrors the live connection object', async () => {
   assert.equal(health.payload.ok, true);
 });
 
-// --- session export gating -------------------------------------------------
-
-test('never exports the session unless it is explicitly enabled', async () => {
-  const denied = await call('/api/session');
-  assert.equal(denied.status, 403);
-  assert.equal(denied.payload.ok, false);
-  assert.match(denied.payload.error, /EXPOSE_SESSION_ID/);
-});
-
-test('exports the paired session as a portable SESSION_ID when enabled', async () => {
-  const { once } = require('node:events');
-  const fs = require('node:fs');
-  const os = require('node:os');
-  const path = require('node:path');
-
-  const authDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-session-'));
-  const creds = {
-    registrationId: 7,
-    noiseKey: { private: { type: 'Buffer', data: [1] }, public: { type: 'Buffer', data: [2] } },
-    me: { id: '923001234567:1@s.whatsapp.net', name: 'Owner' }
-  };
-  fs.writeFileSync(path.join(authDir, 'creds.json'), JSON.stringify(creds), 'utf8');
-
-  const unlocked = createWebServer({
-    config: { ...config, authDir, exposeSessionId: true },
-    themes: listThemes(),
-    getActiveThemeId: app.getActiveThemeId,
-    setActiveTheme: app.setActiveTheme,
-    getStatus: () => ({ ...app.liveStatus }),
-    requestPairing: app.handlePairingRequest
-  });
-
-  await new Promise((resolve) => unlocked.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${unlocked.address().port}`;
-
-  try {
-    const bootstrap = await (await fetch(`${base}/api/bootstrap`)).json();
-    assert.equal(bootstrap.session.exportEnabled, true);
-
-    const response = await fetch(`${base}/api/session`);
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get('cache-control'), 'no-store');
-
-    const body = await response.json();
-    assert.equal(body.ok, true);
-    assert.equal(JSON.parse(body.sessionId).registrationId, 7);
-
-    // No credentials in the locked dashboard's bootstrap payload.
-    const lockedBootstrap = await (await fetch(`${origin}/api/bootstrap`)).json();
-    assert.equal(lockedBootstrap.session.exportEnabled, false);
-    assert.equal(JSON.stringify(lockedBootstrap).includes('noiseKey'), false);
-  } finally {
-    unlocked.close();
-    await once(unlocked, 'close');
-  }
-});
-
-test('reports 404 for a session export before pairing', async () => {
-  const { once } = require('node:events');
-  const fs = require('node:fs');
-  const os = require('node:os');
-  const path = require('node:path');
-
-  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-session-empty-'));
-  const unlocked = createWebServer({
-    config: { ...config, authDir: emptyDir, exposeSessionId: true },
-    themes: listThemes(),
-    getActiveThemeId: app.getActiveThemeId,
-    setActiveTheme: app.setActiveTheme,
-    getStatus: () => ({ ...app.liveStatus }),
-    requestPairing: app.handlePairingRequest
-  });
-
-  await new Promise((resolve) => unlocked.listen(0, '127.0.0.1', resolve));
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${unlocked.address().port}/api/session`);
-    assert.equal(response.status, 404);
-    assert.equal((await response.json()).ok, false);
-  } finally {
-    unlocked.close();
-    await once(unlocked, 'close');
-  }
+test('dashboard has no endpoint that exports WhatsApp credentials', async () => {
+  const response = await fetch(`${origin}/api/session`);
+  assert.equal(response.status, 404);
+  assert.equal(await response.text(), 'Not found.');
 });

@@ -25,8 +25,8 @@ const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
 
 test('owner configuration exposes a single owner and the bot number', () => {
-  assert.equal(config.ownerName, 'Enter Your Name');
-  assert.equal(config.botNumber, '923001234567');
+  assert.equal(config.ownerName, 'Rashid Hussain');
+  assert.equal(config.botNumber, '923448170040');
   assert.equal(config.ownerNumber, config.botNumber);
   assert.deepEqual([...config.ownerNumbers], [config.botNumber]);
   // Identity comes from the canonical source in system/security.js, so it

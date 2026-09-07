@@ -70,6 +70,7 @@ let stopping = false;
 let resetting = false;
 let currentPairingState;
 let telegramController;
+let connectionCardSent = false;
 
 // Live mirror of the WhatsApp socket state. The dashboard renders this object
 // verbatim, so it is only ever written from real socket events — the UI never
@@ -167,25 +168,33 @@ function formatPairingCode(code) {
 
 async function requestPairingCode(socket, pairingState, targetNumber) {
   if (!socket || pairingState.registered) return liveStatus.pairingCode;
+  // Web and Telegram controls share this one promise. This prevents two
+  // requestPairingCode IQs when a user taps twice or the automatic startup
+  // request overlaps with a controller request.
+  if (pairingState.requestPromise) return pairingState.requestPromise;
 
   const number = targetNumber || config.botNumber;
-
-  try {
-    const code = await socket.requestPairingCode(number);
-    pairingState.requested = true;
-    pairingState.pending = false;
-    pairingState.lastQr = undefined;
-    liveStatus.pairingCode = code;
-    liveStatus.pairingNumber = number;
-    liveStatus.pairingRequestedAt = Date.now();
-    setStatus('pairing', `Enter the pairing code in WhatsApp on ${number}.`);
-    console.log(chalk.green(`[pairing] Enter this code in WhatsApp (${number}): ${formatPairingCode(code)}`));
-    return code;
-  } catch (error) {
-    pairingState.pending = false;
-    console.error(`[pairing] Could not request a pairing code: ${error.message}`);
-    throw error;
-  }
+  pairingState.pending = true;
+  pairingState.requestPromise = (async () => {
+    try {
+      const code = await socket.requestPairingCode(number);
+      pairingState.requested = true;
+      pairingState.lastQr = undefined;
+      liveStatus.pairingCode = code;
+      liveStatus.pairingNumber = number;
+      liveStatus.pairingRequestedAt = Date.now();
+      setStatus('pairing', `Enter the pairing code in WhatsApp on ${number}.`);
+      console.log(chalk.green(`[pairing] Enter this code in WhatsApp (${number}): ${formatPairingCode(code)}`));
+      return code;
+    } catch (error) {
+      console.error(`[pairing] Could not request a pairing code: ${error.message}`);
+      throw error;
+    } finally {
+      pairingState.pending = false;
+      pairingState.requestPromise = undefined;
+    }
+  })();
+  return pairingState.requestPromise;
 }
 
 // Called by the dashboard. Real errors surface to the user; nothing is faked.
@@ -231,7 +240,9 @@ function startTelegramController() {
     token: config.telegramBotToken,
     owners: config.telegramOwnerIds,
     controllerStore: new TelegramControllerStore(config.telegramControllerDbPath),
-    pairing: { requestPairing: handlePairingRequest, getStatus: async () => ({ ...liveStatus }), stopSession: stopPairingSession }
+    pairing: { requestPairing: handlePairingRequest, getStatus: async () => ({ ...liveStatus }), stopSession: stopPairingSession },
+    startImage: config.telegramStartImage,
+    connectedImage: config.telegramConnectedImage
   });
   telegramController.start();
 }
@@ -282,7 +293,8 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     console.log(chalk.cyan(`[connection] Logged in as: ${socket.user?.name || 'Unknown'} (${socket.user?.id?.split(':')[0] || 'n/a'})`));
     // Send the connection card only after Baileys confirms the open state.
     // A media-delivery problem must not change the real connection status.
-    if (socket.user?.id) {
+    if (socket.user?.id && !connectionCardSent) {
+      connectionCardSent = true;
       void socket.sendMessage(socket.user.id, {
         image: { url: config.connectionSuccessImage },
         caption: `*${config.botName} connected successfully.*\nYour WhatsApp session is now active.`
@@ -385,6 +397,7 @@ async function startBot() {
     const pairingState = {
       pending: false,
       requested: false,
+      requestPromise: undefined,
       registered: state.creds.registered,
       // True once the WhatsApp handshake completed and a code can be issued.
       readyForPairing: false,

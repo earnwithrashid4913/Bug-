@@ -30,7 +30,7 @@ const BOOTSTRAP = {
   botName: 'ANIME MD',
   ownerName: 'F!xa Dev',
   botNumber: '923001234567',
-  developer: 'Goats Mods',
+  developer: 'F!xa Dev',
   rotationIntervalMs: ROTATION_INTERVAL_MS,
   activeThemeId: 'gojo',
   session: { exportEnabled: false, configured: false },
@@ -358,7 +358,7 @@ test('dashboard boots, paints the active theme and starts exactly two timers', a
 
   assert.equal(dash.el.botName.textContent, 'ANIME MD');
   assert.equal(dash.el.ownerName.textContent, 'F!xa Dev');
-  assert.equal(dash.el.credit.textContent, 'Developed By: Goats Mods');
+  assert.equal(dash.el.credit.textContent, 'Developed By: F!xa Dev');
   assert.equal(dash.el.phoneNumber.value, '923001234567');
   assert.equal(dash.el.rotationNote.textContent, 'background rotates every 5s');
   assert.equal(dash.el.themeName.textContent, 'Gojo');

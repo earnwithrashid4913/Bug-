@@ -1,6 +1,6 @@
 {
   "name": "ANIME MD WhatsApp Bot",
-  "description": "Anime-themed WhatsApp bot with a built-in Web Pairing dashboard. Developed By: GOATS MODS.",
+  "description": "Anime-themed WhatsApp bot with a built-in Web Pairing dashboard. Developed By: F!xa Dev.",
   "keywords": [
     "whatsapp",
     "baileys",
@@ -14,19 +14,15 @@
   "env": {
     "OWNER_NAME": {
       "description": "Owner display name.",
-      "value": "Only Fixa Dev"
+      "value": "Rashid Hussain"
     },
     "BOT_NUMBER": {
       "description": "WhatsApp number the bot links to. Country code included, WITHOUT the + (example: 923001234567).",
-      "value": ""
+      "value": "923448170040"
     },
     "SESSION_ID": {
       "description": "Contents of session/creds.json (raw JSON or base64). Required on Heroku: the filesystem is wiped on every dyno restart.",
       "value": ""
-    },
-    "EXPOSE_SESSION_ID": {
-      "description": "Allow the dashboard to show your SESSION_ID after pairing (true/false). Only enable on a private deployment.",
-      "value": "false"
     },
     "BOT_NAME": {
       "description": "Bot display name.",

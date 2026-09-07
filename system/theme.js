@@ -25,11 +25,10 @@ function catbox(...slugs) {
   return [...new Set(slugs.map((slug) => `${CATBOX}/${slug}.jpg`))];
 }
 
-// Committed local artwork is painted first, so the dashboard always has art
-// even when the host has no outbound network. The hosted set then continues the
-// rotation, and a hosted frame that fails to load falls back through the list.
+// The supplied hosted artwork is the complete registry. Keeping this list
+// literal prevents unrelated local artwork being mixed into a rotation.
 function artwork(id, ...slugs) {
-  return Object.freeze([`/assets/characters/${id}.jpg`, ...catbox(...slugs)]);
+  return Object.freeze(catbox(...slugs));
 }
 
 const MAKIMA = Object.freeze({

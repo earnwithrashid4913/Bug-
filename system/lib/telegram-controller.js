@@ -43,11 +43,13 @@ function helpText() {
 }
 
 class TelegramController {
-  constructor({ token, owners = [], controllerStore, pairing, fetchImpl = globalThis.fetch, log = console }) {
+  constructor({ token, owners = [], controllerStore, pairing, startImage = '', connectedImage = '', fetchImpl = globalThis.fetch, log = console }) {
     this.token = token;
     this.bootstrapOwners = new Set(owners.map(normalizeTelegramId));
     this.controllerStore = controllerStore;
     this.pairing = pairing;
+    this.startImage = startImage;
+    this.connectedImage = connectedImage;
     this.fetch = fetchImpl;
     this.log = log;
     this.offset = 0;
@@ -74,6 +76,11 @@ class TelegramController {
     return this.api('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown' });
   }
 
+  async replyPhoto(chatId, image, caption) {
+    if (!image) return this.reply(chatId, caption);
+    return this.api('sendPhoto', { chat_id: chatId, photo: image, caption, parse_mode: 'Markdown' });
+  }
+
   reserveSensitiveRequest(senderId) {
     const now = Date.now();
     const previous = this.sensitiveRequests.get(String(senderId)) || 0;
@@ -95,7 +102,7 @@ class TelegramController {
       switch (command.name) {
         case 'help':
         case 'start':
-          await this.reply(command.chatId, helpText());
+          await this.replyPhoto(command.chatId, this.startImage, helpText());
           return;
         case 'pair': {
           this.reserveSensitiveRequest(command.senderId);
@@ -112,7 +119,9 @@ class TelegramController {
         }
         case 'status': {
           const status = await this.pairing.getStatus();
-          await this.reply(command.chatId, `*ANIME MD STATUS*\nWhatsApp: ${status.state}\nConnected: ${status.connected ? 'yes' : 'no'}\nUptime: ${Math.floor((Date.now() - status.startedAt) / 1000)} seconds`);
+          const text = `*ANIME MD STATUS*\nWhatsApp: ${status.state}\nConnected: ${status.connected ? 'yes' : 'no'}\nUptime: ${Math.floor((Date.now() - status.startedAt) / 1000)} seconds`;
+          if (status.connected) await this.replyPhoto(command.chatId, this.connectedImage, text);
+          else await this.reply(command.chatId, text);
           return;
         }
         case 'addowner': {

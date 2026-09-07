@@ -31,8 +31,6 @@ services:
       # Raw JSON or base64 contents of session/creds.json.
       - key: SESSION_ID
         sync: false
-      - key: EXPOSE_SESSION_ID
-        value: "false"
     disk:
       name: anime-md-auth-data
       mountPath: /var/data

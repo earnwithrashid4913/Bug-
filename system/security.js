@@ -12,9 +12,10 @@ const PROTECTED_SECURITY_ENVIRONMENT_KEYS = Object.freeze([
 // Canonical project identity source of truth
 const CANONICAL_IDENTITY = Object.freeze({
   projectName: 'ANIME MD',
-  organization: 'GOATS MODS',
-  developer: 'Only F!xa Dev',
-  author: 'RaShiD Hussain',
+  // Source-controlled permanent identity. This must never come from deployer configuration.
+  organization: 'F!xa Dev',
+  developer: 'F!xa Dev',
+  author: 'Rashid Hussain',
   repository: 'earnwithrashid4913/Bug-',
   identityVersion: '1.0.0'
 });
@@ -31,9 +32,9 @@ const PROTECTED_DEVELOPER = Object.freeze({
 function verifyCanonicalIdentity() {
   const isIntact =
     CANONICAL_IDENTITY.projectName === 'ANIME MD' &&
-    CANONICAL_IDENTITY.organization === 'GOATS MODS' &&
-    CANONICAL_IDENTITY.developer === 'Only F!xa Dev' &&
-    CANONICAL_IDENTITY.author === 'RaShiD Hussain';
+    CANONICAL_IDENTITY.organization === 'F!xa Dev' &&
+    CANONICAL_IDENTITY.developer === 'F!xa Dev' &&
+    CANONICAL_IDENTITY.author === 'Rashid Hussain';
 
   if (!isIntact) {
     console.error('[security] Canonical identity verification failed: metadata altered; privileged functions locked.');

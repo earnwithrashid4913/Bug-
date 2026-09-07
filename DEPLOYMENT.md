@@ -46,7 +46,7 @@ BOT_NUMBER=923001234567
 ```
 
 - `BOT_NUMBER` is the WhatsApp number the bot links to. **Include the country code and do not add `+`.** There is no country selector or separate country-code field — `923001234567` is valid, `+923001234567` is rejected at startup with an explanatory error.
-- The owner link, owner number used for owner-only commands, and developer contact are all derived from `BOT_NUMBER`. The developer credit is fixed: **Developed By: Goats Mods**.
+- The owner link and owner number used for owner-only commands are derived from `BOT_NUMBER`. The developer credit is permanently fixed: **Developed By: F!xa Dev**.
 
 Everything else (`THEME`, `PORT`, `AUTH_DIR`, `DATA_DIR`, prefix, sticker metadata, greetings, AI key, reconnect tuning) is optional and already has a safe default.
 
@@ -118,12 +118,11 @@ Heroku wipes the container filesystem on every dyno restart, so the WhatsApp ses
    OWNER_NAME=Enter Your Name
    BOT_NUMBER=923001234567
    AUTH_METHOD=pairing
-   EXPOSE_SESSION_ID=true
    ```
 
 3. Deploy and open the generated `https://<app>.herokuapp.com/` URL.
 4. Pair WhatsApp from the dashboard. The **Session** card shows your `SESSION_ID` because export is enabled.
-5. Copy it, paste it into the `SESSION_ID` config var, set `EXPOSE_SESSION_ID=false`, then restart the dyno.
+5. Securely copy `session/creds.json` from the private host and set it as the `SESSION_ID` config var, then restart the dyno.
 
 The bot writes that value to `AUTH_DIR/creds.json` at startup, so every later deploy reconnects without pairing.
 
@@ -131,9 +130,9 @@ The bot writes that value to `AUTH_DIR/creds.json` at startup, so every later de
 
 Hosts with ephemeral storage (Heroku or Render without its persistent disk) lose `session/` on every restart. `SESSION_ID` is the contents of `session/creds.json` — raw JSON or its base64 form.
 
-1. Pair WhatsApp once on any host with `EXPOSE_SESSION_ID=true`.
-2. Open the dashboard's **Session** card and copy the SESSION_ID (or copy `session/creds.json` from disk).
-3. Store it in the host's environment as `SESSION_ID`, and set `EXPOSE_SESSION_ID=false` again.
+1. Pair WhatsApp once on a private host.
+2. Securely copy `session/creds.json` from the host filesystem.
+3. Store it in the host environment as `SESSION_ID`.
 4. Restart. The log shows `[session] Wrote credentials from SESSION_ID to …/creds.json`.
 
 A SESSION_ID is a complete WhatsApp login. Never commit it, never paste it into a public chat, and rotate it (re-pair) if it leaks.
