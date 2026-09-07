@@ -19,12 +19,12 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 - Single-owner configuration: `OWNER_NAME` and `BOT_NUMBER` are the only user-facing settings
 - Configurable bot identity, owner records, command prefix, public/self mode, paths, and reconnect tuning
 - Exponential, bounded reconnect handling that avoids looping on logout, bad-session, and connection-replaced events, plus a process supervisor that restarts the worker after a crash or `!restart`
-- `SESSION_ID` support so ephemeral hosts (Heroku, Render free tier, panels without a volume) keep their WhatsApp session across redeploys
+- `SESSION_ID` support so ephemeral hosts (Heroku or Render without its persistent disk) keep their WhatsApp session across redeploys
 - Persisted public/self mode (`data/mode.json`) that survives restarts
 - Safe command handler for menu, ping, status, owner details, group mentions, group greetings, safe group administration, channel lookup, request forwarding, premium records, sticker conversion, and sticker-to-image conversion
 - Owner-only public/self mode, premium management, and host-managed restart command
 - Persistent premium and group-greeting data with atomic writes
-- Deployment files for every supported host: Render (`render.yaml`), Heroku (`app.json` + `Procfile`), Pterodactyl panels, Bot-Hosting.net, Katabump, Optiklink, Termux/SSH/Ubuntu and pm2
+- Deployment manifests for the supported managed hosts: Render (`render.yaml`) and Heroku (`app.json` + `Procfile`)
 
 ## Safety boundary
 
@@ -115,7 +115,7 @@ There is no QR option and no country selector in the dashboard: the country code
 
 ### SESSION_ID (persistent hosts without storage)
 
-Heroku, Render's free tier and panels without a volume wipe `session/` on every restart. `SESSION_ID` is the contents of `session/creds.json` — raw JSON or its base64 form (a `PREFIX~~<base64>` wrapper is also accepted).
+Heroku and a Render service without its persistent disk wipe `session/` on every restart. `SESSION_ID` is the contents of `session/creds.json` — raw JSON or its base64 form (a `PREFIX~~<base64>` wrapper is also accepted).
 
 1. Pair WhatsApp once with `EXPOSE_SESSION_ID=true`.
 2. Open the dashboard's **Session** card and copy the `SESSION_ID` (or copy `session/creds.json` from disk).
@@ -204,37 +204,6 @@ npm run check       # lint and test together
 
 The dashboard itself can be checked locally with `npm start` and a browser at `http://localhost:3000`.
 
-## Termux / SSH / Ubuntu
-
-Termux, an SSH box or any Ubuntu VPS works when it provides Node.js 20.9 or newer and stays running:
-
-```bash
-# Termux
-pkg update && pkg upgrade
-pkg install nodejs-lts git
-
-# Ubuntu / SSH
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y nodejs npm git
-
-git clone <your-repository-url>
-cd Bug-
-cp .env.example .env   # set OWNER_NAME + BOT_NUMBER
-npm install
-npm start
-```
-
-Open the printed dashboard URL, get your pairing code, and pair. These hosts keep `session/` on disk, so the session survives a restart. Never upload the `session/` directory anywhere.
-
-### Keep it running 24/7 with pm2
-
-```bash
-npm install -g pm2
-pm2 start index.js
-pm2 save
-pm2 logs
-```
-
 ## Render deployment
 
 The bot keeps an outbound WhatsApp WebSocket **and** serves the pairing dashboard, so deploy the included [`render.yaml`](render.yaml) as a **Web Service** (health check: `/health`).
@@ -259,26 +228,6 @@ Heroku wipes its filesystem on every dyno restart, so this host always runs from
 5. Paste it into the `SESSION_ID` config var, set `EXPOSE_SESSION_ID=false`, and restart the dyno.
 
 The bot restores that session on every boot, so redeploys no longer log it out.
-
-## Panel deployment (Pterodactyl)
-
-1. Download the repository as a zip and create a **Node.js** server (Node.js 20.9+).
-2. Upload the zip to the server's file manager and extract it.
-3. Run `npm install` in the panel terminal.
-4. Create a `.env` file with `OWNER_NAME` and `BOT_NUMBER` (or set them in the panel's environment variables).
-5. Press **Start**, open the server's port/URL, and pair from the dashboard.
-
-Panel storage is persistent, so `session/` survives restarts. `!restart` is supported directly — the bot supervises its own worker process.
-
-## Bot-Hosting.net / Katabump / Optiklink
-
-The same flow as the panel hosts: upload or clone the project, `npm install`, set `OWNER_NAME` + `BOT_NUMBER`, start with `npm start`, then pair from the dashboard URL the host gives you.
-
-- **Bot-Hosting.net** (free): select a Node.js bot template, upload the files, set the port the host assigns to `PORT`, and start.
-- **Katabump** (free): create a Node.js service, upload the project, `npm install`, `npm start`.
-- **Optiklink** (free): same steps; make sure the dashboard port is exposed.
-
-If the host resets its filesystem, keep the session with `SESSION_ID` as described in [Session handling](#authentication-and-session-handling).
 
 ## Troubleshooting
 
