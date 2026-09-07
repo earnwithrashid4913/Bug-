@@ -279,8 +279,7 @@ function loadConfig() {
     automationDbPath,
 
     // --- Telegram controller -----------------------------------------------
-    // Telegram Bot Token — get it from @BotFather.
-    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', ''),
+    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', readString('BOT_TOKEN', '')),
     telegramBotLink: parseTelegramLink(),
     telegramOwnerIds: Object.freeze(telegramOwnerIds),
     telegramControllerDbPath,

@@ -13,8 +13,8 @@
     "smoke": "BOT_DRY_RUN=true node index.js",
     "audit:source": "node scripts/source-audit.js",
     "lint": "node scripts/syntax-check.js",
-    "test": "node --test",
-    "check": "node scripts/syntax-check.js && node --test"
+    "test": "BOT_NUMBER=923001234567 node --test",
+    "check": "node scripts/syntax-check.js && BOT_NUMBER=923001234567 node --test"
   },
   "keywords": [
     "whatsapp",
