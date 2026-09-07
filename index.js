@@ -42,10 +42,7 @@ const isChildProcess = process.argv.includes(CHILD_FLAG);
 // gives up instead of looping forever.
 const MAX_WORKER_RESTARTS_PER_MINUTE = 5;
 let workerExits = [];
-
-// Grace period after the WhatsApp handshake before a pairing code is requested,
-// so the registration query is not sent into a settling socket.
-const PAIRING_SETTLE_MS = 3_000;
+const PAIRING_CODE_TTL_MS = 5 * 60_000;
 
 // WhatsApp/socket noise that must never take the whole process down. The
 // connection layer filters these; each one is already handled by the
@@ -66,6 +63,7 @@ let webServer;
 let childProcess;
 let workerLaunchTimer;
 let reconnectTimer;
+let pairingExpiryTimer;
 let reconnectAttempts = 0;
 let stopping = false;
 let resetting = false;
@@ -148,6 +146,24 @@ function setStatus(state, message, extra = {}) {
   });
 }
 
+function clearPairingAttempt(pairingState, message) {
+  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
+  pairingExpiryTimer = undefined;
+  if (pairingState) pairingState.requested = false;
+  setStatus('pairing', message, { pairingCode: null, pairingNumber: null, pairingRequestedAt: null });
+}
+
+function schedulePairingExpiry(pairingState, number) {
+  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
+  pairingExpiryTimer = setTimeout(() => {
+    pairingExpiryTimer = undefined;
+    if (pairingState === currentPairingState && !pairingState.registered && liveStatus.pairingNumber === number) {
+      clearPairingAttempt(pairingState, 'The previous pairing code expired. Enter a number to request a new code.');
+    }
+  }, PAIRING_CODE_TTL_MS);
+  pairingExpiryTimer.unref();
+}
+
 function renderQrCode(qr, pairingState) {
   if (pairingState.lastQr === qr) return;
   pairingState.lastQr = qr;
@@ -170,11 +186,15 @@ function formatPairingCode(code) {
 async function requestPairingCode(socket, pairingState, targetNumber) {
   if (!socket || pairingState.registered) return liveStatus.pairingCode;
   // Web and Telegram controls share this one promise. This prevents two
-  // requestPairingCode IQs when a user taps twice or the automatic startup
-  // request overlaps with a controller request.
+  // requestPairingCode IQs when a user taps twice or a web request overlaps
+  // with an authorized Telegram controller request.
   if (pairingState.requestPromise) return pairingState.requestPromise;
 
-  const number = targetNumber || config.botNumber;
+  const number = String(targetNumber || '').trim();
+  if (!number) throw Object.assign(new Error('Enter a WhatsApp number to request a pairing code.'), { status: 400 });
+  if (liveStatus.pairingNumber && liveStatus.pairingNumber !== number) {
+    throw Object.assign(new Error('A pairing attempt is already active. Complete it or wait for it to expire before pairing another number.'), { status: 409 });
+  }
   pairingState.pending = true;
   pairingState.requestPromise = (async () => {
     try {
@@ -185,6 +205,7 @@ async function requestPairingCode(socket, pairingState, targetNumber) {
       liveStatus.pairingNumber = number;
       liveStatus.pairingRequestedAt = Date.now();
       setStatus('pairing', `Enter the pairing code in WhatsApp on ${number}.`);
+      schedulePairingExpiry(pairingState, number);
       console.log(chalk.green(`[pairing] Enter this code in WhatsApp (${number}): ${formatPairingCode(code)}`));
       return code;
     } catch (error) {
@@ -297,15 +318,7 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     pairingState.readyForPairing = true;
 
     if (config.authMethod === 'pairing') {
-      setStatus('pairing', `Requesting a pairing code for ${config.botNumber}…`);
-      // Give the socket a moment to settle before the registration IQ so its
-      // automatic pairing request is not sent into a settling connection.
-      await new Promise((resolve) => setTimeout(resolve, PAIRING_SETTLE_MS).unref());
-      if (stopping || socket !== activeSocket) return;
-
-      await requestPairingCode(socket, pairingState, config.botNumber).catch((error) => {
-        setStatus('connecting', `Pairing code request failed: ${error.message}`);
-      });
+      setStatus('pairing', 'Ready for a pairing request from the web dashboard or authorized Telegram controller.');
     } else {
       // Internal, terminal-only fallback. The dashboard never offers QR.
       setStatus('connecting', 'Scan the QR code printed in the server terminal.');
@@ -316,6 +329,8 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   if (update.connection === 'open') {
     reconnectAttempts = 0;
     pairingState.registered = true;
+    if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
+    pairingExpiryTimer = undefined;
     setStatus('connected', `${config.botName} is connected to WhatsApp.`, {
       pairingCode: null,
       pairingRequestedAt: null,
@@ -343,8 +358,12 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   pairingState.readyForPairing = false;
   const reason = disconnectStatusCode(update.lastDisconnect);
   const label = disconnectLabels[reason] || `Unknown disconnect reason: ${reason ?? 'not supplied'}.`;
+  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
+  pairingExpiryTimer = undefined;
   setStatus(reason === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected', label, {
     pairingCode: null,
+    pairingNumber: null,
+    pairingRequestedAt: null,
     session: reason === DisconnectReason.loggedOut ? 'logged_out' : liveStatus.session
   });
   console.warn(`[connection] ${label}`);
@@ -444,7 +463,7 @@ async function startBot() {
       pairingState.registered ? 'connecting' : 'pairing',
       pairingState.registered
         ? 'Restoring the saved WhatsApp session…'
-        : `Waiting to pair ${config.botNumber}.`
+        : 'Waiting for a WhatsApp number from the web dashboard or authorized Telegram controller.'
     );
 
     socket.ev.on('creds.update', () => {
@@ -476,7 +495,7 @@ function startWebServer() {
   webServer = createWebServer({
     config,
     themes: listThemes(),
-    getActiveThemeId: () => activeTheme.id,
+    getActiveThemeId: () => activeTheme?.id || null,
     setActiveTheme,
     getStatus: () => ({ ...liveStatus, uptimeMs: Date.now() - liveStatus.startedAt }),
     requestPairing: handlePairingRequest
@@ -499,6 +518,7 @@ function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer);
   if (workerLaunchTimer) clearTimeout(workerLaunchTimer);
   console.log(`[shutdown] Received ${signal}; closing the bot process.`);
 

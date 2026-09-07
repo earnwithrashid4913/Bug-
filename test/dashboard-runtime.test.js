@@ -18,7 +18,7 @@ const { THEMES } = require('../system/theme');
 const APP_SOURCE = fs.readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
 
 const ELEMENT_IDS = [
-  'botName', 'ownerName', 'botNumber', 'themeName', 'themeIcon', 'themeSeries', 'themeVibe',
+  'botName', 'ownerName', 'themeName', 'themeIcon', 'themeSeries', 'themeVibe',
   'themeTagline', 'themeQuote', 'themeCharacter', 'themeGrid', 'statusPill', 'statusText',
   'pairForm', 'phoneNumber', 'pairButton', 'formMessage', 'codeBox', 'codeValue',
   'copyButton', 'regenerateButton', 'linkedBox', 'linkedText', 'steps', 'particles',
@@ -29,7 +29,6 @@ const ELEMENT_IDS = [
 const BOOTSTRAP = {
   botName: 'ANIME MD',
   ownerName: 'F!xa Dev',
-  botNumber: '923001234567',
   developer: 'F!xa Dev',
   activeThemeId: 'gojo',
   session: { exportEnabled: false, configured: false },
@@ -358,7 +357,7 @@ test('dashboard boots, paints the active theme and starts exactly two timers', a
   assert.equal(dash.el.botName.textContent, 'ANIME MD');
   assert.equal(dash.el.ownerName.textContent, 'F!xa Dev');
   assert.equal(dash.el.credit.textContent, 'Developed By: F!xa Dev');
-  assert.equal(dash.el.phoneNumber.value, '923001234567');
+  assert.equal(dash.el.phoneNumber.value, '');
   assert.equal(dash.el.rotationNote?.textContent, undefined);
   assert.equal(dash.el.themeName.textContent, 'Gojo');
   assert.equal(dash.shell.classList.contains('is-ready'), true);

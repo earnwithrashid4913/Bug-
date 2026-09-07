@@ -5,7 +5,6 @@
 
 process.env.BOT_DRY_RUN = 'true';
 process.env.OWNER_NAME = 'F!xa Dev';
-process.env.BOT_NUMBER = '923001234567';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

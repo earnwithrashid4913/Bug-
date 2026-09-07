@@ -59,7 +59,7 @@
 
   function cacheElements() {
     const ids = [
-      'botName', 'ownerName', 'botNumber', 'themeName', 'themeIcon', 'themeSeries', 'themeVibe',
+      'botName', 'ownerName', 'themeName', 'themeIcon', 'themeSeries', 'themeVibe',
       'themeTagline', 'themeQuote', 'themeCharacter', 'themeGrid', 'statusPill', 'statusText',
       'pairForm', 'phoneNumber', 'pairButton', 'formMessage', 'codeBox', 'codeValue',
       'copyButton', 'regenerateButton', 'linkedBox', 'linkedText', 'steps', 'particles',
@@ -609,8 +609,6 @@
 
     el.botName.textContent = bootstrap.botName;
     el.ownerName.textContent = bootstrap.ownerName;
-    el.botNumber.textContent = bootstrap.botNumber;
-    el.phoneNumber.value = bootstrap.botNumber;
     el.credit.textContent = `Developed By: ${bootstrap.developer}`;
 
     renderThemeChips();
