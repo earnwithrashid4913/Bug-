@@ -20,7 +20,7 @@ test('Telegram controller allows bootstrap owners to pair and rejects strangers'
   const replies = [];
   const controller = new TelegramController({
     token: 'token', owners: ['10'], controllerStore: { has: async () => false, add: async () => [] },
-    pairing: { requestPairing: async (number) => `code-${number}`, getStatus: async () => ({}), stopSession: async () => {} },
+    pairing: { requestPairing: async (_ownerId, number) => `code-${number}`, getStatus: async () => ({}), stopSession: async () => {} },
     fetchImpl: async (_url, init) => ({ ok: true, json: async () => ({ ok: true, result: JSON.parse(init.body) }) })
   });
   controller.reply = async (chatId, text) => replies.push({ chatId, text });

@@ -72,7 +72,7 @@ const DEFAULTS = Object.freeze({
 // HELPER FUNCTIONS — parse and validate .env values
 // ---------------------------------------------------------------------------
 
-const WHATSAPP_NUMBER_HINT = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
+const PHONE_NUMBER_HELP = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
 
 /** Read a trimmed string from process.env; return fallback if empty/missing. */
 function readString(name, fallback) {
@@ -126,10 +126,10 @@ function assertWhatsappNumber(value, fieldName = 'Phone number') {
   const raw = String(value ?? '').trim();
 
   if (raw.includes('+')) {
-    throw new Error(`${fieldName} must not contain "+". ${WHATSAPP_NUMBER_HINT}`);
+    throw new Error(`${fieldName} must not contain "+". ${PHONE_NUMBER_HELP}`);
   }
   if (!/^\d{7,15}$/.test(raw)) {
-    throw new Error(`${fieldName} must be 7-15 digits including the country code. ${WHATSAPP_NUMBER_HINT}`);
+    throw new Error(`${fieldName} must be 7-15 digits including the country code. ${PHONE_NUMBER_HELP}`);
   }
 
   return raw;
@@ -279,7 +279,10 @@ function loadConfig() {
     automationDbPath,
 
     // --- Telegram controller -----------------------------------------------
-    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', readString('BOT_TOKEN', '')),
+    // Telegram settings intentionally have no legacy aliases. Keeping one
+    // canonical name avoids accidentally enabling a controller with stale
+    // deployment variables.
+    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', ''),
     telegramBotLink: parseTelegramLink(),
     telegramOwnerIds: Object.freeze(telegramOwnerIds),
     telegramControllerDbPath,
@@ -288,6 +291,7 @@ function loadConfig() {
     theme: parseTheme(),
     webHost: readString('WEB_HOST', DEFAULTS.webHost),
     webPort: parseInteger('PORT', DEFAULTS.webPort, 1, 65_535),
+    webPairingEnabled: parseBoolean('WEB_PAIRING_ENABLED', false),
 
     // --- Group greetings ---------------------------------------------------
     welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
@@ -322,7 +326,7 @@ module.exports = {
   DEVELOPER_HANDLE,
   AUTHOR_NAME,
   PROJECT_NAME,
-  WHATSAPP_NUMBER_HINT,
+  PHONE_NUMBER_HELP,
   assertWhatsappNumber,
   config,
   loadConfig,

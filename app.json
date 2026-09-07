@@ -1,6 +1,6 @@
 {
   "name": "ANIME MD WhatsApp Bot",
-  "description": "Anime-themed WhatsApp bot with a built-in Web Pairing dashboard. Developed By: F!xa Dev.",
+  "description": "Anime-themed WhatsApp bot with isolated Telegram pairing. Developed By: F!xa Dev.",
   "keywords": [
     "whatsapp",
     "baileys",
@@ -37,8 +37,12 @@
       "value": "true"
     },
     "AUTH_METHOD": {
-      "description": "Keep 'pairing'. The dashboard is web-pairing only.",
+      "description": "Keep 'pairing' for pairing-code capable WhatsApp startup.",
       "value": "pairing"
+    },
+    "WEB_PAIRING_ENABLED": {
+      "description": "Keep false to disable legacy Web Pairing and avoid competing sockets.",
+      "value": "false"
     },
     "GROQ_API_KEY": {
       "description": "Optional key for the !ai command. Never commit a real key.",

@@ -1,6 +1,6 @@
 services:
   # The bot keeps an outbound WhatsApp WebSocket open and also serves the
-  # themed Web Pairing dashboard, so it is deployed as a web service.
+  # WhatsApp WebSocket and optional Telegram pairing controller.
   - type: web
     name: anime-md
     runtime: node
@@ -18,6 +18,8 @@ services:
         value: gojo
       - key: AUTH_METHOD
         value: pairing
+      - key: WEB_PAIRING_ENABLED
+        value: "false"
       - key: AUTH_DIR
         value: /var/data/session
       - key: DATA_DIR

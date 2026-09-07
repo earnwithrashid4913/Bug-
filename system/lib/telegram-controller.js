@@ -43,6 +43,16 @@ function helpText() {
   ].join('\n');
 }
 
+function menuMarkup() {
+  return { inline_keyboard: [[
+    { text: 'Pair WhatsApp', callback_data: 'pair_help' },
+    { text: 'Status', callback_data: 'status' }
+  ], [
+    { text: 'My sessions', callback_data: 'sessions' },
+    { text: 'Help', callback_data: 'help' }
+  ]] };
+}
+
 class TelegramController {
   constructor({ token, owners = [], controllerStore, pairing, startImage = '', connectedImage = '', fetchImpl = globalThis.fetch, log = console }) {
     this.token = token;
@@ -74,8 +84,8 @@ class TelegramController {
     return result.result;
   }
 
-  async reply(chatId, text) {
-    return this.api('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown' });
+  async reply(chatId, text, replyMarkup) {
+    return this.api('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
   }
 
   async replyPhoto(chatId, image, caption) {
@@ -93,6 +103,7 @@ class TelegramController {
   }
 
   async handleUpdate(update) {
+    if (update?.callback_query) return this.handleCallback(update.callback_query);
     const command = commandFromUpdate(update);
     if (!command?.chatId || !command.senderId) return;
     if (!(await this.authorized(command.senderId))) {
@@ -105,22 +116,23 @@ class TelegramController {
         case 'help':
         case 'start':
           await this.replyPhoto(command.chatId, this.startImage, helpText());
+          await this.reply(command.chatId, 'Choose an action, or use a command:', menuMarkup());
           return;
         case 'pair': {
           this.reserveSensitiveRequest(command.senderId);
           const number = normalizeWhatsappNumber(command.args[0]);
-          const code = await this.pairing.requestPairing(number);
+          const code = await this.pairing.requestPairing(command.senderId, number);
           await this.reply(command.chatId, `*PAIRING CODE*\nNumber: ${number}\nCode: \`${code}\``);
           return;
         }
         case 'sessions': {
-          const status = await this.pairing.getStatus();
+          const status = await this.pairing.getStatus(command.senderId);
           const number = status.botUser?.replace(/\D/g, '') || status.pairingNumber || 'none';
           await this.reply(command.chatId, `*ACTIVE SESSIONS*\n1. ${number}\nStatus: ${status.state}\nSession: ${status.session}`);
           return;
         }
         case 'status': {
-          const status = await this.pairing.getStatus();
+          const status = await this.pairing.getStatus(command.senderId);
           const text = `*ANIME MD STATUS*\nWhatsApp: ${status.state}\nConnected: ${status.connected ? 'yes' : 'no'}\nUptime: ${Math.floor((Date.now() - status.startedAt) / 1000)} seconds`;
           if (status.connected) await this.replyPhoto(command.chatId, this.connectedImage, text);
           else await this.reply(command.chatId, text);
@@ -152,7 +164,7 @@ class TelegramController {
         case 'stop': {
           this.reserveSensitiveRequest(command.senderId);
           const number = normalizeWhatsappNumber(command.args[0]);
-          await this.pairing.stopSession(number);
+          await this.pairing.stopSession(command.senderId, number);
           await this.reply(command.chatId, `*SUCCESS*\nSession for ${number} stopped and removed.`);
           return;
         }
@@ -164,8 +176,26 @@ class TelegramController {
     }
   }
 
+  async handleCallback(callback) {
+    const senderId = callback.from?.id;
+    const chatId = callback.message?.chat?.id;
+    const action = callback.data;
+    if (!senderId || !chatId) return;
+    try {
+      await this.api('answerCallbackQuery', { callback_query_id: callback.id });
+      if (!(await this.authorized(senderId))) throw new Error('You are not authorized to control this bot.');
+      if (action === 'pair_help') return this.reply(chatId, 'Send `/pair <number>` using country code and no plus sign.');
+      if (action === 'help') return this.reply(chatId, helpText());
+      if (action === 'status') return this.handleUpdate({ message: { chat: { id: chatId }, from: { id: senderId }, text: '/status' } });
+      if (action === 'sessions') return this.handleUpdate({ message: { chat: { id: chatId }, from: { id: senderId }, text: '/sessions' } });
+      throw new Error('This button is no longer valid. Send /help.');
+    } catch (error) {
+      await this.reply(chatId, `*ERROR*\n${error.message}`);
+    }
+  }
+
   async pollOnce() {
-    const updates = await this.api('getUpdates', { offset: this.offset, timeout: POLL_TIMEOUT_SECONDS, allowed_updates: ['message'] });
+    const updates = await this.api('getUpdates', { offset: this.offset, timeout: POLL_TIMEOUT_SECONDS, allowed_updates: ['message', 'callback_query'] });
     for (const update of updates) {
       this.offset = Math.max(this.offset, Number(update.update_id) + 1);
       await this.handleUpdate(update);
@@ -221,4 +251,4 @@ class TelegramController {
   stop() { this.running = false; }
 }
 
-module.exports = { SENSITIVE_COOLDOWN_MS, TelegramController, commandFromUpdate, helpText, normalizeTelegramId, normalizeWhatsappNumber };
+module.exports = { SENSITIVE_COOLDOWN_MS, TelegramController, commandFromUpdate, helpText, menuMarkup, normalizeTelegramId, normalizeWhatsappNumber };
