@@ -82,9 +82,9 @@ The bot has exactly one owner, so only these two values need to be set.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OWNER_NAME` | `Rashid Hussain` | Owner display name. |
-| `BOT_NUMBER` | `923448170040` | The WhatsApp number the bot links to. **Country code included, no `+`.** |
+| `BOT_NUMBER` | **required** | The WhatsApp number the bot links to. **Country code included, no `+`.** |
 
-`BOT_NUMBER` is validated strictly: `923448170040` is accepted, `+923001234567` is rejected with the guidance *"Enter your WhatsApp number with country code, without +."* There is no country selector or separate country-code field anywhere — the country code is part of the number. The owner number and owner link are derived from it. The permanent developer identity is source-controlled as **F!xa Dev** and is never derived from owner configuration. `PAIRING_NUMBER` is still read as a legacy alias for `BOT_NUMBER` so older deployments keep booting.
+`BOT_NUMBER` is required and validated strictly: `923001234567` is accepted, `+923001234567` is rejected with the guidance *"Enter your WhatsApp number with country code, without +."* There is no country selector or separate country-code field anywhere — the country code is part of the number. The owner number and owner link are derived from it. The permanent developer identity is source-controlled as **F!xa Dev** and is never derived from owner configuration. `PAIRING_NUMBER` is still read as a legacy alias for `BOT_NUMBER` so older deployments keep booting.
 
 ### Internal settings (optional, safe defaults built in)
 
@@ -118,7 +118,7 @@ Configuration validates phone numbers, URLs, booleans, delays, prefixes, and aut
 
 ### Optional Telegram controller
 
-Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_LINK`, and at least one numeric `TELEGRAM_OWNER_IDS` value to enable long-polling control. Bootstrap owners are configured only through the environment; extra controllers added with `/addowner <telegram_id>` are persisted in `data/telegram-controllers.json` with private file permissions. The controller supports `/pair <number>`, `/sessions`, `/status`, `/addowner <telegram_id>`, `/delowner <telegram_id>`, `/stop <number>`, and `/help`. WhatsApp users can use `!pairing`, `!tgpair`, or `!telegram` to receive the configured controller link.
+Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_LINK`, and at least one numeric `TELEGRAM_OWNER_IDS` value to enable long-polling control. `BOT_TOKEN`, `TG_BOT_LINK`, and `BOT_OWNER_ID` are supported legacy aliases; if both forms are set, the `TELEGRAM_*` setting wins. Bootstrap owners are configured only through the environment; extra controllers added with `/addowner <telegram_id>` are persisted in `data/telegram-controllers.json` with private file permissions. The controller supports `/pair <number>`, `/sessions`, `/status`, `/addowner <telegram_id>`, `/delowner <telegram_id>`, `/stop <number>`, and `/help`. WhatsApp users can use `!pairing`, `!tgpair`, or `!telegram` to receive the configured controller link.
 
 It controls the **same** Baileys socket as the dashboard. `/pair` therefore returns a real code only while that socket is ready and unpaired. `/stop` only removes an unpaired, matching local session and refuses to remove a connected account remotely, avoiding accidental logout and a competing multi-session architecture.
 

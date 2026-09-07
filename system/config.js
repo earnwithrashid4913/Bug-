@@ -33,14 +33,16 @@ const PROJECT_NAME = CANONICAL_IDENTITY.projectName;       // "ANIME MD"
 // ---------------------------------------------------------------------------
 // DEFAULTS — safe fallback values for every optional setting.
 //
-// User-facing settings (OWNER_NAME, BOT_NUMBER) have defaults for local dev
-// but MUST be set properly in production.
+// OWNER_NAME has a display fallback, while BOT_NUMBER is required because it
+// identifies the WhatsApp account that will be linked by this deployment.
 // ---------------------------------------------------------------------------
 const DEFAULTS = Object.freeze({
   botName: PROJECT_NAME,
   ownerName: 'Rashid Hussain',
-  // Digits only, country code included, never prefixed with "+".
-  botNumber: '923448170040',
+  // The linking account is deployment-specific and deliberately has no
+  // source-controlled default. Requiring it prevents a fresh deployment from
+  // attempting to pair an unrelated account.
+  botNumber: '',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
   stickerPackname: PROJECT_NAME,
@@ -144,7 +146,9 @@ function assertBotNumber(value, fieldName = 'BOT_NUMBER') {
  */
 function parseBotNumber(fallback) {
   const raw = readString('BOT_NUMBER', readString('PAIRING_NUMBER', ''));
-  return raw ? assertBotNumber(raw, 'BOT_NUMBER') : fallback;
+  if (raw) return assertBotNumber(raw, 'BOT_NUMBER');
+  if (fallback) return fallback;
+  throw new Error(`BOT_NUMBER is required. ${BOT_NUMBER_HINT}`);
 }
 
 /**
@@ -172,7 +176,10 @@ function parseUrl(name, fallback) {
 
 /** Parse TELEGRAM_BOT_LINK — must be an HTTPS t.me link. */
 function parseTelegramLink() {
-  const value = readString('TELEGRAM_BOT_LINK', '');
+  // BOT_TOKEN/TG_BOT_LINK/BOT_OWNER_ID are accepted compatibility aliases
+  // for hosting panels that use the shorter names. The explicit TELEGRAM_*
+  // names take precedence and remain the canonical documented interface.
+  const value = readString('TELEGRAM_BOT_LINK', readString('TG_BOT_LINK', ''));
   if (!value) return '';
   try {
     const parsed = new URL(value);
@@ -244,7 +251,7 @@ function loadConfig() {
 
   // === TELEGRAM CONTROLLER =================================================
   const telegramControllerDbPath = resolveRuntimePath(readString('TELEGRAM_CONTROLLER_DB_PATH', path.join(dataDir, 'telegram-controllers.json')));
-  const telegramOwnerIds = readString('TELEGRAM_OWNER_IDS', '')
+  const telegramOwnerIds = readString('TELEGRAM_OWNER_IDS', readString('BOT_OWNER_ID', ''))
     .split(',').map((id) => id.trim()).filter(Boolean);
   if (telegramOwnerIds.some((id) => !/^\d{1,20}$/.test(id))) {
     throw new Error('TELEGRAM_OWNER_IDS must be a comma-separated list of numeric Telegram IDs.');
@@ -295,7 +302,7 @@ function loadConfig() {
     automationDbPath,
 
     // --- Telegram controller -----------------------------------------------
-    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', ''),
+    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', readString('BOT_TOKEN', '')),
     telegramBotLink: parseTelegramLink(),
     telegramOwnerIds: Object.freeze(telegramOwnerIds),
     telegramControllerDbPath,
