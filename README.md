@@ -30,6 +30,27 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 
 This repository intentionally provides benign bot administration and group-utility functionality only. It does not include commands or malformed WhatsApp payloads intended to force-close, freeze, or crash other clients, nor unrelated third-party follow/media endpoints.
 
+## External-source migration intake
+
+The source archive used for a migration is intentionally treated as external,
+read-only input. It is **not** part of this repository and is never extracted
+or committed automatically, because it may contain `.env` files, Baileys
+credentials, API keys, or private data. Once the archive is available in the
+execution environment, run:
+
+```bash
+npm run audit:source -- /absolute/path/to/abcd\ New\ Folder.zip
+```
+
+Alternatively set `SOURCE_ARCHIVE_PATH`. The command inventories every archive
+entry, command and plugin file, and confirms that the requested root files and
+33-command set are present without reading secrets into this repository. Prompt
+2 says “158 plugins” but enumerates 156 filenames; the audit verifies every
+named file and explicitly reports any archive-only plugin so the remaining two
+can be inspected rather than silently skipped. Migration implementation must
+only use this audited inventory and must convert any required settings to
+environment variables.
+
 ## Requirements
 
 - Node.js **20.9+ LTS** is recommended. The sticker converter uses Sharp, which requires Node.js 20.9 or newer.
