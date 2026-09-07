@@ -35,6 +35,10 @@
       "description": "Keep 'pairing' for pairing-code capable WhatsApp startup.",
       "value": "pairing"
     },
+    "WEB_PAIRING_ENABLED": {
+      "description": "Keep false to disable legacy Web Pairing and avoid competing sockets.",
+      "value": "false"
+    },
     "GROQ_API_KEY": {
       "description": "Optional key for the !ai command. Never commit a real key.",
       "value": ""

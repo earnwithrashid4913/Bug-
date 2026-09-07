@@ -190,6 +190,7 @@ function startTelegramController() {
       });
     }
   });
+  telegramPairingManager = new TelegramPairingManager({ authDir: config.authDir });
   telegramController = new TelegramController({
     token: config.telegramBotToken,
     owners: config.telegramOwnerIds,
@@ -567,6 +568,8 @@ if (!isChildProcess && !config.dryRun) {
   console.log(`[startup] Dry run successful. Configuration for ${config.botName} is valid; no WhatsApp connection was opened.`);
 } else {
   bootstrapSession();
+  if (config.webPairingEnabled) startWebServer();
+  else console.info('[web] Web Pairing disabled: WEB_PAIRING_ENABLED=false.');
   startTelegramController();
   void startBot();
 }

@@ -1,5 +1,7 @@
 services:
   # Long-running WhatsApp worker with optional Telegram pairing controller.
+  # The bot keeps an outbound WhatsApp WebSocket open and also serves the
+  # WhatsApp WebSocket and optional Telegram pairing controller.
   - type: web
     name: anime-md
     runtime: node
@@ -13,6 +15,8 @@ services:
         sync: false
       - key: AUTH_METHOD
         value: pairing
+      - key: WEB_PAIRING_ENABLED
+        value: "false"
       - key: AUTH_DIR
         value: /var/data/session
       - key: DATA_DIR

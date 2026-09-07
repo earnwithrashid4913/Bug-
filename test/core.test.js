@@ -75,6 +75,20 @@ test('configuration permits Telegram pairing without a deployment phone number',
     assert.equal(withoutBotNumber.telegramBotToken, '');
     assert.equal(withoutBotNumber.telegramBotLink, '');
     assert.deepEqual(withoutBotNumber.telegramOwnerIds, []);
+test('configuration has no deployment bot-number dependency or Telegram aliases', () => {
+  const saved = Object.fromEntries(['BOT_NUMBER', 'PAIRING_NUMBER', 'TELEGRAM_BOT_TOKEN', 'BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TG_BOT_LINK', 'TELEGRAM_OWNER_IDS', 'BOT_OWNER_ID'].map((key) => [key, process.env[key]]));
+  try {
+    delete process.env.BOT_NUMBER;
+    delete process.env.PAIRING_NUMBER;
+    const withoutBotNumber = loadConfig();
+    assert.equal(withoutBotNumber.telegramBotToken, '');
+    process.env.BOT_TOKEN = 'compat-token';
+    process.env.TG_BOT_LINK = 'https://t.me/compat_bot';
+    process.env.BOT_OWNER_ID = '12345';
+    const compatibilityConfig = loadConfig();
+    assert.equal(compatibilityConfig.telegramBotToken, '');
+    assert.equal(compatibilityConfig.telegramBotLink, '');
+    assert.deepEqual(compatibilityConfig.telegramOwnerIds, []);
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];

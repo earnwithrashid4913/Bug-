@@ -273,6 +273,12 @@ function loadConfig() {
     telegramOwnerIds: Object.freeze(telegramOwnerIds),
     telegramControllerDbPath,
 
+    // --- Theme & dashboard -------------------------------------------------
+    theme: parseTheme(),
+    webHost: readString('WEB_HOST', DEFAULTS.webHost),
+    webPort: parseInteger('PORT', DEFAULTS.webPort, 1, 65_535),
+    webPairingEnabled: parseBoolean('WEB_PAIRING_ENABLED', false),
+
     // --- Group greetings ---------------------------------------------------
     welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
     goodbyeMessage: readString('GOODBYE_MESSAGE', DEFAULTS.goodbyeMessage),
