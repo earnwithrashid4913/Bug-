@@ -108,7 +108,7 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
     create: { width: 32, height: 20, channels: 4, background: { r: 20, g: 120, b: 80, alpha: 1 } }
   }).png().toBuffer();
   const sticker = await createImageSticker(source, {
-    packname: 'Black Clover ♣️',
+    packname: 'GOATVERSE MD',
     author: 'Only Fixa Dev'
   });
 
@@ -120,10 +120,10 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
 });
 
 test('AI request builder is bounded and requires an explicitly configured key', async () => {
-  const request = buildGroqRequest('Hello', 'openai/gpt-oss-20b', 'Black Clover ♣️');
+  const request = buildGroqRequest('Hello', 'openai/gpt-oss-20b', 'GOATVERSE MD');
   assert.equal(request.model, 'openai/gpt-oss-20b');
   assert.equal(request.messages[1].content, 'Hello');
-  await assert.rejects(askGroq({ apiKey: '', model: request.model, prompt: 'Hello', botName: 'Black Clover ♣️' }), /not configured/);
+  await assert.rejects(askGroq({ apiKey: '', model: request.model, prompt: 'Hello', botName: 'GOATVERSE MD' }), /not configured/);
 
   const sender = 'ai-test@s.whatsapp.net';
   reserveAiRequest(sender);
