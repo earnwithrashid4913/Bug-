@@ -3,8 +3,8 @@
 // Minimal in-memory cache with the interface Baileys expects for
 // `msgRetryCounterCache` / `userDevicesCache` (get / set / del / flushAll).
 //
-// The reference bot uses the `node-cache` package for this; the same behaviour
-// is provided here without adding a dependency.
+// This preserves the cache behaviour needed by Baileys without adding another
+// dependency.
 
 class MemoryCache {
   constructor({ stdTtlMs = 0, maxEntries = 500 } = {}) {

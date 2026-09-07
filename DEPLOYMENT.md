@@ -1,4 +1,4 @@
-# Black Clover ♣️ Deployment Guide
+# GOATVERSE MD Deployment Guide
 
 This application is a long-running WhatsApp client that also serves the **Web Pairing dashboard**, so deploy it as a **single web service** with persistent storage. It listens on `0.0.0.0` and the port given by `PORT` (default `3000`); `/health` is a suitable health-check path.
 

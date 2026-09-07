@@ -28,7 +28,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained under the *
 
 ## Safety boundary
 
-The supplied base contained commands and malformed WhatsApp payloads intended to force-close, freeze, or crash other clients. Those destructive capabilities, their menus, and unrelated third-party follow/media endpoints were deliberately removed during this migration. This repository retains benign bot administration and group-utility functionality only.
+This repository intentionally provides benign bot administration and group-utility functionality only. It does not include commands or malformed WhatsApp payloads intended to force-close, freeze, or crash other clients, nor unrelated third-party follow/media endpoints.
 
 ## Requirements
 
@@ -238,7 +238,7 @@ The bot restores that session on every boot, so redeploys no longer log it out.
 - **`Bad Session` / `connection replaced`:** stop the bot, delete only the configured authentication directory, restart, and link again. Automatic reconnect intentionally stops for these cases.
 - **Commands do not respond:** check `COMMAND_PREFIX`, `PUBLIC_MODE`, `BOT_NUMBER` formatting, and the connection logs.
 - **Premium data disappears:** persist `DATA_DIR` alongside `AUTH_DIR`.
-- **A command appears unavailable:** the unsafe crash/force-close payload commands from the supplied base were intentionally not migrated.
+- **A command appears unavailable:** destructive crash/force-close payload commands are intentionally not supported.
 
 For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -248,7 +248,7 @@ For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
 - Global project owner: configured through `OWNER_NAME`
 - Character artwork is loaded from the project owner's hosted Catbox URLs listed in [`system/theme.js`](system/theme.js); no artwork is bundled in this repository.
 - WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys) and its respective maintainers
-- The Apache-2.0 license file supplied with the base source is retained. Third-party dependency licenses remain with their respective authors.
+- The Apache-2.0 license and third-party dependency licenses remain with their respective authors.
 
 ## License
 
