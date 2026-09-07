@@ -1,7 +1,7 @@
 'use strict';
 
 // Connection semantics exported by index.js. The module is loaded in dry-run
-// mode so no WhatsApp socket or dashboard server is opened.
+// mode so no WhatsApp socket is opened.
 
 process.env.BOT_DRY_RUN = 'true';
 process.env.OWNER_NAME = 'F!xa Dev';

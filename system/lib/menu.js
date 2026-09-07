@@ -107,7 +107,6 @@ const COMMANDS = Object.freeze([
   command('give', 'rpg', 'Transfer coins to another user.', { usage: '@user <amount>' }),
   command('rpg', 'rpg', 'Show economy commands.', { aliases: ['economy'] }),
 
-  command('theme', 'owner', 'Set the dashboard theme.', { aliases: ['settheme'], usage: '<makima|nami|nezuko|shinobu|gojo|sukuna|asta>', permission: 'owner' }),
   command('restart', 'owner', 'Restart the bot process.', { aliases: ['rst'], permission: 'owner' }),
   command('setname', 'owner', 'Set the WhatsApp profile display name.', { usage: '<name>', permission: 'owner' }),
   command('setprefix', 'owner', 'Set a custom command prefix.', { usage: '<prefix>', permission: 'owner' }),
