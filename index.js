@@ -61,6 +61,7 @@ const IGNORED_PROCESS_ERRORS = Object.freeze([
 let activeSocket;
 let webServer;
 let childProcess;
+let workerLaunchTimer;
 let reconnectTimer;
 let reconnectAttempts = 0;
 let stopping = false;
@@ -408,6 +409,7 @@ function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (workerLaunchTimer) clearTimeout(workerLaunchTimer);
   console.log(`[shutdown] Received ${signal}; closing the bot process.`);
 
   try {
@@ -452,7 +454,7 @@ function launchChild() {
 
     if (resetting) {
       resetting = false;
-      launchChild();
+      scheduleWorkerLaunch();
       return;
     }
 
@@ -471,12 +473,25 @@ function launchChild() {
     }
 
     console.warn(`[supervisor] Worker exited (code ${code}, signal ${signal}); restarting.`);
-    launchChild();
+    scheduleWorkerLaunch();
   });
 
   child.on('error', (error) => {
     console.error('[supervisor] Failed to manage the worker process:', error);
   });
+}
+
+// Schedule restarts on a later turn rather than spawning inside the `exit`
+// callback. Besides giving stdio a chance to flush the exit diagnostic, this
+// prevents a rapidly failing worker from re-entering the supervisor's child
+// lifecycle while Node is still delivering the prior exit event.
+function scheduleWorkerLaunch() {
+  if (stopping || workerLaunchTimer) return;
+
+  workerLaunchTimer = setTimeout(() => {
+    workerLaunchTimer = undefined;
+    if (!stopping) launchChild();
+  }, 25);
 }
 
 process.once('SIGINT', () => {

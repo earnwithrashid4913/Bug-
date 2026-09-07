@@ -127,69 +127,9 @@ Heroku wipes the container filesystem on every dyno restart, so the WhatsApp ses
 
 The bot writes that value to `AUTH_DIR/creds.json` at startup, so every later deploy reconnects without pairing.
 
-## 9. Deploy to a panel (Pterodactyl)
+## 9. Keep a session with SESSION_ID
 
-This project needs no custom Docker image as long as the selected Node.js egg/image provides Node 20 or newer.
-
-1. Download the repository as a zip, create a Node.js 20.9+ server, and upload the zip.
-2. Extract it, then run `npm install` (or `npm ci` with the lockfile) in the panel terminal.
-3. Create `.env` (or use the panel's environment variables):
-
-   ```dotenv
-   OWNER_NAME=Only Fixa Dev
-   BOT_NUMBER=923001234567
-   AUTH_METHOD=pairing
-   ```
-
-4. Start the server with `npm start`.
-5. Allocate a port, open it in the browser, and pair from the dashboard.
-
-Panel storage is persistent, so `AUTH_DIR` and `DATA_DIR` survive restarts. The owner-only `!restart` command works here: the bot supervises its own worker process and relaunches it.
-
-## 10. Bot-Hosting.net, Katabump and Optiklink
-
-All three are free Node.js hosts and use the same flow as a panel.
-
-| Host | Steps |
-| --- | --- |
-| **Bot-Hosting.net** | Create a Node.js bot, upload/clone the project, `npm install`, set `OWNER_NAME` + `BOT_NUMBER`, start with `npm start`, then open the assigned port. |
-| **Katabump** | Create a Node.js service, upload the project, `npm install`, `npm start`. |
-| **Optiklink** | Create a Node.js service, upload the project, `npm install`, `npm start`, and expose the dashboard port. |
-
-Set `PORT` to the port the host assigns. If the host resets its filesystem between starts, keep the session with `SESSION_ID` (section 11).
-
-## 11. Termux, SSH and Ubuntu + pm2
-
-```bash
-# Termux
-pkg update && pkg upgrade
-pkg install nodejs-lts git
-
-# Ubuntu / SSH
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y nodejs npm git
-
-git clone <your-repository-url>
-cd Bug-
-cp .env.example .env
-npm install
-npm start
-```
-
-For an always-on installation:
-
-```bash
-npm install -g pm2
-pm2 start index.js
-pm2 save
-pm2 logs
-```
-
-Point `AUTH_DIR` and `DATA_DIR` at paths that survive restarts, open the dashboard port in your firewall, and never run a second copy of the bot against the same authentication directory.
-
-## 12. Keep a session with SESSION_ID
-
-Hosts with ephemeral storage (Heroku, Render free tier, panels without a volume) lose `session/` on every restart. `SESSION_ID` is the contents of `session/creds.json` — raw JSON or its base64 form.
+Hosts with ephemeral storage (Heroku or Render without its persistent disk) lose `session/` on every restart. `SESSION_ID` is the contents of `session/creds.json` — raw JSON or its base64 form.
 
 1. Pair WhatsApp once on any host with `EXPOSE_SESSION_ID=true`.
 2. Open the dashboard's **Session** card and copy the SESSION_ID (or copy `session/creds.json` from disk).
@@ -216,4 +156,4 @@ A SESSION_ID is a complete WhatsApp login. Never commit it, never paste it into 
 
 ## Recommended hosting method
 
-A **panel server** or a **VPS** with persistent storage is the most reliable choice: the session, bot mode, premium records and group greetings all survive restarts with no extra configuration. A **Render Web Service with a persistent disk** is the best managed option. **Heroku**, **Bot-Hosting.net**, **Katabump** and **Optiklink** work as well, but they reset their filesystem, so pair once and keep the session in `SESSION_ID`. A local machine or Termux installation is suitable for testing, but it must stay online for the bot to remain connected.
+A **Render Web Service with its persistent disk** is the recommended managed deployment: the session, bot mode, premium records, and group greetings survive restarts. **Heroku** works when its session is retained in `SESSION_ID`.
