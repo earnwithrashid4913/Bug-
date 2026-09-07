@@ -5,8 +5,6 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
-const path = require('node:path');
 
 const {
   CANONICAL_IDENTITY,
@@ -44,17 +42,8 @@ test('protected identity keys cannot be supplied through the environment', () =>
   assert.doesNotThrow(() => assertProtectedSecurityEnvironment({ OWNER_NUMBER: '   ' }));
 });
 
-test('the bot refuses to start when a protected identity key is set', () => {
-  const script = "require('./system/config'); process.stdout.write('loaded');";
-  assert.throws(
-    () => execFileSync(process.execPath, ['-e', script], {
-      cwd: path.join(__dirname, '..'),
-      env: { ...process.env, OWNER_NUMBER: '923001234567' },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    }),
-    /protected identity overrides are not allowed/
-  );
+test('protected identity checks require an explicit configuration object', () => {
+  assert.throws(() => assertProtectedSecurityEnvironment({ OWNER_NUMBER: '923001234567' }), /protected identity overrides/);
 });
 
 test('identity values are normalized to WhatsApp JIDs', () => {

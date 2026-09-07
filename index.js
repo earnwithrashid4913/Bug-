@@ -161,12 +161,12 @@ function formatPairingCode(code) {
 }
 
 function startTelegramController() {
-  if (!config.telegramBotToken && !config.telegramOwnerIds.length) {
+  if (!config.telegramEnabled || (!config.telegramBotToken && !config.telegramOwnerIds.length)) {
     console.info('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_IDS are not configured.');
     return;
   }
   if (!config.telegramBotToken) {
-    console.error('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN is missing. Get a token from @BotFather and add it to .env.');
+    console.error('[telegram] Controller disabled: telegram.botToken is missing. Get a token from @BotFather and add it to config.js.');
     return;
   }
   if (!config.telegramOwnerIds.length) {
@@ -470,7 +470,6 @@ function launchChild() {
   const entry = path.join(__dirname, 'index.js');
   const child = spawn(process.execPath, [entry, CHILD_FLAG], {
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-    env: process.env
   });
   childProcess = child;
 

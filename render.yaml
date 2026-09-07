@@ -1,7 +1,4 @@
 services:
-  # Long-running WhatsApp worker with optional Telegram pairing controller.
-  # The bot keeps an outbound WhatsApp WebSocket open and also serves the
-  # WhatsApp WebSocket and optional Telegram pairing controller.
   - type: web
     name: anime-md
     runtime: node
@@ -10,23 +7,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.19.5
-      # Optional display name for the person operating this deployment.
-      - key: OWNER_NAME
-        sync: false
-      - key: AUTH_METHOD
-        value: pairing
-      - key: WEB_PAIRING_ENABLED
-        value: "false"
-      - key: AUTH_DIR
-        value: /var/data/session
-      - key: DATA_DIR
-        value: /var/data/data
-      - key: PUBLIC_MODE
-        value: "true"
-      # Optional: restore a paired session when the disk is not attached.
-      # Raw JSON or base64 contents of session/creds.json.
-      - key: SESSION_ID
-        sync: false
     disk:
       name: anime-md-auth-data
       mountPath: /var/data
