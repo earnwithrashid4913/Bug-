@@ -65,7 +65,7 @@ test('dashboard reports real configuration, themes and connection state', async 
   assert.equal(payload.ownerName, 'F!xa Dev');
   assert.equal(payload.botNumber, '923001234567');
   assert.equal(payload.activeThemeId, 'gojo');
-  assert.equal(payload.rotationIntervalMs, 5_000);
+  assert.equal(payload.rotationIntervalMs, undefined, 'rotation is disabled');
   assert.deepEqual(payload.themes.map((theme) => theme.id), ['makima', 'nami', 'nezuko', 'shinobu', 'gojo', 'sukuna', 'asta']);
   const gojo = payload.themes.find((theme) => theme.id === 'gojo');
   assert.equal(gojo.images[0], 'https://files.catbox.moe/lar8xz.jpg');

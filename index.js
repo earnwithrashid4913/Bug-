@@ -22,6 +22,7 @@ const handleMessage = require('./system/handler');
 const { MemoryCache } = require('./system/lib/cache');
 const { prepareSession } = require('./system/session');
 const { getTheme, isThemeId, listThemes, resolveTheme } = require('./system/theme');
+const { sendButtons } = require('./system/lib/ui');
 const { createWebServer } = require('./system/web');
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
@@ -256,6 +257,38 @@ function setActiveTheme(themeId) {
   return activeTheme;
 }
 
+async function sendConnectionSuccess(socket) {
+  const target = normalizeSelfJid(socket.user?.id);
+  if (!target) throw new Error('Connected socket did not expose a user JID.');
+
+  await socket.sendMessage(target, {
+    image: { url: config.connectionSuccessImage },
+    caption: '*ANIME MD*'
+  });
+
+  const text = [
+    '*ANIME MD*',
+    '',
+    '*Connected Successfully* ✓',
+    '',
+    'Your WhatsApp session is now active and ready to use.',
+    '',
+    `Developer: ${config.developerName}`
+  ].join('\n');
+
+  await sendButtons(socket, target, {
+    text,
+    footer: `${config.botName} · ${config.ownerName}`,
+    buttons: [{ label: '☷ Open Menu', id: '!menu home' }],
+    fallbackText: `${text}\n\nType ${config.commandPrefix}menu to open the command menu.`
+  });
+}
+
+function normalizeSelfJid(jid) {
+  if (!jid) return undefined;
+  return jid.includes(':') ? jid.replace(/:\d+@/, '@') : jid;
+}
+
 async function handleConnectionUpdate(socket, update, pairingState) {
   if (socket !== activeSocket || stopping) return;
 
@@ -291,14 +324,16 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     });
     console.log(chalk.green(`[connection] ${config.botName} is connected to WhatsApp.`));
     console.log(chalk.cyan(`[connection] Logged in as: ${socket.user?.name || 'Unknown'} (${socket.user?.id?.split(':')[0] || 'n/a'})`));
-    // Send the connection card only after Baileys confirms the open state.
-    // A media-delivery problem must not change the real connection status.
+    // Send exactly once per process/session lifecycle: reconnects and duplicate
+    // connection.update events reuse the guarded socket and this flag.
     if (socket.user?.id && !connectionCardSent) {
       connectionCardSent = true;
-      void socket.sendMessage(socket.user.id, {
-        image: { url: config.connectionSuccessImage },
-        caption: `*${config.botName} connected successfully.*\nYour WhatsApp session is now active.`
-      }).catch((error) => console.warn(`[connection] Could not send the connection card: ${error.message}`));
+      void sendConnectionSuccess(socket)
+        .then(() => console.log('[connection] Connection success card sent.'))
+        .catch((error) => {
+          connectionCardSent = false;
+          console.warn(`[connection] Could not send the connection success card: ${error.message}`);
+        });
     }
     return;
   }
@@ -456,7 +491,7 @@ function startWebServer() {
   });
 
   webServer.listen(config.webPort, config.webHost, () => {
-    console.log(chalk.cyan(`[web] Pairing dashboard listening on http://${config.webHost}:${config.webPort} (theme: ${activeTheme.name}).`));
+    console.log(chalk.cyan(`[web] Pairing dashboard listening on http://${config.webHost}:${config.webPort}${activeTheme ? ` (theme: ${activeTheme.name})` : ' (choose a theme)'}.`));
   });
 }
 
@@ -601,7 +636,7 @@ module.exports = {
   decodeJid,
   disconnectStatusCode,
   formatPairingCode,
-  getActiveThemeId: () => activeTheme.id,
+  getActiveThemeId: () => activeTheme?.id || null,
   handlePairingRequest,
   stopPairingSession,
   liveStatus,

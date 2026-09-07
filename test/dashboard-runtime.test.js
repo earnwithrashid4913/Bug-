@@ -13,7 +13,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { PUBLIC_DIR } = require('../system/web');
-const { ROTATION_INTERVAL_MS, THEMES } = require('../system/theme');
+const { THEMES } = require('../system/theme');
 
 const APP_SOURCE = fs.readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
 
@@ -22,7 +22,7 @@ const ELEMENT_IDS = [
   'themeTagline', 'themeQuote', 'themeCharacter', 'themeGrid', 'statusPill', 'statusText',
   'pairForm', 'phoneNumber', 'pairButton', 'formMessage', 'codeBox', 'codeValue',
   'copyButton', 'regenerateButton', 'linkedBox', 'linkedText', 'steps', 'particles',
-  'bgSlideA', 'bgSlideB', 'rotationNote', 'credit',
+  'bgSlideA', 'bgSlideB', 'credit',
   'sessionCard', 'sessionHint', 'sessionExport', 'sessionValue', 'copySessionButton', 'sessionDisabledNote'
 ];
 
@@ -31,7 +31,6 @@ const BOOTSTRAP = {
   ownerName: 'F!xa Dev',
   botNumber: '923001234567',
   developer: 'F!xa Dev',
-  rotationIntervalMs: ROTATION_INTERVAL_MS,
   activeThemeId: 'gojo',
   session: { exportEnabled: false, configured: false },
   themes: THEMES.map((theme) => ({
@@ -360,7 +359,7 @@ test('dashboard boots, paints the active theme and starts exactly two timers', a
   assert.equal(dash.el.ownerName.textContent, 'F!xa Dev');
   assert.equal(dash.el.credit.textContent, 'Developed By: F!xa Dev');
   assert.equal(dash.el.phoneNumber.value, '923001234567');
-  assert.equal(dash.el.rotationNote.textContent, 'background rotates every 5s');
+  assert.equal(dash.el.rotationNote?.textContent, undefined);
   assert.equal(dash.el.themeName.textContent, 'Gojo');
   assert.equal(dash.shell.classList.contains('is-ready'), true);
 
@@ -371,25 +370,16 @@ test('dashboard boots, paints the active theme and starts exactly two timers', a
 
   assert.deepEqual(dash.loaded, [gojo.images[0], gojo.images[1]], 'first frame plus one preloaded frame');
   assert.equal(dash.el.bgSlideB.classList.contains('is-active'), true);
-  assert.equal(dash.clock.count(), 2, 'one rotation timer and one status poll');
+  assert.equal(dash.clock.count(), 1, 'one status poll only');
 });
 
-test('artwork rotates every five seconds on a single controlled timer', async () => {
+test('artwork stays static with no automatic rotation', async () => {
   const dash = await createDashboard();
   const gojo = THEMES.find((theme) => theme.id === 'gojo');
 
-  dash.clock.tick(ROTATION_INTERVAL_MS);
-  await settle();
-  assert.ok(dash.loaded.includes(gojo.images[1]));
-  assert.equal(dash.el.bgSlideA.classList.contains('is-active'), true);
-  assert.equal(dash.el.bgSlideB.classList.contains('is-active'), false);
-
-  dash.clock.tick(ROTATION_INTERVAL_MS);
-  await settle();
-  assert.ok(dash.loaded.includes(gojo.images[2]));
+  assert.ok(dash.loaded.includes(gojo.images[0]));
   assert.equal(dash.el.bgSlideB.classList.contains('is-active'), true);
-
-  assert.equal(dash.clock.count(), 2, 'no extra timers were created while rotating');
+  assert.equal(dash.clock.count(), 1, 'only status poll exists');
   assert.ok(!dash.loaded.some((url) => !gojo.images.includes(url)), 'no foreign artwork was loaded');
 });
 
@@ -418,8 +408,9 @@ test('when every image of a theme fails the artwork hides but the theme survives
   assert.equal(dash.stage.dataset.images, 'off');
   assert.equal(dash.root.dataset.theme, 'gojo');
   assert.equal(dash.root.style.properties.get('--primary'), gojo.colors.primary);
-  assert.equal(dash.clock.count(), 1, 'the rotation timer stops, the status poll stays');
+  assert.equal(dash.clock.count(), 1, 'only status poll remains');
 });
+
 
 test('switching theme repaints the page and swaps artwork without a reload', async () => {
   const dash = await createDashboard();
@@ -435,7 +426,7 @@ test('switching theme repaints the page and swaps artwork without a reload', asy
   assert.equal(dash.el.themeName.textContent, 'Sukuna');
   assert.equal(chip.getAttribute('aria-pressed'), 'true');
   assert.ok(dash.loaded.includes(sukuna.images[0]), 'the new theme artwork is loaded');
-  assert.equal(dash.clock.count(), 2, 'the rotation timer is replaced, not duplicated');
+  assert.equal(dash.clock.count(), 1, 'only status poll exists');
 
   const themeCall = dash.requests.find((request) => request.url === '/api/theme');
   assert.deepEqual(themeCall.body, { themeId: 'sukuna' });

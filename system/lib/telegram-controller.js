@@ -15,7 +15,8 @@ function normalizeTelegramId(value) {
 }
 
 function normalizeWhatsappNumber(value) {
-  const number = String(value ?? '').replace(/\D/g, '');
+  const raw = String(value ?? '').trim();
+  const number = raw.replace(/[\s+]/g, '');
   if (!/^\d{7,15}$/.test(number)) throw new Error('Use a 7-15 digit WhatsApp number with country code.');
   return number;
 }
@@ -34,11 +35,11 @@ function helpText() {
     '*ANIME MD Telegram controller*',
     '/pair <number> — request a WhatsApp pairing code',
     '/sessions — show the active ANIME MD session',
+    '/status — show controller and WhatsApp health',
     '/addowner <telegram_id> — authorize another controller',
     '/delowner <telegram_id> — remove an added controller',
     '/stop <number> — remove the unpaired session for that number',
-    '/status — show controller and WhatsApp health',
-    '/help <text> — show controller help'
+    '/help — show controller help'
   ].join('\n');
 }
 
@@ -125,6 +126,10 @@ class TelegramController {
           return;
         }
         case 'addowner': {
+          if (!this.bootstrapOwners.has(String(command.senderId))) {
+            await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (TELEGRAM_OWNER_IDS) can add controllers.');
+            return;
+          }
           this.reserveSensitiveRequest(command.senderId);
           const id = normalizeTelegramId(command.args[0]);
           await this.controllerStore.add(id);
@@ -132,6 +137,10 @@ class TelegramController {
           return;
         }
         case 'delowner': {
+          if (!this.bootstrapOwners.has(String(command.senderId))) {
+            await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (TELEGRAM_OWNER_IDS) can remove controllers.');
+            return;
+          }
           this.reserveSensitiveRequest(command.senderId);
           const id = normalizeTelegramId(command.args[0]);
           if (this.bootstrapOwners.has(id)) throw new Error('Bootstrap owners are configured through TELEGRAM_OWNER_IDS and cannot be removed at runtime.');

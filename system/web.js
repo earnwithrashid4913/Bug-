@@ -5,7 +5,6 @@ const http = require('node:http');
 const path = require('node:path');
 
 const { DEVELOPER_NAME, assertBotNumber } = require('./config');
-const { ROTATION_INTERVAL_MS } = require('./theme');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -221,7 +220,6 @@ function createWebServer({
         ownerName: config.ownerName,
         botNumber: config.botNumber,
         developer: DEVELOPER_NAME,
-        rotationIntervalMs: ROTATION_INTERVAL_MS,
         activeThemeId: getActiveThemeId(),
         themes: themes.map((theme) => ({
           id: theme.id,

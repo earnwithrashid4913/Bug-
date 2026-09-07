@@ -14,7 +14,7 @@ A clean, configurable WhatsApp bot built with Baileys and maintained by **F!xa D
 ## Features
 
 - **Web Pairing dashboard** — a themed, mobile-friendly pairing page (no QR scanning, no country selector) served by the bot itself
-- **Seven anime themes** (Makima, Nami, Nezuko, Shinobu, Gojo, Sukuna, Asta) driven by one centralized registry: full-screen artwork that rotates every 5 seconds, theme-specific particles, glow and animation
+- **Seven anime themes** (Makima, Nami, Nezuko, Shinobu, Gojo, Sukuna, Asta) driven by one centralized registry: full-screen artwork, theme-specific particles, glow and animation — no automatic rotation
 - Multi-file Baileys authentication with web pairing (terminal QR remains an internal, CLI-only fallback)
 - Single-owner configuration: `OWNER_NAME` and `BOT_NUMBER` are the only user-facing settings
 - Configurable bot identity, owner records, command prefix, public/self mode, paths, and reconnect tuning
@@ -91,7 +91,7 @@ The bot has exactly one owner, so only these two values need to be set.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BOT_NAME` | `ANIME MD` | Display name for logs and commands. |
-| `THEME` | `gojo` | Startup theme: `makima`, `nami`, `nezuko`, `shinobu`, `gojo`, `sukuna`, `asta`. |
+| `THEME` | `null` | Startup theme: `makima`, `nami`, `nezuko`, `shinobu`, `gojo`, `sukuna`, `asta`. |
 | `PORT` | `3000` | Dashboard port. Provided automatically by Render, Heroku and similar hosts. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
@@ -175,10 +175,10 @@ Theme configuration lives in one place: [`system/theme.js`](system/theme.js). It
 | Asta | Black Clover | emerald + black | sharp anti-magic shards |
 
 - The active theme covers the **whole page**: full-screen artwork, dark overlay, theme gradient, glow, particles, cards, buttons, the pairing box and the *Developed By: F!xa Dev* credit.
-- Artwork rotates every **5 seconds** on a single controlled timer with a crossfade, subtle scale/blur and preloading of the next frame. Timers and animation frames are cancelled when the tab is hidden or the page unloads.
+- Artwork displays the selected theme's primary image with a crossfade. Timers and animation frames are cancelled when the tab is hidden or the page unloads.
 - A frame that fails to load is skipped in favour of the next image **of the same theme**; if every image fails, the artwork layer hides and the themed gradient/glow/particles remain. No replacement URLs are ever invented.
 - Switching theme repaints colours, glow, particles and branding through CSS transitions — no reload, no flash, no layout jump. The choice persists in `localStorage` and is mirrored to the server.
-- There is no generic "Default" theme. Unknown or missing theme ids fall back internally to a real anime theme.
+- There is no generic "Default" theme. Unknown or missing theme ids remain unset until the user explicitly chooses one of the seven anime themes.
 
 ## Authorized-device compatibility testing
 
@@ -186,32 +186,81 @@ Use only WhatsApp accounts and groups you own or administer. After pairing a rea
 
 ## Commands
 
-Use the configured prefix (shown below as `!`).
+Use the configured prefix (shown below as `!`). Type `!menu` to see all categories.
 
 | Command | Access | Description |
 | --- | --- | --- |
-| `!menu`, `!help` | Everyone in public mode | Show command help. |
-| `!ping` | Everyone in public mode | Check command latency. |
-| `!status`, `!alive`, `!runtime` | Everyone in public mode | Show basic process status. |
-| `!owner`, `!creator` | Everyone in public mode | Show configured owner/contact details. |
-| `!sticker`, `!s` | Everyone in public mode | Reply to an image to create a standard WebP sticker. |
-| `!toimg`, `!sticker2img` | Everyone in public mode | Reply to a sticker to convert it to an image. |
-| `!jid`, `!chatid` | Everyone in public mode | Show the current chat and sender JIDs. |
-| `!getpp`, `!pp`, `!profilepic`, `!avatar` | Everyone in public mode | Show a profile picture from a group, quoted/mentioned user, or number. |
-| `!setpp` | Owner | Reply to an image to update the bot profile picture. |
-| `!ai`, `!ask`, `!ia`, `!groq` | Everyone in public mode | Ask Groq AI when `GROQ_API_KEY` is configured. |
-| `!request <message>` | Everyone in public mode | Forward a rate-limited request to owners. |
-| `!hidetag <message>` | Group admin/owner | Mention all group members without listing them. |
-| `!tagall <message>` | Group admin/owner | Send a message that lists and mentions members. |
-| `!welcome`, `!goodbye`, `!greet` | Group admin/owner | Configure safe group greetings. |
-| `!group` | Group admin/owner | Show safe group management help. |
-| `!gname`, `!gdesc`, `!add`, `!kick`, `!promote`, `!demote`, `!lock`, `!unlock`, `!grouplink` | Group admin/owner + bot admin | Perform the named group action. |
-| `!idch <channel URL>` | Everyone in public mode | Look up a WhatsApp channel invite. |
+| **GENERAL** | | |
+| `!menu`, `!help` | Everyone | Open the interactive command menu. |
+| `!ping`, `!p` | Everyone | Check bot latency. |
+| `!request <message>` | Everyone | Forward a rate-limited request to owners. |
+| **MODE** | | |
 | `!public`, `!self` | Owner | Toggle command visibility. |
-| `!addprem <number> [30d]` | Owner | Add/extend premium access. Units: `s`, `m`, `h`, `d`. |
+| `!mode <public\|self>` | Owner | Show or change message mode. |
+| **DOWNLOADER** | | |
+| `!play <query\|url>` | Everyone | Search and download audio from YouTube. |
+| `!video <query\|url>` | Everyone | Download video from a URL. |
+| `!spotify <query>` | Everyone | Search Spotify for tracks. |
+| `!media <url>` | Everyone | Download from TikTok/Instagram/Facebook/YouTube. |
+| **MEDIA** | | |
+| `!getpp`, `!pp` | Everyone | Get a user or group profile picture. |
+| `!setpp` | Owner | Update the bot profile picture. |
+| `!vv`, `!save` | Everyone | Reveal a view-once photo or video. |
+| **CONVERTER** | | |
+| `!sticker`, `!s` | Everyone | Reply to an image to create a sticker. |
+| `!toimg`, `!img` | Everyone | Reply to a sticker to convert to image. |
+| `!tts <text>` | Everyone | Text-to-speech. |
+| `!qr <text>` | Everyone | Generate a QR code. |
+| **UPLOAD** | | |
+| `!tourl` | Everyone | Upload a replied file and get a public URL. |
+| **AI** | | |
+| `!ai`, `!ask` | Everyone | Ask Groq AI (requires `GROQ_API_KEY`). |
+| `!translate [lang] <text>` | Everyone | Translate text. |
+| **TOOLS** | | |
+| `!jid`, `!chatid` | Everyone | Show chat and sender JIDs. |
+| `!idch <url>` | Everyone | Fetch WhatsApp channel metadata. |
+| `!calc <expr>` | Everyone | Calculate a math expression. |
+| `!ss <url>` | Everyone | Capture a website screenshot. |
+| `!short <url>` | Everyone | Shorten a URL. |
+| **GROUP** | | |
+| `!hidetag <msg>` | Group admin | Mention all members without visible tags. |
+| `!tagall <msg>` | Group admin | Mention all members with a visible list. |
+| `!welcome`, `!goodbye` | Group admin | Toggle group greeting messages. |
+| `!group` | Group admin | Show group management help. |
+| `!gname`, `!gdesc`, `!add`, `!kick`, `!promote`, `!demote`, `!lock`, `!unlock`, `!grouplink` | Group admin + bot admin | Perform the named group action. |
+| `!warn`, `!unwarn`, `!warns` | Group admin | Manage group member warnings. |
+| **ANTI / SECURITY** | | |
+| `!antilink`, `!antispam`, `!antimention`, `!antitag`, `!antidelete` | Group admin | Toggle group protection features. |
+| **AUTOMATION** | | |
+| `!autoreact`, `!autowrite` | Group admin | Toggle automatic reactions/typing presence. |
+| `!autostatus` | Owner | Toggle auto-read status updates. |
+| **GAMES** | | |
+| `!dice`, `!coin`, `!rps`, `!guess` | Everyone | Play quick games. |
+| **RPG / ECONOMY** | | |
+| `!balance`, `!daily`, `!work`, `!give` | Everyone | Economy system commands. |
+| **OWNER** | | |
+| `!theme <id>` | Owner | Set the dashboard theme. |
+| `!restart`, `!rst` | Owner | Exit for host-managed restart. |
+| `!setname <name>` | Owner | Set the WhatsApp profile name. |
+| `!setprefix <prefix>` | Owner | Set a custom command prefix. |
+| `!broadcast <msg>` | Owner | Send a global announcement. |
+| **SUDO** | | |
+| `!sudo <number>` | Owner | Grant sudo access. |
+| `!delsudo <number>` | Owner | Revoke sudo access. |
+| `!sudolist` | Sudo/owner | List sudo users. |
+| **PREMIUM** | | |
+| `!addprem <num> [30d]` | Owner | Add premium access. |
 | `!delprem <number>` | Owner | Remove premium access. |
-| `!listprem` | Owner | List active premium records. |
-| `!restart` | Owner | Exit cleanly for a host-managed restart. |
+| `!listprem` | Owner | List premium users. |
+| `!premium` | Everyone | Check premium status. |
+| **INFO** | | |
+| `!status`, `!alive` | Everyone | Show bot status and uptime. |
+| `!owner`, `!creator` | Everyone | Show owner and developer details. |
+| **SESSIONS** | | |
+| `!sessions` | Everyone | Show active session info. |
+| `!stopsession <number>` | Owner | Safe session cleanup. |
+| **TELEGRAM** | | |
+| `!pairing`, `!tgpair`, `!telegram` | Everyone | Show Telegram controller link. |
 
 ## Local setup
 

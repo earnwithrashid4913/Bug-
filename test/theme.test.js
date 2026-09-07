@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-  FALLBACK_THEME_ID,
   ROTATION_INTERVAL_MS,
   THEMES,
   getTheme,
@@ -111,11 +110,11 @@ test('no generic default theme is exposed to the user', () => {
   assert.equal(getTheme('default'), undefined);
 });
 
-test('the internal fallback resolves to a real, selectable anime theme', () => {
-  assert.equal(isThemeId(FALLBACK_THEME_ID), true);
-  assert.equal(resolveTheme('default').id, FALLBACK_THEME_ID);
-  assert.equal(resolveTheme(undefined).id, FALLBACK_THEME_ID);
-  assert.equal(resolveTheme('sukuna').id, 'sukuna');
+test('no internal fallback: resolveTheme returns null for unknown or missing ids', () => {
+  assert.equal(isThemeId('default'), false);
+  assert.equal(resolveTheme('default'), null);
+  assert.equal(resolveTheme(undefined), null);
+  assert.deepEqual(resolveTheme('sukuna').id, 'sukuna');
 });
 
 test('every theme owns only its own hosted artwork', () => {
@@ -142,8 +141,8 @@ test('artwork uses only the supplied untouched catbox links', () => {
   }
 });
 
-test('background rotation is a five second interval', () => {
-  assert.equal(ROTATION_INTERVAL_MS, 5_000);
+test('background rotation is not enabled', () => {
+  assert.equal(typeof ROTATION_INTERVAL_MS, 'undefined');
 });
 
 test('each theme carries a complete, distinct visual identity', () => {

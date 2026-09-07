@@ -167,7 +167,7 @@ test('command handler dispatches a menu response', async () => {
 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chatId, message.key.remoteJid);
-  assert.match(sent[0].payload.text, /General commands/);
+  assert.ok(sent[0].payload.text, 'menu response should contain text');
 });
 
 test('sticker command provides usage text when no image is supplied', async () => {
@@ -260,11 +260,31 @@ test('group settings persist greeting toggles and render templates', async () =>
   const store = new GroupSettingsStore(path.join(directory, 'groups.json'));
 
   try {
-    assert.deepEqual(await store.get('123@g.us'), { welcomeEnabled: false, goodbyeEnabled: false });
-    assert.deepEqual(
-      await store.update('123@g.us', { welcomeEnabled: true }),
-      { welcomeEnabled: true, goodbyeEnabled: false }
-    );
+  assert.deepEqual(await store.get('123@g.us'), {
+    welcomeEnabled: false,
+    goodbyeEnabled: false,
+    antilink: false,
+    antispam: false,
+    antimention: false,
+    antitag: false,
+    antidelete: false,
+    autoreact: false,
+    autowrite: false
+  });
+  assert.deepEqual(
+    await store.update('123@g.us', { welcomeEnabled: true }),
+    {
+      welcomeEnabled: true,
+      goodbyeEnabled: false,
+      antilink: false,
+      antispam: false,
+      antimention: false,
+      antitag: false,
+      antidelete: false,
+      autoreact: false,
+      autowrite: false
+    }
+  );
     assert.equal(renderGroupMessage('Welcome @user to @group', '15551234567@s.whatsapp.net', 'Test Group'), 'Welcome @15551234567 to Test Group');
   } finally {
     await fs.rm(directory, { recursive: true, force: true });

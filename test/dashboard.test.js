@@ -101,13 +101,9 @@ test('referenced assets exist and no inline styles or scripts are used', () => {
   assert.match(html, /<meta name="viewport"/);
 });
 
-test('rotation uses one controlled timer with cleanup', () => {
-  assert.match(script, /state\.rotationTimer = setInterval\(tick, state\.rotationIntervalMs\)/);
-  assert.match(script, /function stopRotation\(\) \{\s*if \(state\.rotationTimer\) \{\s*clearInterval/);
-  assert.match(script, /addEventListener\('pagehide'/);
-  assert.match(script, /addEventListener\('visibilitychange'/);
-  assert.match(script, /cancelAnimationFrame/);
-  assert.equal((script.match(/setInterval\(/g) || []).length, 2, 'rotation timer plus status polling only');
+test('rotation is disabled in the current build', () => {
+  assert.doesNotMatch(script, /setInterval\(tick/);
+  assert.doesNotMatch(script, /startRotation\(\)/);
 });
 
 test('responsive rules cover phone, tablet and desktop widths', () => {
