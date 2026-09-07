@@ -23,6 +23,8 @@ const { MemoryCache } = require('./system/lib/cache');
 const { prepareSession } = require('./system/session');
 const { getTheme, isThemeId, listThemes, resolveTheme } = require('./system/theme');
 const { createWebServer } = require('./system/web');
+const { TelegramController } = require('./system/lib/telegram-controller');
+const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
 
 // ---------------------------------------------------------------------------
 // Process supervisor.
@@ -67,6 +69,7 @@ let reconnectAttempts = 0;
 let stopping = false;
 let resetting = false;
 let currentPairingState;
+let telegramController;
 
 // Live mirror of the WhatsApp socket state. The dashboard renders this object
 // verbatim, so it is only ever written from real socket events — the UI never
@@ -200,6 +203,37 @@ async function handlePairingRequest(number) {
   }
 
   return requestPairingCode(activeSocket, currentPairingState, number);
+}
+
+async function stopPairingSession(number) {
+  const target = String(number).replace(/\D/g, '');
+  const activeNumber = String(liveStatus.botUser || liveStatus.pairingNumber || '').replace(/\D/g, '');
+  if (!target || target !== activeNumber) {
+    throw new Error('No matching active ANIME MD session exists for that number.');
+  }
+  if (liveStatus.connected) {
+    throw new Error('Refusing to remove a connected session remotely. Log out from WhatsApp Linked devices first.');
+  }
+  try { activeSocket?.ws?.close(); } catch { /* close best effort */ }
+  await require('node:fs/promises').rm(config.authDir, { recursive: true, force: true });
+  activeSocket = undefined;
+  currentPairingState = undefined;
+  setStatus('stopped', `Session for ${target} was removed.`, { pairingCode: null, session: 'none' });
+}
+
+function startTelegramController() {
+  if (!config.telegramBotToken) return;
+  if (!config.telegramOwnerIds.length) {
+    console.error('[telegram] TELEGRAM_BOT_TOKEN is set but TELEGRAM_OWNER_IDS is empty; controller is disabled.');
+    return;
+  }
+  telegramController = new TelegramController({
+    token: config.telegramBotToken,
+    owners: config.telegramOwnerIds,
+    controllerStore: new TelegramControllerStore(config.telegramControllerDbPath),
+    pairing: { requestPairing: handlePairingRequest, getStatus: async () => ({ ...liveStatus }), stopSession: stopPairingSession }
+  });
+  telegramController.start();
 }
 
 function setActiveTheme(themeId) {
@@ -431,6 +465,7 @@ function shutdown(signal) {
   } catch (error) {
     console.error('[shutdown] Failed to close the WhatsApp socket cleanly:', error);
   }
+  telegramController?.stop();
 
   // A WebSocket implementation can occasionally retain an internal handle while closing.
   // Do not leave a deployment worker stuck during a stop/redeploy operation.
@@ -544,6 +579,7 @@ if (!isChildProcess && !config.dryRun) {
 } else {
   bootstrapSession();
   startWebServer();
+  startTelegramController();
   void startBot();
 }
 
@@ -554,6 +590,7 @@ module.exports = {
   formatPairingCode,
   getActiveThemeId: () => activeTheme.id,
   handlePairingRequest,
+  stopPairingSession,
   liveStatus,
   setActiveTheme,
   shouldReconnect

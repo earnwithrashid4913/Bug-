@@ -99,6 +99,8 @@ function helpText() {
     `${p}jid — show the current chat and sender JIDs`,
     `${p}ai <question> — ask the configured AI provider`,
     `${p}request <message> — send a feature request to the owner`,
+    `${p}pairing — open the authorized Telegram pairing controller`,
+    `${p}theme <name> — owner: change the dashboard anime theme`,
     '',
     '*Group admin commands*',
     `${p}hidetag <message> — send a hidden mention to the group`,
@@ -552,6 +554,38 @@ async function handleMessage(socket, rawMessage) {
     case 'creator':
       await sendOwnerCard(socket, context.chatId, context.raw);
       break;
+
+    case 'pairing':
+    case 'tgpair':
+    case 'telegram':
+      await socket.sendMessage(
+        context.chatId,
+        { text: config.telegramBotLink
+          ? `*Telegram pairing*\nOpen the authorized controller: ${config.telegramBotLink}\nThen use /pair <number>.`
+          : 'Telegram pairing is not configured. Ask the bot owner to set TELEGRAM_BOT_LINK and TELEGRAM_BOT_TOKEN.' },
+        { quoted: context.raw }
+      );
+      break;
+
+    case 'theme':
+    case 'settheme': {
+      if (!(await requireOwner(socket, context))) break;
+      const themeId = command.args[0]?.toLowerCase();
+      if (!themeId) {
+        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}theme <makima|nami|nezuko|shinobu|gojo|sukuna|asta>` }, { quoted: context.raw });
+        break;
+      }
+      try {
+        // Late require avoids a startup cycle: index owns the one runtime theme
+        // registry and this handler merely asks it to switch presentation.
+        const { setActiveTheme } = require('../index');
+        const theme = setActiveTheme(themeId);
+        await socket.sendMessage(context.chatId, { text: `*Theme changed*\n${theme.icon} ${theme.name} is now active on the pairing dashboard.` }, { quoted: context.raw });
+      } catch (error) {
+        await socket.sendMessage(context.chatId, { text: `Could not change theme: ${error.message}` }, { quoted: context.raw });
+      }
+      break;
+    }
 
     case 'public':
     case 'self': {
