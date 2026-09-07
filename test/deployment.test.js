@@ -23,10 +23,10 @@ const deployment = read('DEPLOYMENT.md');
 test('package and supported host manifests use the production start command', () => {
   assert.equal(packageJson.engines.node, '>=20.9');
   assert.equal(packageJson.scripts.start, 'node index.js');
-  assert.equal(read('Procfile').trim(), 'web: npm start');
+  assert.equal(read('Procfile').trim(), 'worker: npm start');
   assert.match(render, /^\s*buildCommand: npm ci$/m);
   assert.match(render, /^\s*startCommand: npm start$/m);
-  assert.match(render, /^\s*healthCheckPath: \/health$/m);
+  assert.doesNotMatch(render, /healthCheckPath|WEB_PAIRING_ENABLED|THEME/);
   assert.equal(heroku.stack, 'heroku-24');
 });
 
@@ -45,12 +45,10 @@ test('deployment manifests expose the required pairing configuration', () => {
 test('documentation, metadata, and committed assets match the current bot', () => {
   assert.match(readme, /ANIME MD/);
   assert.match(deployment, /^# ANIME MD Deployment Guide$/m);
-  assert.match(deployment, /Node\.js 20\.9\+/);
-  assert.match(readme, /Telegram controller/);
+  assert.match(deployment, /Node\.js 20\.9 or newer/);
+  assert.match(readme, /Telegram pairing/i);
   assert.doesNotMatch(JSON.stringify(metadata), /gemini/i);
   assert.deepEqual(metadata.majorCapabilities, []);
 
-  for (const character of ['asta', 'gojo', 'makima', 'nami', 'nezuko', 'shinobu', 'sukuna']) {
-    assert.ok(fs.existsSync(path.join(ROOT, 'public', 'assets', 'characters', `${character}.jpg`)));
-  }
+  assert.equal(fs.existsSync(path.join(ROOT, 'public')), false);
 });

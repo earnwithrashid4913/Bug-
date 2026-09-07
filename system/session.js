@@ -5,10 +5,8 @@
 //
 // Cloud hosts with an ephemeral filesystem lose `session/` on every deploy, so
 // the credentials are supplied through the `SESSION_ID` environment variable
-// and written to `AUTH_DIR/creds.json` before Baileys starts. The dashboard can
-// also hand the SESSION_ID back after a successful pairing so it can be pasted
-// into the host's environment (the dashboard pairing flow,
-// kept inside this project instead of an external site).
+// and written to `AUTH_DIR/creds.json` before Baileys starts. Telegram pairing
+// sessions persist their own credentials under `AUTH_DIR/telegram-pairings`.
 //
 // Credentials never leave this module in plain text: they are never logged.
 // ---------------------------------------------------------------------------

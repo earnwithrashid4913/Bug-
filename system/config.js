@@ -15,9 +15,11 @@
 const path = require('node:path');
 const dotenv = require('dotenv');
 const { CANONICAL_IDENTITY, assertProtectedSecurityEnvironment } = require('./security');
-const { isThemeId, listThemes } = require('./theme');
 
-dotenv.config();
+// Load the repository-root .env even when a hosting panel launches Node from a
+// different working directory. Existing Pterodactyl/process environment values
+// retain dotenv's normal precedence and are never overwritten.
+dotenv.config({ path: process.env.ENV_FILE || path.resolve(__dirname, '..', '.env') });
 
 // Project identity is canonical, not deployer-tunable. `security.js` refuses to
 // start when a protected identity key (OWNER_NUMBER, DEVELOPER_*, GLOBAL_OWNER*)
@@ -44,17 +46,12 @@ const DEFAULTS = Object.freeze({
   stickerPackname: PROJECT_NAME,
   stickerAuthor: DEVELOPER_HANDLE,
   publicMode: true,
-  // The dashboard is web-pairing only. "qr" stays available as an internal
-  // escape hatch for local terminals; it is never offered by the web UI.
+  // Telegram is the primary pairing surface. QR remains available for a
+  // directly managed primary WhatsApp session.
   authMethod: 'pairing',
   authDir: './session',
   dataDir: './data',
   sessionOverwrite: false,
-  // No generic/default theme. THEME is optional and, when set, must be one of
-  // the seven supported anime themes.
-  theme: null,
-  webHost: '0.0.0.0',
-  webPort: 3_000,
   welcomeMessage: 'Welcome @user to *@group*!',
   goodbyeMessage: 'Goodbye @user from *@group*.',
   connectionSuccessImage: 'https://files.catbox.moe/6ghm7j.png',
@@ -72,7 +69,7 @@ const DEFAULTS = Object.freeze({
 // HELPER FUNCTIONS — parse and validate .env values
 // ---------------------------------------------------------------------------
 
-const WHATSAPP_NUMBER_HINT = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
+const PHONE_NUMBER_HELP = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
 
 /** Read a trimmed string from process.env; return fallback if empty/missing. */
 function readString(name, fallback) {
@@ -126,24 +123,13 @@ function assertWhatsappNumber(value, fieldName = 'Phone number') {
   const raw = String(value ?? '').trim();
 
   if (raw.includes('+')) {
-    throw new Error(`${fieldName} must not contain "+". ${WHATSAPP_NUMBER_HINT}`);
+    throw new Error(`${fieldName} must not contain "+". ${PHONE_NUMBER_HELP}`);
   }
   if (!/^\d{7,15}$/.test(raw)) {
-    throw new Error(`${fieldName} must be 7-15 digits including the country code. ${WHATSAPP_NUMBER_HINT}`);
+    throw new Error(`${fieldName} must be 7-15 digits including the country code. ${PHONE_NUMBER_HELP}`);
   }
 
   return raw;
-}
-
-/**
- * Parse THEME from env. Must be empty (null) or one of the seven anime themes.
- * Throws if an invalid theme name is provided.
- */
-function parseTheme() {
-  const requested = readString('THEME', '').toLowerCase();
-  if (!requested) return null;
-  if (isThemeId(requested)) return requested;
-  throw new Error(`THEME must be empty or one of: ${listThemes().map((theme) => theme.id).join(', ')}.`);
 }
 
 /** Parse and validate an HTTPS URL from env. */
@@ -263,7 +249,7 @@ function loadConfig() {
     authMethod,
     authDir: resolveRuntimePath(readString('AUTH_DIR', DEFAULTS.authDir)),
     // Raw creds.json (JSON or base64) used to restore a session on hosts with
-    // ephemeral storage. Never logged, never served by the dashboard.
+    // ephemeral storage. Never logged or exposed through an API.
     sessionId: readString('SESSION_ID', ''),
     sessionOverwrite: parseBoolean('SESSION_OVERWRITE', DEFAULTS.sessionOverwrite),
 
@@ -279,15 +265,13 @@ function loadConfig() {
     automationDbPath,
 
     // --- Telegram controller -----------------------------------------------
-    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', readString('BOT_TOKEN', '')),
+    // Telegram settings intentionally have no legacy aliases. Keeping one
+    // canonical name avoids accidentally enabling a controller with stale
+    // deployment variables.
+    telegramBotToken: readString('TELEGRAM_BOT_TOKEN', ''),
     telegramBotLink: parseTelegramLink(),
     telegramOwnerIds: Object.freeze(telegramOwnerIds),
     telegramControllerDbPath,
-
-    // --- Theme & dashboard -------------------------------------------------
-    theme: parseTheme(),
-    webHost: readString('WEB_HOST', DEFAULTS.webHost),
-    webPort: parseInteger('PORT', DEFAULTS.webPort, 1, 65_535),
 
     // --- Group greetings ---------------------------------------------------
     welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
@@ -322,7 +306,7 @@ module.exports = {
   DEVELOPER_HANDLE,
   AUTHOR_NAME,
   PROJECT_NAME,
-  WHATSAPP_NUMBER_HINT,
+  PHONE_NUMBER_HELP,
   assertWhatsappNumber,
   config,
   loadConfig,
