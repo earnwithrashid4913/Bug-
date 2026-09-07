@@ -141,7 +141,6 @@ test('the real supervisor keeps a worker process alive and respawns it', async (
       ...process.env,
       BOT_DRY_RUN: 'false',
       OWNER_NAME: 'F!xa Dev',
-      BOT_NUMBER: '923001234567',
       AUTH_DIR: path.join(workDir, 'session'),
       DATA_DIR: path.join(workDir, 'data'),
       PORT: String(freePort),

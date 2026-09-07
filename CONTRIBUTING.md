@@ -5,7 +5,7 @@ Thank you for improving ANIME MD. Keep contributions focused, tested, and safe f
 ## Development flow
 
 1. Use Node.js 20.9+ and install dependencies with `npm ci`.
-2. Set a non-production `BOT_NUMBER` and run `npm run start:dry`.
+2. Run `npm run start:dry` to validate the configuration without opening WhatsApp.
 3. Run `npm run check` and `npm test` before submitting changes.
 4. Describe any deployment, storage, or authorization impact in the pull request.
 
@@ -13,7 +13,7 @@ Thank you for improving ANIME MD. Keep contributions focused, tested, and safe f
 
 Do not weaken or bypass `system/security.js`, the protected identity manifest verification, sender normalization, or group/bot-admin checks. Never commit `.env`, session files, private keys, API keys, trusted identity manifests, or HMAC secrets.
 
-`BOT_NUMBER`, `INSTANCE_OWNER_NAME`, `INSTANCE_OWNER_NUMBER`, and `THEME` are deployer instance settings. They must not become Global Owner or Developer identity. New themes must remain data-only and must not duplicate core authorization or command logic.
+`OWNER_NAME` and `THEME` are deployer instance settings. The linked WhatsApp account is selected only through the pairing flow. These settings must not become Global Owner or Developer identity. New themes must remain data-only and must not duplicate core authorization or command logic.
 
 ## Scope and tests
 

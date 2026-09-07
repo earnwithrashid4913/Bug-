@@ -10,11 +10,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.19.5
-      # The only two user-facing settings. BOT_NUMBER needs the country code
-      # and must not contain a "+".
+      # Optional display name for the person operating this deployment.
       - key: OWNER_NAME
-        sync: false
-      - key: BOT_NUMBER
         sync: false
       # makima | nami | nezuko | shinobu | gojo | sukuna | asta
       - key: THEME

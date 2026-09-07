@@ -48,6 +48,31 @@ test('Telegram controller reports status and can remove only persisted controlle
   assert.match(replies.pop(), /cannot be removed/);
 });
 
+test('Telegram startup verifies the token, clears a stale webhook, then starts one poller', async () => {
+  const methods = [];
+  const logs = [];
+  const controller = new TelegramController({
+    token: 'token', owners: ['10'], controllerStore: { has: async () => false },
+    pairing: { requestPairing: async () => 'code', getStatus: async () => ({}), stopSession: async () => {} },
+    startImage: '',
+    fetchImpl: async (url, init) => {
+      const method = url.split('/').pop();
+      methods.push(method);
+      const payload = JSON.parse(init.body);
+      if (method === 'getMe') return { ok: true, json: async () => ({ ok: true, result: { username: 'AnimeMdBot' } }) };
+      if (method === 'getUpdates') return { ok: true, json: async () => ({ ok: true, result: [] }) };
+      return { ok: true, json: async () => ({ ok: true, result: payload }) };
+    },
+    log: { info: (message) => logs.push(message), warn: () => {}, error: () => {} }
+  });
+
+  assert.equal(await controller.start(), true);
+  assert.deepEqual(methods.slice(0, 2), ['getMe', 'deleteWebhook']);
+  assert.match(logs[0], /@AnimeMdBot/);
+  assert.equal(await controller.start(), false, 'a second listener is never started');
+  controller.stop();
+});
+
 test('Telegram controller store persists authorized IDs with private JSON data', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-controllers-'));
   const filePath = path.join(directory, 'controllers.json');

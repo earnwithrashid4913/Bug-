@@ -31,7 +31,6 @@ test('the canonical project identity is intact', () => {
 
 test('protected identity keys cannot be supplied through the environment', () => {
   assert.doesNotThrow(() => assertProtectedSecurityEnvironment({}));
-  assert.doesNotThrow(() => assertProtectedSecurityEnvironment({ BOT_NUMBER: '923001234567' }));
 
   for (const key of ['OWNER_NUMBER', 'OWNER_NUMBERS', 'GLOBAL_OWNER', 'DEVELOPER_NUMBER', 'DEVELOPER_IDENTITY']) {
     assert.throws(
@@ -67,19 +66,14 @@ test('identity values are normalized to WhatsApp JIDs', () => {
   assert.equal(normalizeIdentity(undefined), undefined);
 });
 
-test('authorization falls back to the instance owner without a signed manifest', () => {
+test('authorization stays closed without a signed manifest or linked account', () => {
   const socket = { decodeJid: (jid) => jid };
   const owner = '923001234568@s.whatsapp.net';
 
-  assert.equal(isInstanceOwner(socket, owner, config.botNumber), false, 'a different number is not the instance owner');
-  assert.equal(isInstanceOwner(socket, `${config.botNumber}@s.whatsapp.net`, config.botNumber), true);
-  assert.equal(isAuthorizedAdmin(socket, `${config.botNumber}@s.whatsapp.net`, config.botNumber), true);
-
-  // No ANIME_MD_TRUSTED_IDENTITY_FILE/HMAC pair is configured, so there are no
-  // global owner or developer grants — privileged access stays closed.
+  assert.equal(isInstanceOwner(socket, owner, undefined), false);
+  assert.equal(isAuthorizedAdmin(socket, owner, undefined), false);
   assert.equal(isGlobalOwner(socket, owner), false);
   assert.equal(isDeveloper(socket, owner), false);
-  assert.equal(isAuthorizedAdmin(socket, owner, config.botNumber), false);
 });
 
 test('config exposes the canonical identity and no protected owner alias', () => {
@@ -87,6 +81,5 @@ test('config exposes the canonical identity and no protected owner alias', () =>
   assert.equal(config.developerBrand, CANONICAL_IDENTITY.organization);
   assert.equal(config.developerName, CANONICAL_IDENTITY.developer);
   assert.equal(config.authorName, CANONICAL_IDENTITY.author);
-  // The instance owner is still deployer-configured, via BOT_NUMBER only.
-  assert.equal(config.ownerNumber, config.botNumber);
+  assert.equal(Object.hasOwn(config, 'botNumber'), false);
 });
