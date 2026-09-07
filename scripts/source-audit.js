@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const archivePath = path.resolve(process.argv[2] || process.env.SOURCE_ARCHIVE_PATH || 'abcd New Folder.zip');
+const archivePath = path.resolve(process.argv[2] || 'abcd New Folder.zip');
 const requiredRootFiles = [
   'func.js', 'app.json', 'README.md', 'welcome.js', 'config.js', '.env',
   'AnimeMd.js', 'index.js', 'case.js', 'settings.js', 'utils.js'

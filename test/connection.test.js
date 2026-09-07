@@ -3,8 +3,9 @@
 // Connection semantics exported by index.js. The module is loaded in dry-run
 // mode so no WhatsApp socket is opened.
 
-process.env.BOT_DRY_RUN = 'true';
-process.env.OWNER_NAME = 'F!xa Dev';
+const userConfig = require('../config');
+userConfig.deployment.dryRun = true;
+userConfig.bot.ownerName = 'F!xa Dev';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

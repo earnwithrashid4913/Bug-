@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const userConfig = require('../config');
 
 const PROTECTED_SECURITY_ENVIRONMENT_KEYS = Object.freeze([
   'GLOBAL_OWNER', 'GLOBAL_OWNER_NUMBER', 'GLOBAL_OWNER_NUMBERS',
@@ -70,7 +71,7 @@ function verifyIdentityManifest(manifest, secret) {
   }
 }
 
-function loadProtectedIdentity(environment = process.env) {
+function loadProtectedIdentity(environment = {}) {
   if (!verifyCanonicalIdentity()) {
     return Object.freeze({ locked: true, globalOwners: new Set(), developers: new Set() });
   }
@@ -96,16 +97,19 @@ function loadProtectedIdentity(environment = process.env) {
   }
 }
 
-function assertProtectedSecurityEnvironment(environment = process.env) {
+function assertProtectedSecurityEnvironment(environment = {}) {
   const attemptedOverrides = PROTECTED_SECURITY_ENVIRONMENT_KEYS.filter((name) => String(environment[name] || '').trim());
   if (attemptedOverrides.length) {
     throw new Error('Security configuration error: protected identity overrides are not allowed.');
   }
 }
 
-let protectedIdentity = loadProtectedIdentity();
+let protectedIdentity = loadProtectedIdentity({
+  ANIME_MD_TRUSTED_IDENTITY_FILE: userConfig.security?.trustedIdentityFile,
+  ANIME_MD_TRUSTED_IDENTITY_HMAC_KEY: userConfig.security?.trustedIdentityHmacKey
+});
 
-function refreshProtectedIdentity(environment = process.env) {
+function refreshProtectedIdentity(environment = {}) {
   protectedIdentity = loadProtectedIdentity(environment);
   return protectedIdentity;
 }

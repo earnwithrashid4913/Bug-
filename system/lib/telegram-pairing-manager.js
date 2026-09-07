@@ -28,7 +28,6 @@ function safeSessionDirectory(root, telegramId) {
 
 class TelegramPairingManager {
   constructor({ authDir, log = console, onSocket, baileys = {} }) {
-  constructor({ authDir, log = console, baileys = {} }) {
     this.root = path.resolve(authDir, 'telegram-pairings');
     this.log = log;
     this.sessions = new Map();
