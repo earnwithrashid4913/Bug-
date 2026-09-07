@@ -12,16 +12,14 @@
 // command access, or which media the bot downloads.
 // ---------------------------------------------------------------------------
 
-// Images rotate on a single controlled timer in the browser.
-const ROTATION_INTERVAL_MS = 5_000;
-
 // Hosted artwork. These URLs are supplied by the project owner and are used
 // verbatim: never rewritten, proxied, or replaced with generated links.
+// The dashboard displays the selected theme's primary artwork; there is no
+// automatic image rotation.
 const CATBOX = 'https://files.catbox.moe';
 
 function catbox(...slugs) {
-  // De-duplicates while preserving order so a repeated upload cannot produce a
-  // visible "no change" frame during rotation.
+  // De-duplicates while preserving order.
   return [...new Set(slugs.map((slug) => `${CATBOX}/${slug}.jpg`))];
 }
 
@@ -314,22 +312,18 @@ const THEME_MAP = Object.freeze(
   }, {})
 );
 
-// Internal, non-selectable safety net. It always resolves to a real anime
-// theme so the interface never falls back to a generic look and a generic
-// "default" theme is never exposed to the user.
-const FALLBACK_THEME_ID = GOJO.id;
-
 function isThemeId(value) {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(THEME_MAP, value);
 }
 
 function getTheme(id) {
-  return THEME_MAP[id];
+  return isThemeId(id) ? THEME_MAP[id] : undefined;
 }
 
-// Never throws: an unknown or missing id silently resolves to a real theme.
+// Never falls back to a theme. Missing/unknown selections remain null so the UI
+// can ask the user to choose one of the seven supported anime themes.
 function resolveTheme(id) {
-  return THEME_MAP[id] || THEME_MAP[FALLBACK_THEME_ID];
+  return getTheme(id) || null;
 }
 
 function listThemes() {
@@ -339,8 +333,7 @@ function listThemes() {
 module.exports = {
   THEMES,
   THEME_MAP,
-  ROTATION_INTERVAL_MS,
-  FALLBACK_THEME_ID,
+  ROTATION_INTERVAL_MS: undefined,
   getTheme,
   isThemeId,
   listThemes,

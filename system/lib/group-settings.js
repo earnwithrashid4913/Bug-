@@ -5,14 +5,23 @@ const path = require('node:path');
 
 const DEFAULT_GROUP_SETTINGS = Object.freeze({
   welcomeEnabled: false,
-  goodbyeEnabled: false
+  goodbyeEnabled: false,
+  antilink: false,
+  antispam: false,
+  antimention: false,
+  antitag: false,
+  antidelete: false,
+  autoreact: false,
+  autowrite: false
 });
 
+const BOOLEAN_KEYS = Object.freeze(Object.keys(DEFAULT_GROUP_SETTINGS));
+
 function normalizeSettings(value) {
-  return {
-    welcomeEnabled: Boolean(value?.welcomeEnabled),
-    goodbyeEnabled: Boolean(value?.goodbyeEnabled)
-  };
+  return BOOLEAN_KEYS.reduce((settings, key) => {
+    settings[key] = Boolean(value?.[key]);
+    return settings;
+  }, {});
 }
 
 class GroupSettingsStore {
@@ -65,10 +74,14 @@ class GroupSettingsStore {
 
   async update(groupId, updates) {
     if (!groupId?.endsWith('@g.us')) throw new Error('Group settings require a group JID.');
+    const cleanUpdates = {};
+    for (const [key, value] of Object.entries(updates || {})) {
+      if (BOOLEAN_KEYS.includes(key)) cleanUpdates[key] = Boolean(value);
+    }
 
     return this.transaction(async () => {
       const groups = await this.read();
-      const next = { ...DEFAULT_GROUP_SETTINGS, ...normalizeSettings(groups[groupId]), ...updates };
+      const next = { ...DEFAULT_GROUP_SETTINGS, ...normalizeSettings(groups[groupId]), ...cleanUpdates };
       groups[groupId] = normalizeSettings(next);
       await this.write(groups);
       return groups[groupId];
@@ -76,7 +89,4 @@ class GroupSettingsStore {
   }
 }
 
-module.exports = {
-  DEFAULT_GROUP_SETTINGS,
-  GroupSettingsStore
-};
+module.exports = { BOOLEAN_KEYS, DEFAULT_GROUP_SETTINGS, GroupSettingsStore, normalizeSettings };

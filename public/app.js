@@ -17,11 +17,9 @@
     failedImages: new Set(),
     slides: [],
     activeSlide: 0,
-    rotationTimer: null,
     statusTimer: null,
     failureTimer: null,
     preload: null,
-    rotationIntervalMs: 5000,
     connected: false,
     reducedMotion: false,
     particles: null
@@ -65,7 +63,7 @@
       'themeTagline', 'themeQuote', 'themeCharacter', 'themeGrid', 'statusPill', 'statusText',
       'pairForm', 'phoneNumber', 'pairButton', 'formMessage', 'codeBox', 'codeValue',
       'copyButton', 'regenerateButton', 'linkedBox', 'linkedText', 'steps', 'particles',
-      'bgSlideA', 'bgSlideB', 'rotationNote', 'credit'
+      'bgSlideA', 'bgSlideB', 'credit'
     ];
     for (const id of ids) el[id] = document.getElementById(id);
     el.stage = document.querySelector('.stage');
@@ -141,7 +139,6 @@
       state.images = [...theme.images];
       el.stage.dataset.images = 'on';
       showNextImage(true);
-      startRotation();
       configureParticles(theme);
     }
   }
@@ -242,7 +239,6 @@
       // Every hosted frame for this theme failed: keep the themed gradient,
       // glow and particles instead of showing a broken image.
       el.stage.dataset.images = 'off';
-      stopRotation();
       return;
     }
 
@@ -290,18 +286,7 @@
     showNextImage();
   }
 
-  function stopRotation() {
-    if (state.rotationTimer) {
-      clearInterval(state.rotationTimer);
-      state.rotationTimer = null;
-    }
-  }
-
-  function startRotation() {
-    stopRotation();
-    if (state.images.length < 2 || el.stage.dataset.images === 'off') return;
-    state.rotationTimer = setInterval(tick, state.rotationIntervalMs);
-  }
+  // No automatic rotation: display the selected theme's primary image only.
 
   /* ------------------------------ particles ----------------------------- */
 
@@ -576,10 +561,8 @@
 
     const onVisibility = () => {
       if (document.hidden) {
-        stopRotation();
         stopParticles();
       } else {
-        startRotation();
         startParticles();
       }
     };
@@ -594,7 +577,6 @@
 
     // Never leak timers or animation frames past the page lifetime.
     window.addEventListener('pagehide', () => {
-      stopRotation();
       stopParticles();
       clearInterval(state.statusTimer);
       clearTimeout(state.failureTimer);
@@ -624,14 +606,12 @@
 
     state.themes = bootstrap.themes;
     state.byId = new Map(bootstrap.themes.map((theme) => [theme.id, theme]));
-    state.rotationIntervalMs = bootstrap.rotationIntervalMs;
 
     el.botName.textContent = bootstrap.botName;
     el.ownerName.textContent = bootstrap.ownerName;
     el.botNumber.textContent = bootstrap.botNumber;
     el.phoneNumber.value = bootstrap.botNumber;
     el.credit.textContent = `Developed By: ${bootstrap.developer}`;
-    el.rotationNote.textContent = `background rotates every ${Math.round(bootstrap.rotationIntervalMs / 1000)}s`;
 
     renderThemeChips();
     bindEvents();
