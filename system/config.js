@@ -21,9 +21,9 @@ const PROJECT_NAME = CANONICAL_IDENTITY.projectName;
 // Everything below is internal/optional and has a safe default.
 const DEFAULTS = Object.freeze({
   botName: PROJECT_NAME,
-  ownerName: 'Only Fixa Dev',
+  ownerName: 'Enter Your Name',
   // Digits only, country code included, never prefixed with "+".
-  botNumber: '923448170040',
+  botNumber: '923001234567',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
   stickerPackname: PROJECT_NAME,
@@ -42,6 +42,7 @@ const DEFAULTS = Object.freeze({
   webPort: 3_000,
   welcomeMessage: 'Welcome @user to *@group*!',
   goodbyeMessage: 'Goodbye @user from *@group*.',
+  connectionSuccessImage: 'https://files.catbox.moe/6ghm7j.png',
   groqModel: 'openai/gpt-oss-20b',
   reconnectBaseDelayMs: 3_000,
   reconnectMaxDelayMs: 60_000,
@@ -207,6 +208,7 @@ function loadConfig() {
     webPort: parseInteger('PORT', DEFAULTS.webPort, 1, 65_535),
     welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
     goodbyeMessage: readString('GOODBYE_MESSAGE', DEFAULTS.goodbyeMessage),
+    connectionSuccessImage: parseUrl('CONNECTION_SUCCESS_IMAGE', DEFAULTS.connectionSuccessImage),
     groqApiKey: readString('GROQ_API_KEY', ''),
     groqModel: readString('GROQ_MODEL', DEFAULTS.groqModel),
     reconnectBaseDelayMs,

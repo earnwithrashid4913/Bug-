@@ -11,7 +11,7 @@ const PROTECTED_SECURITY_ENVIRONMENT_KEYS = Object.freeze([
 
 // Canonical project identity source of truth
 const CANONICAL_IDENTITY = Object.freeze({
-  projectName: '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿',
+  projectName: 'ANIME MD',
   organization: 'GOATS MODS',
   developer: 'Only F!xa Dev',
   author: 'RaShiD Hussain',
@@ -30,7 +30,7 @@ const PROTECTED_DEVELOPER = Object.freeze({
 
 function verifyCanonicalIdentity() {
   const isIntact =
-    CANONICAL_IDENTITY.projectName === '𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿' &&
+    CANONICAL_IDENTITY.projectName === 'ANIME MD' &&
     CANONICAL_IDENTITY.organization === 'GOATS MODS' &&
     CANONICAL_IDENTITY.developer === 'Only F!xa Dev' &&
     CANONICAL_IDENTITY.author === 'RaShiD Hussain';
@@ -74,8 +74,8 @@ function loadProtectedIdentity(environment = process.env) {
     return Object.freeze({ locked: true, globalOwners: new Set(), developers: new Set() });
   }
 
-  const file = environment.GOATVERSE_TRUSTED_IDENTITY_FILE;
-  const secret = environment.GOATVERSE_TRUSTED_IDENTITY_HMAC_KEY;
+  const file = environment.ANIME_MD_TRUSTED_IDENTITY_FILE;
+  const secret = environment.ANIME_MD_TRUSTED_IDENTITY_HMAC_KEY;
   // A release without external authorization numbers is valid: it has no global
   // owner grants. Supplying either trust input requires a complete valid pair.
   if (!file && !secret) return Object.freeze({ locked: false, globalOwners: new Set(), developers: new Set() });

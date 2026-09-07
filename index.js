@@ -25,11 +25,11 @@ const { getTheme, isThemeId, listThemes, resolveTheme } = require('./system/them
 const { createWebServer } = require('./system/web');
 
 // ---------------------------------------------------------------------------
-// Process supervisor (migrated from the reference bot).
+// Process supervisor.
 //
 // `node index.js` spawns `node index.js --child` and keeps it alive. A crash or
 // a `!restart` request therefore recovers without relying on the hosting panel
-// to notice, which is what the reference bot does with its own launcher.
+// to notice.
 // ---------------------------------------------------------------------------
 
 const CHILD_FLAG = '--child';
@@ -45,7 +45,7 @@ let workerExits = [];
 const PAIRING_SETTLE_MS = 3_000;
 
 // WhatsApp/socket noise that must never take the whole process down. The
-// reference bot filters exactly these; each one is already handled by the
+// connection layer filters these; each one is already handled by the
 // reconnect logic below.
 const IGNORED_PROCESS_ERRORS = Object.freeze([
   'conflict',
@@ -156,7 +156,7 @@ function renderQrCode(qr, pairingState) {
   qrcode.generate(qr, { small: true });
 }
 
-// Pairing codes are displayed the same way the reference bot formats them:
+// Pairing codes are displayed in groups of four characters:
 // two groups of four characters separated by a dash.
 function formatPairingCode(code) {
   return code?.match(/.{1,4}/g)?.join('-') || code;
@@ -220,8 +220,8 @@ async function handleConnectionUpdate(socket, update, pairingState) {
 
     if (config.authMethod === 'pairing') {
       setStatus('pairing', `Requesting a pairing code for ${config.botNumber}…`);
-      // Give the socket a moment to settle before the registration IQ, the same
-      // way the reference bot delays its automatic pairing request.
+      // Give the socket a moment to settle before the registration IQ so its
+      // automatic pairing request is not sent into a settling connection.
       await new Promise((resolve) => setTimeout(resolve, PAIRING_SETTLE_MS).unref());
       if (stopping || socket !== activeSocket) return;
 
@@ -246,6 +246,14 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     });
     console.log(chalk.green(`[connection] ${config.botName} is connected to WhatsApp.`));
     console.log(chalk.cyan(`[connection] Logged in as: ${socket.user?.name || 'Unknown'} (${socket.user?.id?.split(':')[0] || 'n/a'})`));
+    // Send the connection card only after Baileys confirms the open state.
+    // A media-delivery problem must not change the real connection status.
+    if (socket.user?.id) {
+      void socket.sendMessage(socket.user.id, {
+        image: { url: config.connectionSuccessImage },
+        caption: `*${config.botName} connected successfully.*\nYour WhatsApp session is now active.`
+      }).catch((error) => console.warn(`[connection] Could not send the connection card: ${error.message}`));
+    }
     return;
   }
 
@@ -309,7 +317,7 @@ async function startBot() {
   if (stopping) return;
 
   try {
-    // The reference bot pins the socket to the newest published WhatsApp Web
+    // Pin the socket to the newest published WhatsApp Web
     // version; falling back to Baileys' bundled default keeps this safe offline.
     const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
     if (!version) console.warn('[connection] Could not fetch the latest WhatsApp Web version; using the bundled default.');

@@ -25,8 +25,8 @@ const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
 
 test('owner configuration exposes a single owner and the bot number', () => {
-  assert.equal(config.ownerName, 'Only Fixa Dev');
-  assert.equal(config.botNumber, '923448170040');
+  assert.equal(config.ownerName, 'Enter Your Name');
+  assert.equal(config.botNumber, '923001234567');
   assert.equal(config.ownerNumber, config.botNumber);
   assert.deepEqual([...config.ownerNumbers], [config.botNumber]);
   // Identity comes from the canonical source in system/security.js, so it
@@ -108,7 +108,7 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
     create: { width: 32, height: 20, channels: 4, background: { r: 20, g: 120, b: 80, alpha: 1 } }
   }).png().toBuffer();
   const sticker = await createImageSticker(source, {
-    packname: 'Black Clover ♣️',
+    packname: 'ANIME MD',
     author: 'Only Fixa Dev'
   });
 
@@ -120,10 +120,10 @@ test('image sticker converter emits a WebP sticker with pack metadata', async ()
 });
 
 test('AI request builder is bounded and requires an explicitly configured key', async () => {
-  const request = buildGroqRequest('Hello', 'openai/gpt-oss-20b', 'Black Clover ♣️');
+  const request = buildGroqRequest('Hello', 'openai/gpt-oss-20b', 'ANIME MD');
   assert.equal(request.model, 'openai/gpt-oss-20b');
   assert.equal(request.messages[1].content, 'Hello');
-  await assert.rejects(askGroq({ apiKey: '', model: request.model, prompt: 'Hello', botName: 'Black Clover ♣️' }), /not configured/);
+  await assert.rejects(askGroq({ apiKey: '', model: request.model, prompt: 'Hello', botName: 'ANIME MD' }), /not configured/);
 
   const sender = 'ai-test@s.whatsapp.net';
   reserveAiRequest(sender);

@@ -69,13 +69,13 @@ test('identity values are normalized to WhatsApp JIDs', () => {
 
 test('authorization falls back to the instance owner without a signed manifest', () => {
   const socket = { decodeJid: (jid) => jid };
-  const owner = '923001234567@s.whatsapp.net';
+  const owner = '923001234568@s.whatsapp.net';
 
   assert.equal(isInstanceOwner(socket, owner, config.botNumber), false, 'a different number is not the instance owner');
   assert.equal(isInstanceOwner(socket, `${config.botNumber}@s.whatsapp.net`, config.botNumber), true);
   assert.equal(isAuthorizedAdmin(socket, `${config.botNumber}@s.whatsapp.net`, config.botNumber), true);
 
-  // No GOATVERSE_TRUSTED_IDENTITY_FILE/HMAC pair is configured, so there are no
+  // No ANIME_MD_TRUSTED_IDENTITY_FILE/HMAC pair is configured, so there are no
   // global owner or developer grants — privileged access stays closed.
   assert.equal(isGlobalOwner(socket, owner), false);
   assert.equal(isDeveloper(socket, owner), false);

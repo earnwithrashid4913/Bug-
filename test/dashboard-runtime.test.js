@@ -27,7 +27,7 @@ const ELEMENT_IDS = [
 ];
 
 const BOOTSTRAP = {
-  botName: 'Black Clover ♣️',
+  botName: 'ANIME MD',
   ownerName: 'F!xa Dev',
   botNumber: '923001234567',
   developer: 'Goats Mods',
@@ -356,7 +356,7 @@ test('dashboard boots, paints the active theme and starts exactly two timers', a
   assert.equal(dash.root.style.properties.get('--accent'), gojo.colors.accent);
   assert.equal(dash.root.style.properties.get('--pairing-glow'), gojo.colors.pairingGlow);
 
-  assert.equal(dash.el.botName.textContent, 'Black Clover ♣️');
+  assert.equal(dash.el.botName.textContent, 'ANIME MD');
   assert.equal(dash.el.ownerName.textContent, 'F!xa Dev');
   assert.equal(dash.el.credit.textContent, 'Developed By: Goats Mods');
   assert.equal(dash.el.phoneNumber.value, '923001234567');
@@ -474,7 +474,7 @@ test('the UI only reports connected when the server says so', async () => {
   assert.equal(dash.el.linkedBox.hidden, true);
   assert.equal(dash.el.pairButton.disabled, false);
 
-  dash.setStatus({ state: 'connected', connected: true, message: 'Black Clover ♣️ is connected to WhatsApp.', pairingCode: null });
+  dash.setStatus({ state: 'connected', connected: true, message: 'ANIME MD is connected to WhatsApp.', pairingCode: null });
   dash.clock.tick(4000);
   await settle();
   await settle();

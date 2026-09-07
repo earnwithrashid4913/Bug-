@@ -2,7 +2,7 @@
 
 // Persisted bot mode (public / self).
 //
-// The reference bot keeps this in `database/mode.json` so `!public` and `!self`
+// The persisted mode store lets `!public` and `!self`
 // survive a restart. The same behaviour is implemented here on top of the
 // atomic-write JSON pattern already used for premium and group records.
 

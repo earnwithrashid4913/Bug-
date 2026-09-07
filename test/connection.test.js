@@ -46,7 +46,7 @@ test('the disconnect status code is read from a Boom or a raw error', () => {
   assert.equal(disconnectStatusCode(undefined), undefined);
 });
 
-test('pairing codes are grouped in fours like the reference bot', () => {
+test('pairing codes are grouped in fours', () => {
   assert.equal(formatPairingCode('ABCDEFGH'), 'ABCD-EFGH');
   assert.equal(formatPairingCode('ABC'), 'ABC');
   assert.equal(formatPairingCode(undefined), undefined);
