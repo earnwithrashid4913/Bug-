@@ -6,8 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-process.env.BOT_NUMBER = '923001234567';
-const { assertBotNumber, config, loadConfig } = require('../system/config');
+const { assertWhatsappNumber, config, loadConfig } = require('../system/config');
 const { CANONICAL_IDENTITY } = require('../system/security');
 const handleMessage = require('../system/handler');
 const { commandFromText, getCommandPrefix, setCommandPrefix } = handleMessage;
@@ -25,18 +24,14 @@ const { convertStickerToImage, createImageSticker } = require('../system/lib/sti
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
 
-test('owner configuration exposes a single owner and the bot number', () => {
+test('configuration exposes canonical identity without a deployment pairing number', () => {
   assert.equal(config.ownerName, 'Rashid Hussain');
-  assert.equal(config.botNumber, '923001234567');
-  assert.equal(config.ownerNumber, config.botNumber);
-  assert.deepEqual([...config.ownerNumbers], [config.botNumber]);
   // Identity comes from the canonical source in system/security.js, so it
   // cannot drift from the protected project identity.
   assert.equal(config.projectName, CANONICAL_IDENTITY.projectName);
   assert.equal(config.developerBrand, CANONICAL_IDENTITY.organization);
   assert.equal(config.developerName, CANONICAL_IDENTITY.developer);
   assert.equal(config.authorName, CANONICAL_IDENTITY.author);
-  assert.equal(config.ownerLink, `https://wa.me/${config.botNumber}`);
   assert.equal(config.commandPrefix, '!');
   assert.equal(config.botName, CANONICAL_IDENTITY.projectName);
   assert.equal(config.stickerPackname, CANONICAL_IDENTITY.projectName);
@@ -45,11 +40,29 @@ test('owner configuration exposes a single owner and the bot number', () => {
   assert.equal(config.authMethod, 'pairing');
 });
 
-test('bot number validation rejects a leading plus sign', () => {
-  assert.equal(assertBotNumber('923001234567'), '923001234567');
-  assert.throws(() => assertBotNumber('+923001234567'), /without \+/);
-  assert.throws(() => assertBotNumber('12345'), /7-15 digits/);
-  assert.throws(() => assertBotNumber('+15551234567', 'Phone number'), /Phone number must not contain/);
+test('WhatsApp number validation rejects a leading plus sign', () => {
+  assert.equal(assertWhatsappNumber('923001234567'), '923001234567');
+  assert.throws(() => assertWhatsappNumber('+923001234567'), /without \+/);
+  assert.throws(() => assertWhatsappNumber('12345'), /7-15 digits/);
+  assert.throws(() => assertWhatsappNumber('+15551234567', 'Phone number'), /Phone number must not contain/);
+});
+
+test('Telegram configuration uses the documented canonical environment variables', () => {
+  const saved = Object.fromEntries(['TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TELEGRAM_OWNER_IDS'].map((key) => [key, process.env[key]]));
+  try {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.TELEGRAM_BOT_LINK = 'https://t.me/test_bot';
+    process.env.TELEGRAM_OWNER_IDS = '12345,67890';
+    const telegramConfig = loadConfig();
+    assert.equal(telegramConfig.telegramBotToken, 'test-token');
+    assert.equal(telegramConfig.telegramBotLink, 'https://t.me/test_bot');
+    assert.deepEqual(telegramConfig.telegramOwnerIds, ['12345', '67890']);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('configuration requires a deployment bot number and supports Telegram compatibility aliases', () => {

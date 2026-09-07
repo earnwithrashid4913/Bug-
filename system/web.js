@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 
-const { DEVELOPER_NAME, assertBotNumber } = require('./config');
+const { DEVELOPER_NAME, assertWhatsappNumber } = require('./config');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
@@ -182,7 +182,7 @@ function createWebServer({
     let number;
     try {
       const supplied = typeof payload.phoneNumber === 'string' ? payload.phoneNumber : '';
-      number = assertBotNumber(supplied.trim() || config.botNumber, 'Phone number');
+      number = assertWhatsappNumber(supplied.trim(), 'Phone number');
     } catch (error) {
       sendJson(res, 400, { ok: false, error: error.message });
       return;
@@ -218,7 +218,6 @@ function createWebServer({
       sendJson(res, 200, {
         botName: config.botName,
         ownerName: config.ownerName,
-        botNumber: config.botNumber,
         developer: DEVELOPER_NAME,
         activeThemeId: getActiveThemeId(),
         themes: themes.map((theme) => ({

@@ -33,16 +33,12 @@ const PROJECT_NAME = CANONICAL_IDENTITY.projectName;       // "ANIME MD"
 // ---------------------------------------------------------------------------
 // DEFAULTS — safe fallback values for every optional setting.
 //
-// OWNER_NAME has a display fallback, while BOT_NUMBER is required because it
-// identifies the WhatsApp account that will be linked by this deployment.
+// OWNER_NAME is a display setting. The WhatsApp account is selected by the
+// person requesting a pairing code; it is never a deployment environment value.
 // ---------------------------------------------------------------------------
 const DEFAULTS = Object.freeze({
   botName: PROJECT_NAME,
   ownerName: 'Rashid Hussain',
-  // The linking account is deployment-specific and deliberately has no
-  // source-controlled default. Requiring it prevents a fresh deployment from
-  // attempting to pair an unrelated account.
-  botNumber: '',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
   stickerPackname: PROJECT_NAME,
@@ -76,7 +72,7 @@ const DEFAULTS = Object.freeze({
 // HELPER FUNCTIONS — parse and validate .env values
 // ---------------------------------------------------------------------------
 
-const BOT_NUMBER_HINT = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
+const WHATSAPP_NUMBER_HINT = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
 
 /** Read a trimmed string from process.env; return fallback if empty/missing. */
 function readString(name, fallback) {
@@ -126,29 +122,17 @@ function normalizePhoneNumber(value, fieldName) {
  * Strict bot number validation.
  * Fails fast with guidance text if "+" is present — the most common mistake.
  */
-function assertBotNumber(value, fieldName = 'BOT_NUMBER') {
+function assertWhatsappNumber(value, fieldName = 'Phone number') {
   const raw = String(value ?? '').trim();
 
   if (raw.includes('+')) {
-    throw new Error(`${fieldName} must not contain "+". ${BOT_NUMBER_HINT}`);
+    throw new Error(`${fieldName} must not contain "+". ${WHATSAPP_NUMBER_HINT}`);
   }
   if (!/^\d{7,15}$/.test(raw)) {
-    throw new Error(`${fieldName} must be 7-15 digits including the country code. ${BOT_NUMBER_HINT}`);
+    throw new Error(`${fieldName} must be 7-15 digits including the country code. ${WHATSAPP_NUMBER_HINT}`);
   }
 
   return raw;
-}
-
-/**
- * Read BOT_NUMBER from env. Also checks legacy PAIRING_NUMBER alias.
- * OWNER_NUMBER is NOT accepted here — it is a protected identity key
- * guarded by security.js.
- */
-function parseBotNumber(fallback) {
-  const raw = readString('BOT_NUMBER', readString('PAIRING_NUMBER', ''));
-  if (raw) return assertBotNumber(raw, 'BOT_NUMBER');
-  if (fallback) return fallback;
-  throw new Error(`BOT_NUMBER is required. ${BOT_NUMBER_HINT}`);
 }
 
 /**
@@ -176,10 +160,9 @@ function parseUrl(name, fallback) {
 
 /** Parse TELEGRAM_BOT_LINK — must be an HTTPS t.me link. */
 function parseTelegramLink() {
-  // BOT_TOKEN/TG_BOT_LINK/BOT_OWNER_ID are accepted compatibility aliases
-  // for hosting panels that use the shorter names. The explicit TELEGRAM_*
-  // names take precedence and remain the canonical documented interface.
-  const value = readString('TELEGRAM_BOT_LINK', readString('TG_BOT_LINK', ''));
+  // Telegram Bot Link
+  // Example: https://t.me/YourBotUsername
+  const value = readString('TELEGRAM_BOT_LINK', '');
   if (!value) return '';
   try {
     const parsed = new URL(value);
@@ -203,7 +186,6 @@ function resolveRuntimePath(value) {
 function loadConfig() {
 
   // === CORE IDENTITY =======================================================
-  const botNumber = parseBotNumber(DEFAULTS.botNumber);
   const commandPrefix = readString('COMMAND_PREFIX', DEFAULTS.commandPrefix);
 
   if (commandPrefix.length > 4 || /\s/.test(commandPrefix)) {
@@ -251,7 +233,8 @@ function loadConfig() {
 
   // === TELEGRAM CONTROLLER =================================================
   const telegramControllerDbPath = resolveRuntimePath(readString('TELEGRAM_CONTROLLER_DB_PATH', path.join(dataDir, 'telegram-controllers.json')));
-  const telegramOwnerIds = readString('TELEGRAM_OWNER_IDS', readString('BOT_OWNER_ID', ''))
+  // Telegram Owner IDs: numeric user IDs, separated by commas.
+  const telegramOwnerIds = readString('TELEGRAM_OWNER_IDS', '')
     .split(',').map((id) => id.trim()).filter(Boolean);
   if (telegramOwnerIds.some((id) => !/^\d{1,20}$/.test(id))) {
     throw new Error('TELEGRAM_OWNER_IDS must be a comma-separated list of numeric Telegram IDs.');
@@ -260,20 +243,14 @@ function loadConfig() {
   // === BUILD FROZEN CONFIG OBJECT ==========================================
   return Object.freeze({
 
-    // --- Identity (from .env or derived from BOT_NUMBER) -------------------
+    // --- Identity -----------------------------------------------------------
     botName: readString('BOT_NAME', DEFAULTS.botName),
     ownerName: readString('OWNER_NAME', DEFAULTS.ownerName),
-    botNumber,
-    // Derived from BOT_NUMBER — never configured separately.
-    ownerNumber: botNumber,
-    ownerNumbers: Object.freeze([botNumber]),
     // Canonical project identity from system/security.js — not deployer-tunable.
     projectName: PROJECT_NAME,
     developerName: DEVELOPER_HANDLE,
     developerBrand: DEVELOPER_NAME,
     authorName: AUTHOR_NAME,
-    authorNumber: botNumber,
-    ownerLink: `https://wa.me/${botNumber}`,
 
     // --- Appearance & behavior ---------------------------------------------
     whatsappChannel: parseUrl('WHATSAPP_CHANNEL', DEFAULTS.whatsappChannel),
@@ -345,8 +322,8 @@ module.exports = {
   DEVELOPER_HANDLE,
   AUTHOR_NAME,
   PROJECT_NAME,
-  BOT_NUMBER_HINT,
-  assertBotNumber,
+  WHATSAPP_NUMBER_HINT,
+  assertWhatsappNumber,
   config,
   loadConfig,
   normalizePhoneNumber

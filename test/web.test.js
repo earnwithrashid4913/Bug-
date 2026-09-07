@@ -6,7 +6,6 @@
 
 process.env.BOT_DRY_RUN = 'true';
 process.env.OWNER_NAME = 'F!xa Dev';
-process.env.BOT_NUMBER = '923001234567';
 process.env.THEME = 'gojo';
 
 const assert = require('node:assert/strict');
@@ -63,7 +62,7 @@ test('dashboard reports real configuration, themes and connection state', async 
   // This isolated server intentionally verifies deployer overrides without
   // affecting the immutable developer credit.
   assert.equal(payload.ownerName, 'F!xa Dev');
-  assert.equal(payload.botNumber, '923001234567');
+  assert.equal(Object.hasOwn(payload, 'botNumber'), false, 'dashboard must not expose or prefill a deployment pairing number');
   assert.equal(payload.activeThemeId, 'gojo');
   assert.equal(payload.rotationIntervalMs, undefined, 'rotation is disabled');
   assert.deepEqual(payload.themes.map((theme) => theme.id), ['makima', 'nami', 'nezuko', 'shinobu', 'gojo', 'sukuna', 'asta']);
@@ -107,6 +106,13 @@ test('pairing rejects a number that includes a plus sign', async () => {
   assert.equal(status, 400);
   assert.equal(payload.ok, false);
   assert.match(payload.error, /without \+/);
+});
+
+test('pairing requires a number supplied by the current web user', async () => {
+  const { status, payload } = await call('/api/pairing', { method: 'POST', body: {} });
+  assert.equal(status, 400);
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /7-15 digits/);
 });
 
 test('pairing reports the real socket state instead of inventing a code', async () => {

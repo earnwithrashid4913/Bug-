@@ -91,14 +91,13 @@ function commandFromText(text) {
 }
 
 function ownerJids(socket) {
-  const configuredOwners = config.ownerNumbers.map((number) => `${number}@s.whatsapp.net`);
   const connectedAccount = normalizeJid(socket, socket.user?.id);
-  return new Set(connectedAccount ? [...configuredOwners, connectedAccount] : configuredOwners);
+  return new Set(connectedAccount ? [connectedAccount] : []);
 }
 
 function isOwner(socket, sender) {
   return ownerJids(socket).has(normalizeJid(socket, sender))
-    || isAuthorizedAdmin(socket, sender, config.botNumber);
+    || isAuthorizedAdmin(socket, sender);
 }
 
 function senderNumber(context) {
@@ -155,7 +154,6 @@ async function sendOwnerCard(socket, chatId, quoted) {
     '',
     `Owner: ${config.ownerName}`,
     `Developer: ${config.developerName}`,
-    `WhatsApp: ${config.ownerLink}`,
     `Channel: ${config.whatsappChannel}`
   ].join('\n');
   await socket.sendMessage(chatId, { text }, { quoted });
@@ -240,11 +238,9 @@ async function handleReport(socket, context, message) {
     `Message: ${message}`
   ].join('\n');
 
-  await Promise.all(
-    config.ownerNumbers.map((number) =>
-      socket.sendMessage(`${number}@s.whatsapp.net`, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] })
-    )
-  );
+  const owner = normalizeJid(socket, socket.user?.id);
+  if (!owner) throw new Error('The WhatsApp owner account is not connected yet.');
+  await socket.sendMessage(owner, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] });
   await socket.sendMessage(context.chatId, { text: 'Your request has been sent to the owner.' }, { quoted: context.raw });
 }
 

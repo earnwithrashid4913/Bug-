@@ -16,10 +16,6 @@
       "description": "Owner display name.",
       "required": true
     },
-    "BOT_NUMBER": {
-      "description": "WhatsApp number the bot links to. Country code included, WITHOUT the + (example: 923001234567).",
-      "required": true
-    },
     "SESSION_ID": {
       "description": "Contents of session/creds.json (raw JSON or base64). Required on Heroku: the filesystem is wiped on every dyno restart.",
       "value": ""
