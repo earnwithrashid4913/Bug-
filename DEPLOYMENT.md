@@ -1,6 +1,6 @@
 # ANIME MD Deployment Guide
 
-ANIME MD runs as one long-lived web service. It serves the web pairing dashboard and maintains one WhatsApp connection.
+ANIME MD runs as one long-lived service. It maintains the main WhatsApp bot and, when configured, isolated Telegram pairing sessions.
 
 ## Deploy
 
@@ -8,7 +8,7 @@ ANIME MD runs as one long-lived web service. It serves the web pairing dashboard
 2. Run `npm ci`.
 3. Configure a persistent directory for `AUTH_DIR` and `DATA_DIR`.
 4. Start with `npm start`.
-5. Open the service URL and complete Web Pairing.
+5. Configure Telegram Pairing, or use a pre-existing `SESSION_ID` / terminal QR session for the main bot.
 
 No `BOT_NUMBER` environment variable is required. The account number is entered only in the pairing interface when a code is requested.
 
@@ -22,6 +22,7 @@ WEB_HOST=0.0.0.0
 AUTH_DIR=/persistent/session
 DATA_DIR=/persistent/data
 AUTH_METHOD=pairing
+WEB_PAIRING_ENABLED=false
 ```
 
 Optional operator settings:
@@ -35,12 +36,12 @@ SESSION_ID=
 Optional Telegram controller:
 
 ```dotenv
-# Get the token from @BotFather.
+# STEP 1 — Get the token from @BotFather, then paste it after =.
 TELEGRAM_BOT_TOKEN=
-# Example: https://t.me/YourBotUsername
-TELEGRAM_BOT_LINK=
-# Numeric Telegram user ID(s), comma separated.
-TELEGRAM_OWNER_IDS=123456789
+# STEP 2 — Enter your Telegram bot username link.
+TELEGRAM_BOT_LINK=https://t.me/AnimeMD_Pairing_Bot
+# STEP 3 — Enter your numeric Telegram User ID(s), comma separated.
+TELEGRAM_OWNER_IDS=6531042566
 ```
 
 ## Render
@@ -54,6 +55,6 @@ Use `Procfile` (`web: npm start`). Heroku storage is ephemeral, so configure `SE
 ## Verification
 
 - `GET /health` returns a JSON health response.
-- The dashboard shows actual connection state from WhatsApp.
-- Request a pairing code only after the dashboard reports it is ready.
+- With `WEB_PAIRING_ENABLED=false`, the legacy dashboard remains off and does not create a competing pairing flow.
+- Request a Telegram pairing code with `/pair <number>` after opening the configured Telegram bot.
 - Run `npm run check` before deployment.

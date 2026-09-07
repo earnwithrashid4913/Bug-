@@ -26,6 +26,7 @@ const { sendButtons } = require('./system/lib/ui');
 const { createWebServer } = require('./system/web');
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
+const { TelegramPairingManager } = require('./system/lib/telegram-pairing-manager');
 
 // ---------------------------------------------------------------------------
 // Process supervisor.
@@ -69,6 +70,7 @@ let stopping = false;
 let resetting = false;
 let currentPairingState;
 let telegramController;
+let telegramPairingManager;
 let connectionCardSent = false;
 
 // Live mirror of the WhatsApp socket state. The dashboard renders this object
@@ -265,19 +267,27 @@ function startTelegramController() {
     console.error('[telegram] TELEGRAM_BOT_TOKEN is set but TELEGRAM_OWNER_IDS is empty; controller is disabled.');
     return;
   }
+  telegramPairingManager = new TelegramPairingManager({ authDir: config.authDir });
   telegramController = new TelegramController({
     token: config.telegramBotToken,
     owners: config.telegramOwnerIds,
     controllerStore: new TelegramControllerStore(config.telegramControllerDbPath),
-    pairing: { requestPairing: handlePairingRequest, getStatus: async () => ({ ...liveStatus }), stopSession: stopPairingSession },
+    pairing: {
+      requestPairing: (ownerId, number) => telegramPairingManager.requestPairing(ownerId, number),
+      getStatus: (ownerId) => telegramPairingManager.snapshot(ownerId),
+      stopSession: (ownerId, number) => telegramPairingManager.stopSession(ownerId, number)
+    },
     startImage: config.telegramStartImage,
     connectedImage: config.telegramConnectedImage
   });
+  telegramPairingManager.onConnected = async (ownerId) => {
+    // This notification is scoped to the Telegram owner whose isolated
+    // WhatsApp socket authenticated. It is never broadcast to other owners.
+    await telegramController?.replyPhoto(ownerId, config.telegramConnectedImage, '*ANIME MD STATUS*\nYour WhatsApp session connected successfully.');
+  };
   void telegramController.start()
     .then(() => {
-      console.info('[telegram] Controller startup completed.');
-      if (liveStatus.connected) return telegramController?.notifyConnected();
-      return undefined;
+      console.info('[telegram] Controller started successfully.');
     })
     .catch((error) => {
       telegramController = undefined;
@@ -553,6 +563,7 @@ function shutdown(signal) {
     console.error('[shutdown] Failed to close the WhatsApp socket cleanly:', error);
   }
   telegramController?.stop();
+  void telegramPairingManager?.shutdown();
 
   // A WebSocket implementation can occasionally retain an internal handle while closing.
   // Do not leave a deployment worker stuck during a stop/redeploy operation.
@@ -665,7 +676,8 @@ if (!isChildProcess && !config.dryRun) {
   console.log(`[startup] Dry run successful. Configuration for ${config.botName} is valid; no WhatsApp connection was opened.`);
 } else {
   bootstrapSession();
-  startWebServer();
+  if (config.webPairingEnabled) startWebServer();
+  else console.info('[web] Web Pairing disabled: WEB_PAIRING_ENABLED=false.');
   startTelegramController();
   void startBot();
 }

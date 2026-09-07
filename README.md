@@ -40,23 +40,25 @@ All configuration is read from `.env` by `system/config.js`. Copy `.env.example`
 Set all of the following to enable remote Telegram control:
 
 ```dotenv
-# Get this secret from @BotFather.
+# STEP 1 — Get this secret from @BotFather and paste it after =.
 TELEGRAM_BOT_TOKEN=
 
-# Example: https://t.me/YourBotUsername
-TELEGRAM_BOT_LINK=
+# STEP 2 — Enter your Telegram bot username link.
+TELEGRAM_BOT_LINK=https://t.me/AnimeMD_Pairing_Bot
 
-# Your numeric Telegram user ID. Separate multiple IDs with commas.
-TELEGRAM_OWNER_IDS=123456789
+# STEP 3 — Enter your numeric Telegram User ID. Separate multiple IDs with commas.
+TELEGRAM_OWNER_IDS=6531042566
 ```
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token to `TELEGRAM_BOT_TOKEN`.
 2. Set `TELEGRAM_BOT_LINK` to the bot's public `https://t.me/...` link.
 3. Put your numeric Telegram user ID in `TELEGRAM_OWNER_IDS`. Only these bootstrap owners can manage additional controllers.
 
-The controller uses the same WhatsApp socket as the dashboard. It supports `/pair <number>`, `/status`, `/sessions`, `/addowner <id>`, `/delowner <id>`, `/stop <number>`, and `/help`. It replies only after the underlying pairing request succeeds.
+Each authorized controller receives an isolated WhatsApp auth directory and socket. It supports `/start`, `/pair <number>`, `/status`, `/sessions`, `/addowner <id>`, `/delowner <id>`, `/stop <number>`, and `/help`. It replies with a code only after the underlying WhatsApp pairing request succeeds, and sends the connected image only after that controller's socket reports `open`.
 
-## WhatsApp web pairing
+## WhatsApp web pairing (temporarily disabled by default)
+
+Set `WEB_PAIRING_ENABLED=true` only when you intentionally want to re-enable the existing dashboard routes. With the default `false`, it does not listen or issue pairing requests, so it cannot interfere with Telegram Pairing.
 
 1. Start the bot and wait for the dashboard to show that it is ready for a pairing request.
 2. Enter the WhatsApp number with country code and no `+`.
