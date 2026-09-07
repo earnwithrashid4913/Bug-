@@ -51,6 +51,7 @@ const economyStore = new EconomyStore(config.economyDbPath);
 const settingsStore = new RuntimeSettingsStore(config.settingsDbPath, { prefix: config.commandPrefix });
 const reportCooldowns = new Map();
 let publicMode = config.publicMode;
+let commandPrefix = config.commandPrefix;
 
 // Anti-delete message cache: chatId:messageId → { text, sender, timestamp }
 const deletedMessageCache = new Map();
@@ -67,12 +68,22 @@ const SPAM_WINDOW_MS = 8_000;
 async function initializeMode(socket) {
   const mode = await modeStore.get();
   publicMode = mode === 'public';
+  const savedPrefix = await settingsStore.get('prefix');
+  // Runtime settings are data, not trusted code. Ignore malformed historical
+  // values rather than making every command unavailable after an upgrade.
+  if (typeof savedPrefix === 'string' && savedPrefix.length > 0 && savedPrefix.length <= 4 && !/\s/.test(savedPrefix)) {
+    commandPrefix = savedPrefix;
+  }
   if (socket) socket.public = publicMode;
   return mode;
 }
 
+function getCommandPrefix() {
+  return commandPrefix;
+}
+
 function commandFromText(text) {
-  const prefix = config.commandPrefix;
+  const prefix = getCommandPrefix();
   if (!text.startsWith(prefix)) return undefined;
   const [name = '', ...args] = text.slice(prefix.length).trim().split(/\s+/);
   if (!name) return undefined;
@@ -135,7 +146,7 @@ async function downloadMediaBuffer(mediaMessage, mediaType) {
 }
 
 function helpText(prefix) {
-  return buildHelpText(prefix || config.commandPrefix);
+  return buildHelpText(prefix || getCommandPrefix());
 }
 
 async function sendOwnerCard(socket, chatId, quoted) {
@@ -214,7 +225,7 @@ async function handleReport(socket, context, message) {
     return;
   }
   if (!message || message.length > 1_500) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}request <message up to 1500 characters>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}request <message up to 1500 characters>` }, { quoted: context.raw });
     return;
   }
   reportCooldowns.set(context.sender, now);
@@ -249,14 +260,14 @@ async function handleGreetingSettings(socket, context, command, group) {
       `Welcome: ${settings.welcomeEnabled ? 'ON' : 'OFF'}`,
       `Goodbye: ${settings.goodbyeEnabled ? 'ON' : 'OFF'}`,
       '',
-      `Use ${config.commandPrefix}welcome <on|off|status> or ${config.commandPrefix}goodbye <on|off|status>.`
+      `Use ${getCommandPrefix()}welcome <on|off|status> or ${getCommandPrefix()}goodbye <on|off|status>.`
     ].join('\n');
     await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
     return;
   }
 
   if (!['on', 'off', 'status'].includes(action)) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}${command.name} <on|off|status>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}${command.name} <on|off|status>` }, { quoted: context.raw });
     return;
   }
   if (action === 'status') {
@@ -275,14 +286,14 @@ async function handleGroupManagement(socket, context, command, group) {
       {
         text: [
           '*Safe group management*',
-          `${config.commandPrefix}gname <name>`,
-          `${config.commandPrefix}gdesc <description>`,
-          `${config.commandPrefix}add <international number>`,
-          `${config.commandPrefix}kick @user or reply`,
-          `${config.commandPrefix}promote @user or reply`,
-          `${config.commandPrefix}demote @user or reply`,
-          `${config.commandPrefix}lock / ${config.commandPrefix}unlock`,
-          `${config.commandPrefix}grouplink`
+          `${getCommandPrefix()}gname <name>`,
+          `${getCommandPrefix()}gdesc <description>`,
+          `${getCommandPrefix()}add <international number>`,
+          `${getCommandPrefix()}kick @user or reply`,
+          `${getCommandPrefix()}promote @user or reply`,
+          `${getCommandPrefix()}demote @user or reply`,
+          `${getCommandPrefix()}lock / ${getCommandPrefix()}unlock`,
+          `${getCommandPrefix()}grouplink`
         ].join('\n')
       },
       { quoted: context.raw }
@@ -315,7 +326,7 @@ async function handleGroupManagement(socket, context, command, group) {
       case 'kick':
       case 'promote':
       case 'demote': {
-        if (!target) throw new Error(`Mention a user or reply to a message to use ${config.commandPrefix}${command.name}.`);
+        if (!target) throw new Error(`Mention a user or reply to a message to use ${getCommandPrefix()}${command.name}.`);
         const action = command.name === 'kick' ? 'remove' : command.name;
         await socket.groupParticipantsUpdate(context.chatId, [target], action);
         break;
@@ -344,7 +355,7 @@ async function handleGroupManagement(socket, context, command, group) {
 async function handleAiCommand(socket, context, command) {
   const prompt = command.text.trim();
   if (!prompt) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}ai <question>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}ai <question>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -376,7 +387,7 @@ async function handleSetBotProfilePhoto(socket, context) {
   if (!(await requireOwner(socket, context))) return;
   const imageMessage = getImageMessage(context.raw);
   if (!imageMessage) {
-    await socket.sendMessage(context.chatId, { text: `Reply to an image with ${config.commandPrefix}setpp to update the bot profile picture.` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Reply to an image with ${getCommandPrefix()}setpp to update the bot profile picture.` }, { quoted: context.raw });
     return;
   }
   try {
@@ -396,7 +407,7 @@ async function handleSetBotProfilePhoto(socket, context) {
 // --- MENU ---
 
 async function handleMenuCommand(socket, context, command) {
-  const p = config.commandPrefix;
+  const p = getCommandPrefix();
   const categoryId = command.args[0]?.toLowerCase();
 
   if (!categoryId || categoryId === 'home') {
@@ -461,7 +472,7 @@ async function handleMenuCommand(socket, context, command) {
 
 async function handlePlayCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}play <song name or URL>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}play <song name or URL>` }, { quoted: context.raw });
     return;
   }
   await socket.sendMessage(context.chatId, { text: 'Searching…' }, { quoted: context.raw });
@@ -495,7 +506,7 @@ async function handleYtmp3Command(socket, context, command) {
 
 async function handleVideoCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}video <query or URL>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}video <query or URL>` }, { quoted: context.raw });
     return;
   }
   await socket.sendMessage(context.chatId, { text: 'Searching…' }, { quoted: context.raw });
@@ -525,7 +536,7 @@ async function handleVideoCommand(socket, context, command) {
 
 async function handleSpotifyCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}spotify <song name>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}spotify <song name>` }, { quoted: context.raw });
     return;
   }
   await socket.sendMessage(context.chatId, { text: 'Searching Spotify…' }, { quoted: context.raw });
@@ -559,7 +570,7 @@ async function handleSpotifyCommand(socket, context, command) {
 
 async function handleMediaCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}media <URL>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}media <URL>` }, { quoted: context.raw });
     return;
   }
   await socket.sendMessage(context.chatId, { text: 'Downloading…' }, { quoted: context.raw });
@@ -594,7 +605,7 @@ async function handleVVCommand(socket, context) {
 
   const source = viewOnce || quotedViewOnce;
   if (!source) {
-    await socket.sendMessage(context.chatId, { text: `Reply to a view-once photo or video with ${config.commandPrefix}vv to reveal it.` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Reply to a view-once photo or video with ${getCommandPrefix()}vv to reveal it.` }, { quoted: context.raw });
     return;
   }
 
@@ -617,7 +628,7 @@ async function handleVVCommand(socket, context) {
 
 async function handleTTSCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}tts <text>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}tts <text>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -630,7 +641,7 @@ async function handleTTSCommand(socket, context, command) {
 
 async function handleQRCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}qr <text or URL>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}qr <text or URL>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -648,7 +659,7 @@ async function handleTourlCommand(socket, context) {
   if (!media) {
     const docOrVideo = context.raw?.message?.documentMessage || context.raw?.message?.videoMessage;
     if (!docOrVideo) {
-      await socket.sendMessage(context.chatId, { text: `Reply to an image, video, sticker, or document with ${config.commandPrefix}tourl.` }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { text: `Reply to an image, video, sticker, or document with ${getCommandPrefix()}tourl.` }, { quoted: context.raw });
       return;
     }
     try {
@@ -678,7 +689,7 @@ async function handleTourlCommand(socket, context) {
 
 async function handleCalcCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}calc <expression>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}calc <expression>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -691,7 +702,7 @@ async function handleCalcCommand(socket, context, command) {
 
 async function handleSSCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}ss <URL>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}ss <URL>` }, { quoted: context.raw });
     return;
   }
   let url = command.text.trim();
@@ -707,7 +718,7 @@ async function handleSSCommand(socket, context, command) {
 
 async function handleShortCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}short <URL>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}short <URL>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -722,7 +733,7 @@ async function handleShortCommand(socket, context, command) {
 
 async function handleTranslateCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}translate [target-lang] <text>\nExample: ${config.commandPrefix}translate fr hello` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}translate [target-lang] <text>\nExample: ${getCommandPrefix()}translate fr hello` }, { quoted: context.raw });
     return;
   }
   try {
@@ -734,7 +745,7 @@ async function handleTranslateCommand(socket, context, command) {
       text = parts.slice(1).join(' ');
     }
     if (!text) {
-      await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}translate [target-lang] <text>` }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}translate [target-lang] <text>` }, { quoted: context.raw });
       return;
     }
     const { translated, source } = await translateText(text, target);
@@ -768,7 +779,7 @@ async function handleAntiToggleCommand(socket, context, command) {
   const label = labels[settingKey] || settingKey;
 
   if (!['on', 'off', 'status'].includes(action)) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}${command.name} <on|off|status>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}${command.name} <on|off|status>` }, { quoted: context.raw });
     return;
   }
 
@@ -785,7 +796,7 @@ async function handleAntiToggleCommand(socket, context, command) {
 async function handleWarnCommand(socket, context, command, group) {
   const target = getTargetJid(context.raw);
   if (!target) {
-    await socket.sendMessage(context.chatId, { text: `Mention or reply to a user with ${config.commandPrefix}warn <reason>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Mention or reply to a user with ${getCommandPrefix()}warn <reason>` }, { quoted: context.raw });
     return;
   }
   const reason = command.text || 'rule violation';
@@ -808,7 +819,7 @@ async function handleWarnCommand(socket, context, command, group) {
 async function handleUnwarnCommand(socket, context, command) {
   const target = getTargetJid(context.raw);
   if (!target) {
-    await socket.sendMessage(context.chatId, { text: `Mention or reply to a user with ${config.commandPrefix}unwarn.` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Mention or reply to a user with ${getCommandPrefix()}unwarn.` }, { quoted: context.raw });
     return;
   }
   await warningStore.remove(context.chatId, target);
@@ -834,7 +845,7 @@ async function handleAutomationToggle(socket, context, command, group) {
     if (!(await requireOwner(socket, context))) return;
     const action = command.args[0]?.toLowerCase() || 'status';
     if (!['on', 'off', 'status'].includes(action)) {
-      await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}autostatus <on|off|status>` }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}autostatus <on|off|status>` }, { quoted: context.raw });
       return;
     }
     if (action === 'status') {
@@ -853,7 +864,7 @@ async function handleAutomationToggle(socket, context, command, group) {
   const label = labels[settingKey] || settingKey;
 
   if (!['on', 'off', 'status'].includes(action)) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}${command.name} <on|off|status>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}${command.name} <on|off|status>` }, { quoted: context.raw });
     return;
   }
 
@@ -889,7 +900,7 @@ async function handleRPSCommand(socket, context, command) {
   const choices = ['rock', 'paper', 'scissors'];
   const pick = choices.indexOf((command.args[0] || '').toLowerCase());
   if (pick < 0) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}rps <rock|paper|scissors>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}rps <rock|paper|scissors>` }, { quoted: context.raw });
     return;
   }
   const bot = Math.floor(Math.random() * 3);
@@ -932,7 +943,7 @@ async function handleGiveCommand(socket, context, command) {
   const target = getTargetJid(context.raw);
   const amount = Number(command.args[command.args.length - 1]);
   if (!target || !Number.isInteger(amount) || amount <= 0) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}give @user <amount>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}give @user <amount>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -947,7 +958,7 @@ async function handleGiveCommand(socket, context, command) {
 
 async function handleBroadcastCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}broadcast <message>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}broadcast <message>` }, { quoted: context.raw });
     return;
   }
   await socket.sendMessage(context.chatId, { text: `*Broadcast sent.*\n\n${command.text}` }, { quoted: context.raw });
@@ -959,9 +970,16 @@ async function handleSetPrefixCommand(socket, context, command) {
     await socket.sendMessage(context.chatId, { text: 'Prefix must be 1-4 non-whitespace characters.' }, { quoted: context.raw });
     return;
   }
-  config.commandPrefix = prefix;
-  await settingsStore.set('prefix', prefix);
+  await setCommandPrefix(prefix);
   await socket.sendMessage(context.chatId, { text: `Command prefix is now: ${prefix}` }, { quoted: context.raw });
+}
+
+async function setCommandPrefix(prefix) {
+  if (typeof prefix !== 'string' || !prefix || prefix.length > 4 || /\s/.test(prefix)) {
+    throw new Error('Prefix must be 1-4 non-whitespace characters.');
+  }
+  commandPrefix = prefix;
+  await settingsStore.set('prefix', prefix);
 }
 
 async function handleSetNameCommand(socket, context, command) {
@@ -982,7 +1000,7 @@ async function handleSetNameCommand(socket, context, command) {
 
 async function handleSudoCommand(socket, context, command) {
   if (!command.args[0]) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}sudo <number>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}sudo <number>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -995,7 +1013,7 @@ async function handleSudoCommand(socket, context, command) {
 
 async function handleDelsudoCommand(socket, context, command) {
   if (!command.args[0]) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}delsudo <number>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}delsudo <number>` }, { quoted: context.raw });
     return;
   }
   try {
@@ -1026,7 +1044,7 @@ async function handleModeCommand(socket, context, command) {
     await socket.sendMessage(context.chatId, { text: `Bot mode is now ${arg}.` }, { quoted: context.raw });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: `Current mode: ${publicMode ? 'public' : 'self'}\n\nUse ${config.commandPrefix}mode <public|self> to change.` }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, { text: `Current mode: ${publicMode ? 'public' : 'self'}\n\nUse ${getCommandPrefix()}mode <public|self> to change.` }, { quoted: context.raw });
 }
 
 // --- PREMIUM ---
@@ -1064,7 +1082,7 @@ async function handleSessionsCommand(socket, context) {
 
 async function handleStopSessionCommand(socket, context, command) {
   if (!command.args[0]) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}stopsession <number>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}stopsession <number>` }, { quoted: context.raw });
     return;
   }
   await socket.sendMessage(context.chatId, { text: 'Use the Telegram controller `/stop <number>` to remove an unpaired session safely.' }, { quoted: context.raw });
@@ -1238,7 +1256,7 @@ async function handleMessage(socket, rawMessage) {
     case 'stiker': {
       const imageMessage = getImageMessage(rawMessage);
       if (!imageMessage) {
-        await socket.sendMessage(context.chatId, { text: `Reply to an image with ${config.commandPrefix}sticker to create a sticker.` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Reply to an image with ${getCommandPrefix()}sticker to create a sticker.` }, { quoted: context.raw });
         break;
       }
       try {
@@ -1257,7 +1275,7 @@ async function handleMessage(socket, rawMessage) {
     case 'img': {
       const stickerMessage = getStickerMessage(rawMessage);
       if (!stickerMessage) {
-        await socket.sendMessage(context.chatId, { text: `Reply to a sticker with ${config.commandPrefix}toimg to convert it to an image.` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Reply to a sticker with ${getCommandPrefix()}toimg to convert it to an image.` }, { quoted: context.raw });
         break;
       }
       try {
@@ -1277,10 +1295,10 @@ async function handleMessage(socket, rawMessage) {
         text: [
           '*Converter commands*',
           '',
-          `${config.commandPrefix}sticker — Create a sticker from an image`,
-          `${config.commandPrefix}toimg — Convert a sticker to an image`,
-          `${config.commandPrefix}tts <text> — Text to speech`,
-          `${config.commandPrefix}qr <text> — Generate a QR code`
+          `${getCommandPrefix()}sticker — Create a sticker from an image`,
+          `${getCommandPrefix()}toimg — Convert a sticker to an image`,
+          `${getCommandPrefix()}tts <text> — Text to speech`,
+          `${getCommandPrefix()}qr <text> — Generate a QR code`
         ].join('\n')
       }, { quoted: context.raw });
       break;
@@ -1327,7 +1345,7 @@ async function handleMessage(socket, rawMessage) {
     case 'idch':
     case 'cekidch': {
       if (!command.text) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}idch <WhatsApp channel URL>` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}idch <WhatsApp channel URL>` }, { quoted: context.raw });
         break;
       }
       let inviteCode;
@@ -1372,12 +1390,12 @@ async function handleMessage(socket, rawMessage) {
         text: [
           '*Tools commands*',
           '',
-          `${config.commandPrefix}jid — Show JIDs`,
-          `${config.commandPrefix}idch <url> — Channel info`,
-          `${config.commandPrefix}calc <expr> — Calculator`,
-          `${config.commandPrefix}ss <url> — Screenshot`,
-          `${config.commandPrefix}short <url> — Shorten URL`,
-          `${config.commandPrefix}translate [lang] <text> — Translate`
+          `${getCommandPrefix()}jid — Show JIDs`,
+          `${getCommandPrefix()}idch <url> — Channel info`,
+          `${getCommandPrefix()}calc <expr> — Calculator`,
+          `${getCommandPrefix()}ss <url> — Screenshot`,
+          `${getCommandPrefix()}short <url> — Shorten URL`,
+          `${getCommandPrefix()}translate [lang] <text> — Translate`
         ].join('\n')
       }, { quoted: context.raw });
       break;
@@ -1389,7 +1407,7 @@ async function handleMessage(socket, rawMessage) {
       if (!group) break;
       const message = context.quotedText || command.text;
       if (!message) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}hidetag <message>` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}hidetag <message>` }, { quoted: context.raw });
         break;
       }
       await socket.sendMessage(context.chatId, { text: message, mentions: group.participants.map((entry) => entry.id) }, { quoted: context.raw });
@@ -1401,7 +1419,7 @@ async function handleMessage(socket, rawMessage) {
       const group = await requireGroupAdmin(socket, context);
       if (!group) break;
       if (!command.text) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}tagall <message>` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}tagall <message>` }, { quoted: context.raw });
         break;
       }
       const mentions = group.participants.map((entry) => entry.id);
@@ -1525,10 +1543,10 @@ async function handleMessage(socket, rawMessage) {
         text: [
           '*RPG & Economy commands*',
           '',
-          `${config.commandPrefix}balance — Check your wallet/bank`,
-          `${config.commandPrefix}daily — Claim daily reward`,
-          `${config.commandPrefix}work — Earn coins`,
-          `${config.commandPrefix}give @user <amount> — Transfer coins`
+          `${getCommandPrefix()}balance — Check your wallet/bank`,
+          `${getCommandPrefix()}daily — Claim daily reward`,
+          `${getCommandPrefix()}work — Earn coins`,
+          `${getCommandPrefix()}give @user <amount> — Transfer coins`
         ].join('\n')
       }, { quoted: context.raw });
       break;
@@ -1568,7 +1586,7 @@ async function handleMessage(socket, rawMessage) {
       if (!(await requireOwner(socket, context))) break;
       const themeId = command.args[0]?.toLowerCase();
       if (!themeId) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}theme <makima|nami|nezuko|shinobu|gojo|sukuna|asta>` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}theme <makima|nami|nezuko|shinobu|gojo|sukuna|asta>` }, { quoted: context.raw });
         break;
       }
       try {
@@ -1637,7 +1655,7 @@ async function handleMessage(socket, rawMessage) {
       if (!(await requireOwner(socket, context))) break;
       const [phoneNumber, duration = '30d'] = command.args;
       if (!phoneNumber) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}addprem <number> [30d]` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}addprem <number> [30d]` }, { quoted: context.raw });
         break;
       }
       try {
@@ -1652,7 +1670,7 @@ async function handleMessage(socket, rawMessage) {
     case 'delprem': {
       if (!(await requireOwner(socket, context))) break;
       if (!command.args[0]) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}delprem <number>` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}delprem <number>` }, { quoted: context.raw });
         break;
       }
       try {
@@ -1705,7 +1723,7 @@ async function handleMessage(socket, rawMessage) {
       } else if (/^\d+$/.test(command.args[0])) {
         const game = guessGames.get(context.sender);
         if (!game) {
-          await socket.sendMessage(context.chatId, { text: `No active game. Start one with ${config.commandPrefix}guess start` }, { quoted: context.raw });
+          await socket.sendMessage(context.chatId, { text: `No active game. Start one with ${getCommandPrefix()}guess start` }, { quoted: context.raw });
           break;
         }
         const guess = Number(command.args[0]);
@@ -1722,7 +1740,7 @@ async function handleMessage(socket, rawMessage) {
         guessGames.delete(context.sender);
         await socket.sendMessage(context.chatId, { text: 'Game ended.' }, { quoted: context.raw });
       } else {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${config.commandPrefix}guess <start|stop|1-100>` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}guess <start|stop|1-100>` }, { quoted: context.raw });
       }
       break;
     }
@@ -1765,3 +1783,5 @@ module.exports.commandFromText = commandFromText;
 module.exports.helpText = helpText;
 module.exports.initializeMode = initializeMode;
 module.exports.modeStore = modeStore;
+module.exports.getCommandPrefix = getCommandPrefix;
+module.exports.setCommandPrefix = setCommandPrefix;

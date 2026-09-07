@@ -476,7 +476,7 @@ function startWebServer() {
   webServer = createWebServer({
     config,
     themes: listThemes(),
-    getActiveThemeId: () => activeTheme.id,
+    getActiveThemeId: () => activeTheme?.id || null,
     setActiveTheme,
     getStatus: () => ({ ...liveStatus, uptimeMs: Date.now() - liveStatus.startedAt }),
     requestPairing: handlePairingRequest

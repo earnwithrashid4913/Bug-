@@ -6,10 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { assertBotNumber, config } = require('../system/config');
+process.env.BOT_NUMBER = '923001234567';
+const { assertBotNumber, config, loadConfig } = require('../system/config');
 const { CANONICAL_IDENTITY } = require('../system/security');
 const handleMessage = require('../system/handler');
-const { commandFromText } = handleMessage;
+const { commandFromText, getCommandPrefix, setCommandPrefix } = handleMessage;
 const {
   extractText,
   getImageMessage,
@@ -26,7 +27,7 @@ const sharp = require('sharp');
 
 test('owner configuration exposes a single owner and the bot number', () => {
   assert.equal(config.ownerName, 'Rashid Hussain');
-  assert.equal(config.botNumber, '923448170040');
+  assert.equal(config.botNumber, '923001234567');
   assert.equal(config.ownerNumber, config.botNumber);
   assert.deepEqual([...config.ownerNumbers], [config.botNumber]);
   // Identity comes from the canonical source in system/security.js, so it
@@ -51,6 +52,29 @@ test('bot number validation rejects a leading plus sign', () => {
   assert.throws(() => assertBotNumber('+15551234567', 'Phone number'), /Phone number must not contain/);
 });
 
+test('configuration requires a deployment bot number and supports Telegram compatibility aliases', () => {
+  const saved = Object.fromEntries(['BOT_NUMBER', 'PAIRING_NUMBER', 'TELEGRAM_BOT_TOKEN', 'BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TG_BOT_LINK', 'TELEGRAM_OWNER_IDS', 'BOT_OWNER_ID'].map((key) => [key, process.env[key]]));
+  try {
+    delete process.env.BOT_NUMBER;
+    delete process.env.PAIRING_NUMBER;
+    assert.throws(() => loadConfig(), /BOT_NUMBER is required/);
+
+    process.env.BOT_NUMBER = '923001234567';
+    process.env.BOT_TOKEN = 'compat-token';
+    process.env.TG_BOT_LINK = 'https://t.me/compat_bot';
+    process.env.BOT_OWNER_ID = '12345';
+    const compatibilityConfig = loadConfig();
+    assert.equal(compatibilityConfig.telegramBotToken, 'compat-token');
+    assert.equal(compatibilityConfig.telegramBotLink, 'https://t.me/compat_bot');
+    assert.deepEqual(compatibilityConfig.telegramOwnerIds, ['12345']);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('command parser accepts only the configured prefix', () => {
   assert.deepEqual(commandFromText('!addprem 15551234567 30d'), {
     name: 'addprem',
@@ -58,6 +82,18 @@ test('command parser accepts only the configured prefix', () => {
     text: '15551234567 30d'
   });
   assert.equal(commandFromText('addprem 15551234567'), undefined);
+});
+
+test('runtime prefix changes update command parsing without mutating frozen config', async () => {
+  await setCommandPrefix('$');
+  try {
+    assert.equal(getCommandPrefix(), '$');
+    assert.deepEqual(commandFromText('$ping'), { name: 'ping', args: [], text: '' });
+    assert.equal(commandFromText('!ping'), undefined);
+    assert.equal(config.commandPrefix, '!');
+  } finally {
+    await setCommandPrefix('!');
+  }
 });
 
 test('message text extraction handles standard and interactive messages', () => {

@@ -38,7 +38,7 @@ npm ci
 cp .env.example .env
 ```
 
-Only two values are user-facing:
+Set these required values before the first startup:
 
 ```dotenv
 OWNER_NAME=Enter Your Name
