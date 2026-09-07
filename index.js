@@ -253,7 +253,14 @@ async function stopPairingSession(number) {
 }
 
 function startTelegramController() {
-  if (!config.telegramBotToken) return;
+  if (!config.telegramBotToken && !config.telegramOwnerIds.length) {
+    console.info('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_IDS are not configured.');
+    return;
+  }
+  if (!config.telegramBotToken) {
+    console.error('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN is missing. Get a token from @BotFather and add it to .env.');
+    return;
+  }
   if (!config.telegramOwnerIds.length) {
     console.error('[telegram] TELEGRAM_BOT_TOKEN is set but TELEGRAM_OWNER_IDS is empty; controller is disabled.');
     return;
@@ -266,7 +273,16 @@ function startTelegramController() {
     startImage: config.telegramStartImage,
     connectedImage: config.telegramConnectedImage
   });
-  telegramController.start();
+  void telegramController.start()
+    .then(() => {
+      console.info('[telegram] Controller startup completed.');
+      if (liveStatus.connected) return telegramController?.notifyConnected();
+      return undefined;
+    })
+    .catch((error) => {
+      telegramController = undefined;
+      console.error(`[telegram] Controller failed to start: ${error.message}. Check TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_IDS, and Telegram network access.`);
+    });
 }
 
 function setActiveTheme(themeId) {
@@ -350,6 +366,9 @@ async function handleConnectionUpdate(socket, update, pairingState) {
           console.warn(`[connection] Could not send the connection success card: ${error.message}`);
         });
     }
+    void telegramController?.notifyConnected().catch((error) => {
+      console.warn(`[telegram] Could not send WhatsApp-connected notification: ${error.message}`);
+    });
     return;
   }
 

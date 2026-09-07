@@ -55,6 +55,7 @@ class TelegramController {
     this.log = log;
     this.offset = 0;
     this.running = false;
+    this.bot = undefined;
     this.pollPromise = undefined;
     this.sensitiveRequests = new Map();
   }
@@ -171,19 +172,50 @@ class TelegramController {
     }
   }
 
-  start() {
-    if (!this.token || this.running) return;
+  async notifyBootstrapOwners(image, caption) {
+    for (const ownerId of this.bootstrapOwners) {
+      try {
+        await this.replyPhoto(ownerId, image, caption);
+      } catch (error) {
+        // A Telegram user must open the bot before it can receive a proactive
+        // message. This must not stop polling for the other authorized owners.
+        this.log.warn?.(`[telegram] Could not notify configured owner ${ownerId}: ${error.message}`);
+      }
+    }
+  }
+
+  async notifyConnected() {
+    if (!this.running) return;
+    await this.notifyBootstrapOwners(this.connectedImage, '*ANIME MD STATUS*\nWhatsApp connected successfully.');
+  }
+
+  async start() {
+    if (!this.token || this.running) return false;
     if (typeof this.fetch !== 'function') throw new Error('Telegram controller requires Node.js fetch support.');
+
+    // Long polling cannot receive updates while a webhook is registered. Clear
+    // a stale webhook explicitly before polling, while retaining queued updates.
+    this.bot = await this.api('getMe', {});
+    await this.api('deleteWebhook', { drop_pending_updates: false });
     this.running = true;
     this.pollPromise = (async () => {
       while (this.running) {
-        try { await this.pollOnce(); } catch (error) {
+        try {
+          await this.pollOnce();
+          // Telegram long polling normally blocks for up to 25 seconds. Yield
+          // here as well so an immediately returning proxy/API cannot spin a
+          // microtask loop and starve startup, shutdown, or other bot work.
+          await new Promise((resolve) => setImmediate(resolve));
+        } catch (error) {
           this.log.error?.(`[telegram] Poll failed: ${error.message}`);
           await new Promise((resolve) => setTimeout(resolve, 5_000));
         }
       }
     })();
-    this.log.info?.('[telegram] Authorized Telegram controller started.');
+    const username = this.bot?.username ? `@${this.bot.username}` : 'the configured Telegram bot';
+    this.log.info?.(`[telegram] Controller verified as ${username}; long polling started for ${this.bootstrapOwners.size} bootstrap owner(s).`);
+    await this.notifyBootstrapOwners(this.startImage, '*ANIME MD Telegram controller is online.*\nSend /help to view available commands.');
+    return true;
   }
 
   stop() { this.running = false; }
