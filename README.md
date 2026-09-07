@@ -1,4 +1,4 @@
-# 𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿
+# ANIME MD
 
 A clean, configurable WhatsApp bot built with Baileys and maintained under the **Only Fixa Dev** project.
 
@@ -59,8 +59,8 @@ The bot has exactly one owner, so only these two values need to be set.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OWNER_NAME` | `Only Fixa Dev` | Global owner display name. |
-| `BOT_NUMBER` | `923448170040` | The WhatsApp number the bot links to. **Country code included, no `+`.** |
+| `OWNER_NAME` | `Enter Your Name` | Global owner display name. |
+| `BOT_NUMBER` | `923001234567` | The WhatsApp number the bot links to. **Country code included, no `+`.** |
 
 `BOT_NUMBER` is validated strictly: `923001234567` is accepted, `+923001234567` is rejected with the guidance *"Enter your WhatsApp number with country code, without +."* There is no country selector or separate country-code field anywhere — the country code is part of the number. The owner number, owner link, and developer contact are all derived from it, so there are no duplicate identity fields. `PAIRING_NUMBER` is still read as a legacy alias for `BOT_NUMBER` so older deployments keep booting.
 
@@ -68,12 +68,12 @@ The bot has exactly one owner, so only these two values need to be set.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BOT_NAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Display name for logs and commands. |
+| `BOT_NAME` | `ANIME MD` | Display name for logs and commands. |
 | `THEME` | `gojo` | Startup theme: `makima`, `nami`, `nezuko`, `shinobu`, `gojo`, `sukuna`, `asta`. |
 | `PORT` | `3000` | Dashboard port. Provided automatically by Render, Heroku and similar hosts. |
 | `WHATSAPP_CHANNEL` | supplied channel URL | Channel shown by `!owner` and `!menu`. |
 | `COMMAND_PREFIX` | `!` | One to four non-whitespace command characters. |
-| `STICKER_PACKNAME` | `𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿` | Sticker pack name used by `!sticker`. |
+| `STICKER_PACKNAME` | `ANIME MD` | Sticker pack name used by `!sticker`. |
 | `STICKER_AUTHOR` | `Only F!xa Dev` | Sticker publisher used by `!sticker`. |
 | `PUBLIC_MODE` | `true` | Set false for owner/self-only command handling. |
 | `AUTH_METHOD` | `pairing` | Keep `pairing`. `qr` is an internal, terminal-only fallback that the dashboard never offers. |
@@ -88,6 +88,7 @@ The bot has exactly one owner, so only these two values need to be set.
 | `RECONNECT_BASE_DELAY_MS` | `3000` | Initial reconnect delay. |
 | `RECONNECT_MAX_DELAY_MS` | `60000` | Maximum reconnect delay. |
 | `LOG_LEVEL` | `info` | Pino log level. |
+| `CONNECTION_SUCCESS_IMAGE` | supplied Anime MD image | Image sent to the linked account only after Baileys reports a successful connection. |
 
 Configuration validates phone numbers, URLs, booleans, delays, prefixes, and authentication method at startup. Invalid values fail early with an actionable error.
 
@@ -100,7 +101,7 @@ Configuration validates phone numbers, URLs, booleans, delays, prefixes, and aut
 Set the number you want to link, start the bot, and open the dashboard:
 
 ```dotenv
-OWNER_NAME=Only Fixa Dev
+OWNER_NAME=Enter Your Name
 BOT_NUMBER=923001234567
 ```
 
@@ -246,7 +247,7 @@ For a complete A–Z deployment flow, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 - **Developed By: GOATS MODS**
 - Global project owner: configured through `OWNER_NAME`
-- Character artwork is loaded from the project owner's hosted Catbox URLs listed in [`system/theme.js`](system/theme.js); no artwork is bundled in this repository.
+- Character artwork uses committed local fallback assets plus the project owner's hosted Catbox URLs listed in [`system/theme.js`](system/theme.js).
 - WhatsApp connectivity: [Baileys](https://github.com/WhiskeySockets/Baileys) and its respective maintainers
 - The Apache-2.0 license and third-party dependency licenses remain with their respective authors.
 

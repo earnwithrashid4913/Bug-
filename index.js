@@ -246,6 +246,14 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     });
     console.log(chalk.green(`[connection] ${config.botName} is connected to WhatsApp.`));
     console.log(chalk.cyan(`[connection] Logged in as: ${socket.user?.name || 'Unknown'} (${socket.user?.id?.split(':')[0] || 'n/a'})`));
+    // Send the connection card only after Baileys confirms the open state.
+    // A media-delivery problem must not change the real connection status.
+    if (socket.user?.id) {
+      void socket.sendMessage(socket.user.id, {
+        image: { url: config.connectionSuccessImage },
+        caption: `*${config.botName} connected successfully.*\nYour WhatsApp session is now active.`
+      }).catch((error) => console.warn(`[connection] Could not send the connection card: ${error.message}`));
+    }
     return;
   }
 

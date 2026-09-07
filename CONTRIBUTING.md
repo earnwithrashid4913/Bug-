@@ -1,6 +1,6 @@
-# Contributing to GOATVERSE MD
+# Contributing to ANIME MD
 
-Thank you for improving GOATVERSE MD. Keep contributions focused, tested, and safe for deployers.
+Thank you for improving ANIME MD. Keep contributions focused, tested, and safe for deployers.
 
 ## Development flow
 

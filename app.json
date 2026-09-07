@@ -1,5 +1,5 @@
 {
-  "name": "Goatverse MD WhatsApp Bot",
+  "name": "ANIME MD WhatsApp Bot",
   "description": "Anime-themed WhatsApp bot with a built-in Web Pairing dashboard. Developed By: GOATS MODS.",
   "keywords": [
     "whatsapp",
@@ -30,7 +30,7 @@
     },
     "BOT_NAME": {
       "description": "Bot display name.",
-      "value": "𝙂𝙊𝘼𝙏𝙑𝙀𝙍𝙎𝙀 𝙈𝘿"
+      "value": "ANIME MD"
     },
     "THEME": {
       "description": "Startup theme: makima, nami, nezuko, shinobu, gojo, sukuna or asta.",

@@ -1,4 +1,4 @@
-# GOATVERSE MD Deployment Guide
+# ANIME MD Deployment Guide
 
 This application is a long-running WhatsApp client that also serves the **Web Pairing dashboard**, so deploy it as a **single web service** with persistent storage. It listens on `0.0.0.0` and the port given by `PORT` (default `3000`); `/health` is a suitable health-check path.
 
@@ -11,7 +11,7 @@ cd Bug-
 
 ## 2. Install a supported Node.js version
 
-Use Node.js **20.x LTS** (or a newer Node.js release that satisfies `package.json`'s `>=20` engine requirement).
+Use Node.js **20.9+** (or a newer Node.js release that satisfies `package.json`'s `>=20.9` engine requirement).
 
 ```bash
 node --version
@@ -41,7 +41,7 @@ cp .env.example .env
 Only two values are user-facing:
 
 ```dotenv
-OWNER_NAME=Only Fixa Dev
+OWNER_NAME=Enter Your Name
 BOT_NUMBER=923001234567
 ```
 
@@ -115,7 +115,7 @@ Heroku wipes the container filesystem on every dyno restart, so the WhatsApp ses
 2. Set the required config vars:
 
    ```dotenv
-   OWNER_NAME=Only Fixa Dev
+   OWNER_NAME=Enter Your Name
    BOT_NUMBER=923001234567
    AUTH_METHOD=pairing
    EXPOSE_SESSION_ID=true
