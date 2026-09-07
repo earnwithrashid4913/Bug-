@@ -1,7 +1,7 @@
 {
   "name": "anime-md",
   "version": "1.0.0",
-  "description": "ANIME MD, a high-performance anime-themed WhatsApp bot developed by GOATS MODS and Only F!xa Dev.",
+  "description": "ANIME MD, a high-performance anime-themed WhatsApp bot developed by F!xa Dev.",
   "private": true,
   "main": "index.js",
   "type": "commonjs",
@@ -23,7 +23,7 @@
     "only-fixa-dev",
     "anime-md"
   ],
-  "author": "RaShiD Hussain",
+  "author": "F!xa Dev",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=20.9"

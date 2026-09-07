@@ -123,9 +123,8 @@ function helpText() {
 async function sendOwnerCard(socket, chatId, quoted) {
   const text = [
     `*${config.botName} owner details*`,
-    `Global Owner: ${config.ownerName}`,
-    `Developer: ${config.authorName}`,
-    `Developer WhatsApp: https://wa.me/${config.authorNumber}`,
+    `Owner: ${config.ownerName}`,
+    `Developer: ${config.developerName}`,
     `Owner WhatsApp: ${config.ownerLink}`,
     `WhatsApp Channel: ${config.whatsappChannel}`
   ].join('\n');

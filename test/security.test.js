@@ -23,9 +23,9 @@ const { config } = require('../system/config');
 
 test('the canonical project identity is intact', () => {
   assert.equal(verifyCanonicalIdentity(), true);
-  assert.equal(CANONICAL_IDENTITY.organization, 'GOATS MODS');
-  assert.equal(CANONICAL_IDENTITY.developer, 'Only F!xa Dev');
-  assert.equal(CANONICAL_IDENTITY.author, 'RaShiD Hussain');
+  assert.equal(CANONICAL_IDENTITY.organization, 'F!xa Dev');
+  assert.equal(CANONICAL_IDENTITY.developer, 'F!xa Dev');
+  assert.equal(CANONICAL_IDENTITY.author, 'Rashid Hussain');
   assert.equal(PROTECTED_DEVELOPER.community, CANONICAL_IDENTITY.organization);
 });
 

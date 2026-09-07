@@ -21,9 +21,9 @@ const PROJECT_NAME = CANONICAL_IDENTITY.projectName;
 // Everything below is internal/optional and has a safe default.
 const DEFAULTS = Object.freeze({
   botName: PROJECT_NAME,
-  ownerName: 'Enter Your Name',
+  ownerName: 'Rashid Hussain',
   // Digits only, country code included, never prefixed with "+".
-  botNumber: '923001234567',
+  botNumber: '923448170040',
   whatsappChannel: 'https://whatsapp.com/channel/0029VbBepCNBVJl5vGUHET3T',
   commandPrefix: '!',
   stickerPackname: PROJECT_NAME,
@@ -34,15 +34,15 @@ const DEFAULTS = Object.freeze({
   authMethod: 'pairing',
   authDir: './session',
   dataDir: './data',
-  // Credentials are never exported from the dashboard unless this is enabled.
-  exposeSessionId: false,
   sessionOverwrite: false,
   theme: FALLBACK_THEME_ID,
   webHost: '0.0.0.0',
   webPort: 3_000,
   welcomeMessage: 'Welcome @user to *@group*!',
   goodbyeMessage: 'Goodbye @user from *@group*.',
-  connectionSuccessImage: 'https://files.catbox.moe/6ghm7j.png',
+  connectionSuccessImage: 'https://files.catbox.moe/uuuqdm.png',
+  telegramStartImage: 'https://files.catbox.moe/cvdoo3.png',
+  telegramConnectedImage: 'https://files.catbox.moe/uuuqdm.png',
   groqModel: 'openai/gpt-oss-20b',
   reconnectBaseDelayMs: 3_000,
   reconnectMaxDelayMs: 60_000,
@@ -214,7 +214,6 @@ function loadConfig() {
     // ephemeral storage. Never logged, never served by the dashboard.
     sessionId: readString('SESSION_ID', ''),
     sessionOverwrite: parseBoolean('SESSION_OVERWRITE', DEFAULTS.sessionOverwrite),
-    exposeSessionId: parseBoolean('EXPOSE_SESSION_ID', DEFAULTS.exposeSessionId),
     dataDir,
     premiumDbPath,
     groupSettingsDbPath,
@@ -229,6 +228,8 @@ function loadConfig() {
     welcomeMessage: readString('WELCOME_MESSAGE', DEFAULTS.welcomeMessage),
     goodbyeMessage: readString('GOODBYE_MESSAGE', DEFAULTS.goodbyeMessage),
     connectionSuccessImage: parseUrl('CONNECTION_SUCCESS_IMAGE', DEFAULTS.connectionSuccessImage),
+    telegramStartImage: parseUrl('TELEGRAM_START_IMAGE', DEFAULTS.telegramStartImage),
+    telegramConnectedImage: parseUrl('TELEGRAM_CONNECTED_IMAGE', DEFAULTS.telegramConnectedImage),
     groqApiKey: readString('GROQ_API_KEY', ''),
     groqModel: readString('GROQ_MODEL', DEFAULTS.groqModel),
     reconnectBaseDelayMs,
