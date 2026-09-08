@@ -140,7 +140,7 @@ class TelegramController {
         }
         case 'addowner': {
           if (!this.bootstrapOwners.has(String(command.senderId))) {
-            await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (TELEGRAM_OWNER_IDS) can add controllers.');
+            await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (telegram.ownerIds in config.js) can add controllers.');
             return;
           }
           this.reserveSensitiveRequest(command.senderId);
@@ -151,12 +151,12 @@ class TelegramController {
         }
         case 'delowner': {
           if (!this.bootstrapOwners.has(String(command.senderId))) {
-            await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (TELEGRAM_OWNER_IDS) can remove controllers.');
+            await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (telegram.ownerIds in config.js) can remove controllers.');
             return;
           }
           this.reserveSensitiveRequest(command.senderId);
           const id = normalizeTelegramId(command.args[0]);
-          if (this.bootstrapOwners.has(id)) throw new Error('Bootstrap owners are configured through TELEGRAM_OWNER_IDS and cannot be removed at runtime.');
+          if (this.bootstrapOwners.has(id)) throw new Error('Bootstrap owners are configured through telegram.ownerIds in config.js and cannot be removed at runtime.');
           const removed = await this.controllerStore.remove(id);
           await this.reply(command.chatId, removed ? `*SUCCESS*\nTelegram controller ${id} removed.` : `*INFO*\nTelegram controller ${id} was not stored.`);
           return;

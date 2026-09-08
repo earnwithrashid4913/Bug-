@@ -881,15 +881,15 @@ async function handleAutomationToggle(socket, context, command, group) {
 
 // --- GAMES ---
 
-function handleDiceCommand(socket, context) {
+async function handleDiceCommand(socket, context) {
   const result = Math.floor(Math.random() * 6) + 1;
   const emoji = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'][result - 1];
-  socket.sendMessage(context.chatId, { text: `${emoji}  You rolled a *${result}*` }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, { text: `${emoji}  You rolled a *${result}*` }, { quoted: context.raw });
 }
 
-function handleCoinCommand(socket, context) {
+async function handleCoinCommand(socket, context) {
   const result = Math.random() < 0.5 ? 'Heads' : 'Tails';
-  socket.sendMessage(context.chatId, { text: `🪙  *${result}*` }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, { text: `🪙  *${result}*` }, { quoted: context.raw });
 }
 
 async function handleRPSCommand(socket, context, command) {
@@ -1500,12 +1500,12 @@ async function handleMessage(socket, rawMessage) {
     // --- GAMES ---
     case 'dice':
     case 'roll':
-      handleDiceCommand(socket, context);
+      await handleDiceCommand(socket, context);
       break;
 
     case 'coin':
     case 'flip':
-      handleCoinCommand(socket, context);
+      await handleCoinCommand(socket, context);
       break;
 
     case 'rps':
@@ -1573,7 +1573,7 @@ async function handleMessage(socket, rawMessage) {
       await socket.sendMessage(context.chatId, {
         text: config.telegramBotLink
           ? `*Telegram pairing*\nOpen the authorized controller: ${config.telegramBotLink}\nThen use /pair <number>.`
-          : 'Telegram pairing is not configured. Ask the bot owner to set TELEGRAM_BOT_LINK and TELEGRAM_BOT_TOKEN.'
+          : 'Telegram pairing is not configured. Ask the bot owner to set telegram.botLink and telegram.botToken in config.js.'
       }, { quoted: context.raw });
       break;
 

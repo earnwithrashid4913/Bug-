@@ -53,6 +53,26 @@ function url(value, name, { required = true } = {}) {
 }
 function runtimePath(value, name) { return path.resolve(process.cwd(), string(value, name, { required: true })); }
 function optionalPath(value, fallback, name) { return runtimePath(value || fallback, name); }
+function optionalTelegramLink(value) {
+  const result = string(value, 'telegram.botLink');
+  // The documented placeholder must not become a clickable pairing link.
+  if (/\/YOUR_[A-Z0-9_]+(?:$|[/?#])/i.test(result)) return '';
+  return url(result, 'telegram.botLink', { required: false });
+}
+}
+function integer(value, name, fallback, min, max) {
+  const result = value === undefined ? fallback : value;
+  if (!Number.isSafeInteger(result) || result < min || result > max) throw configurationError(`${name} must be an integer between ${min} and ${max}.`);
+  return result;
+}
+function url(value, name, { required = true } = {}) {
+  const result = string(value, name, { required });
+  if (!result && !required) return '';
+  try { const parsed = new URL(result); if (parsed.protocol !== 'https:') throw new Error(); return parsed.toString().replace(/\/$/, ''); }
+  catch { throw configurationError(`${name} must be a valid HTTPS URL.`); }
+}
+function runtimePath(value, name) { return path.resolve(process.cwd(), string(value, name, { required: true })); }
+function optionalPath(value, fallback, name) { return runtimePath(value || fallback, name); }
 function normalizePhoneNumber(value, fieldName) {
   const number = String(value || '').replace(/\D/g, '');
   if (!/^\d{7,15}$/.test(number)) throw new Error(`${fieldName} must contain a 7-15 digit international phone number.`);

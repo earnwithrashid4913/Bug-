@@ -162,6 +162,7 @@ function formatPairingCode(code) {
 
 function startTelegramController() {
   if (!config.telegramEnabled || (!config.telegramBotToken && !config.telegramOwnerIds.length)) {
+    console.info('[telegram] Controller disabled: configure telegram.enabled, telegram.botToken, and telegram.ownerIds in config.js to enable it.');
     console.info('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_IDS are not configured.');
     return;
   }
@@ -170,7 +171,7 @@ function startTelegramController() {
     return;
   }
   if (!config.telegramOwnerIds.length) {
-    console.error('[telegram] TELEGRAM_BOT_TOKEN is set but TELEGRAM_OWNER_IDS is empty; controller is disabled.');
+    console.error('[telegram] telegram.botToken is set but telegram.ownerIds is empty; controller is disabled.');
     return;
   }
   telegramPairingManager = new TelegramPairingManager({
@@ -213,7 +214,7 @@ function startTelegramController() {
     })
     .catch((error) => {
       telegramController = undefined;
-      console.error(`[telegram] Controller failed to start: ${error.message}. Check TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_IDS, and Telegram network access.`);
+      console.error(`[telegram] Controller failed to start: ${error.message}. Check telegram.botToken, telegram.ownerIds, and Telegram network access.`);
     });
 }
 

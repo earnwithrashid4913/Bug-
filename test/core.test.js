@@ -21,6 +21,7 @@ const { groupSettings, handleGroupParticipantsUpdate, renderGroupMessage } = req
 const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = require('../system/lib/ai');
 const { safeMath } = require('../system/lib/net-tools');
 const { GroupSettingsStore } = require('../system/lib/group-settings');
+const { COMMANDS, allAliases, resolveCommand } = require('../system/lib/menu');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
@@ -84,6 +85,14 @@ test('command parser accepts only the configured prefix', () => {
     text: '15551234567 30d'
   });
   assert.equal(commandFromText('addprem 15551234567'), undefined);
+});
+
+test('command names and aliases are unique and resolve to their documented command', () => {
+  const names = COMMANDS.flatMap((entry) => [entry.name, ...entry.aliases]);
+  assert.equal(new Set(names).size, names.length);
+  assert.equal(new Set(allAliases()).size, names.length);
+  assert.equal(resolveCommand('telegram').name, 'telegram');
+  assert.equal(resolveCommand('tgpair').name, 'pairing');
 });
 
 test('runtime prefix changes update command parsing without mutating frozen config', async () => {
@@ -213,6 +222,18 @@ test('command handler dispatches a menu response', async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chatId, message.key.remoteJid);
   assert.ok(sent[0].payload.text, 'menu response should contain text');
+});
+
+test('command send failures are awaited instead of becoming unhandled rejections', async () => {
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid,
+    sendMessage: async () => { throw new Error('transport unavailable'); }
+  };
+  await assert.rejects(handleMessage(socket, {
+    key: { remoteJid: '15551234568@s.whatsapp.net', participant: '15551234568@s.whatsapp.net', fromMe: false },
+    message: { conversation: '!dice' }
+  }), /transport unavailable/);
 });
 
 test('sticker command provides usage text when no image is supplied', async () => {
