@@ -71,22 +71,28 @@ async function sendButtons(socket, chatId, { text, footer = '', buttons = [], fa
       quoted
     });
   } catch (error) {
-    const fallback = fallbackText || [text, '', ...buttons.map((button, index) => `${index + 1}. ${button.label} — ${button.id}`), footer].filter(Boolean).join('\n');
+    const fallback = fallbackText || [text, '', ...buttons.map((button) => `${button.label} — ${button.id}`), footer].filter(Boolean).join('\n');
     return socket.sendMessage(chatId, { text: fallback }, { quoted });
   }
 }
 
-async function sendList(socket, chatId, { text, footer = '', title, sections = [], fallbackText, quoted } = {}) {
+// A single-select list plus optional quick-action buttons (e.g. "Main Menu").
+// Every button/list row id is a real command the bot already handles, so the
+// interactive surface never contains dead entries.
+async function sendList(socket, chatId, { text, footer = '', title, sections = [], actions = [], fallbackText, quoted } = {}) {
   try {
     return await relayInteractive(socket, chatId, {
       text,
       footer,
-      buttons: [listButton(title, sections)],
+      buttons: [
+        listButton(title, sections),
+        ...actions.filter(Boolean).slice(0, 3).map((action) => quickButton(action.label, action.id))
+      ],
       quoted
     });
   } catch (error) {
     const rows = sections.flatMap((section) => section.rows || []);
-    const fallback = fallbackText || [text, '', ...rows.map((row, index) => `${index + 1}. ${row.title} — ${row.id}`), footer].filter(Boolean).join('\n');
+    const fallback = fallbackText || [text, '', ...rows.map((row) => `${row.title} — ${row.id}`), ...actions.map((action) => `${action.label} — ${action.id}`), footer].filter(Boolean).join('\n');
     return socket.sendMessage(chatId, { text: fallback }, { quoted });
   }
 }

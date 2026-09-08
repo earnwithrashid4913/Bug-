@@ -20,6 +20,7 @@ const { config } = require('./system/config');
 const { handleGroupParticipantsUpdate } = require('./system/group-events');
 const handleMessage = require('./system/handler');
 const { MemoryCache } = require('./system/lib/cache');
+const { formatPairingCodeDisplay: formatPairingCode } = require('./system/lib/pairing-number');
 const { prepareSession } = require('./system/session');
 const { sendButtons } = require('./system/lib/ui');
 const { TelegramController } = require('./system/lib/telegram-controller');
@@ -155,15 +156,12 @@ function renderQrCode(qr, pairingState) {
 }
 
 // Pairing codes are displayed in groups of four characters:
-// two groups of four characters separated by a dash.
-function formatPairingCode(code) {
-  return code?.match(/.{1,4}/g)?.join('-') || code;
-}
+// two groups of four characters separated by a dash. The formatter lives in
+// system/lib/pairing-number.js and is shared with the Telegram pairing flow.
 
 function startTelegramController() {
   if (!config.telegramEnabled || (!config.telegramBotToken && !config.telegramOwnerIds.length)) {
     console.info('[telegram] Controller disabled: configure telegram.enabled, telegram.botToken, and telegram.ownerIds in config.js to enable it.');
-    console.info('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_IDS are not configured.');
     return;
   }
   if (!config.telegramBotToken) {
@@ -176,6 +174,7 @@ function startTelegramController() {
   }
   telegramPairingManager = new TelegramPairingManager({
     authDir: config.authDir,
+    customPairingCode: config.telegramPairingCode,
     onSocket: async (socket) => {
       socket.decodeJid = decodeJid;
       socket.public = (await handleMessage.initializeMode(socket)) === 'public';
@@ -198,19 +197,39 @@ function startTelegramController() {
     pairing: {
       requestPairing: (ownerId, number) => telegramPairingManager.requestPairing(ownerId, number),
       getStatus: (ownerId) => telegramPairingManager.snapshot(ownerId),
-      stopSession: (ownerId, number) => telegramPairingManager.stopSession(ownerId, number)
+      statusOf: (ownerId, number, options) => telegramPairingManager.statusOf(ownerId, number, options),
+      listSessions: (ownerId) => telegramPairingManager.listSessions(ownerId),
+      listAllSessions: () => telegramPairingManager.listAllSessions(),
+      stopSession: (ownerId, number, options) => telegramPairingManager.stopSession(ownerId, number, options),
+      restartSession: (ownerId, number, options) => telegramPairingManager.restartSession(ownerId, number, options)
     },
     startImage: config.telegramStartImage,
-    connectedImage: config.telegramConnectedImage
+    connectedImage: config.telegramConnectedImage,
+    publicMode: config.telegramPublicMode,
+    premiumOnly: config.telegramPremiumOnly,
+    requiredChannels: config.telegramRequiredChannels,
+    sessionLimit: telegramPairingManager.limits.maxSessionsPerController,
+    pairingBrand: telegramPairingManager.brandLabel
   });
-  telegramPairingManager.onConnected = async (ownerId) => {
+  telegramPairingManager.onConnected = async (ownerId, session) => {
     // This notification is scoped to the Telegram owner whose isolated
     // WhatsApp socket authenticated. It is never broadcast to other owners.
-    await telegramController?.replyPhoto(ownerId, config.telegramConnectedImage, '*ANIME MD STATUS*\nYour WhatsApp session connected successfully.');
+    await telegramController?.notifySessionConnected(ownerId, session);
+  };
+  telegramPairingManager.onDisconnected = async (ownerId, session, classification) => {
+    // Only permanent endings (logged out, replaced, bad session) reach the
+    // owner; temporary disconnects are handled by the reconnect logic.
+    await telegramController?.notifySessionDisconnected(ownerId, session, classification);
   };
   void telegramController.start()
-    .then(() => {
+    .then(async () => {
       console.info('[telegram] Controller started successfully.');
+      // Bring previously paired sessions back online after a restart. This
+      // never claims a WhatsApp connection: each session only reports CONNECTED
+      // when its own socket reaches connection open.
+      await telegramPairingManager.restore().catch((error) => {
+        console.error(`[telegram] Session restore failed: ${error.message}`);
+      });
     })
     .catch((error) => {
       telegramController = undefined;
@@ -237,11 +256,13 @@ async function sendConnectionSuccess(socket) {
     `Developer: ${config.developerName}`
   ].join('\n');
 
+  // The menu button follows the live prefix (!setprefix changes it at runtime).
+  const prefix = handleMessage.getCommandPrefix();
   await sendButtons(socket, target, {
     text,
     footer: `${config.botName} · ${config.ownerName}`,
-    buttons: [{ label: '☷ Open Menu', id: '!menu home' }],
-    fallbackText: `${text}\n\nType ${config.commandPrefix}menu to open the command menu.`
+    buttons: [{ label: '☷ Open Menu', id: `${prefix}menu home` }],
+    fallbackText: `${text}\n\nType ${prefix}menu to open the command menu.`
   });
 }
 
@@ -577,5 +598,7 @@ module.exports = {
   disconnectStatusCode,
   formatPairingCode,
   liveStatus,
-  shouldReconnect
+  shouldReconnect,
+  // Exposed for integration tests; the worker calls this during startup.
+  startTelegramController
 };

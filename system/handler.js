@@ -108,20 +108,6 @@ async function isSudo(socket, context) {
   return await sudoStore.has(senderNumber(context)) || isOwner(socket, context.sender);
 }
 
-function permissionLevel(socket, context, entry) {
-  if (!entry) return false;
-  if (entry.permission === 'owner') return isOwner(socket, context.sender);
-  if (entry.permission === 'sudo') return isOwner(socket, context.sender) || isSudoSync(socket, context);
-  if (entry.permission === 'admin') return true; // checked per-command later
-  return true;
-}
-
-function isSudoSync(socket, context) {
-  // Quick inline check for sudo-eligible senders cached in a small map for the session
-  // Used only for permission gating (non-async).
-  return false; // Will be improved; async check done in main dispatch.
-}
-
 function formatDate(timestamp) {
   return new Intl.DateTimeFormat('en-GB', {
     dateStyle: 'medium',
@@ -156,7 +142,16 @@ async function sendOwnerCard(socket, chatId, quoted) {
     `Developer: ${config.developerName}`,
     `Channel: ${config.whatsappChannel}`
   ].join('\n');
-  await socket.sendMessage(chatId, { text }, { quoted });
+  await sendButtons(socket, chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [
+      { label: '☰ Menu', id: `${getCommandPrefix()}menu home` },
+      { label: '✈️ Telegram', id: `${getCommandPrefix()}pairing` }
+    ],
+    fallbackText: text,
+    quoted
+  });
 }
 
 async function getGroupInfo(socket, context) {
@@ -268,32 +263,55 @@ async function handleGreetingSettings(socket, context, command, group) {
   }
   if (action === 'status') {
     const settings = await groupSettings.get(context.chatId);
-    await socket.sendMessage(context.chatId, { text: `${label}: ${settings[settingKey] ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+    const text = `${label}: ${settings[settingKey] ? 'ON' : 'OFF'}.`;
+    await sendButtons(socket, context.chatId, {
+      text,
+      footer: `${config.botName} • ${config.ownerName}`,
+      buttons: [
+        { label: '✅ Turn ON', id: `${getCommandPrefix()}${command.name} on` },
+        { label: '❌ Turn OFF', id: `${getCommandPrefix()}${command.name} off` }
+      ],
+      fallbackText: text,
+      quoted: context.raw
+    });
     return;
   }
   const settings = await groupSettings.update(context.chatId, { [settingKey]: action === 'on' });
-  await socket.sendMessage(context.chatId, { text: `${label} are now ${settings[settingKey] ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+  const text = `${label} are now ${settings[settingKey] ? 'ON' : 'OFF'}.`;
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}${command.name} status` }],
+    fallbackText: text,
+    quoted: context.raw
+  });
 }
 
 async function handleGroupManagement(socket, context, command, group) {
   if (command.name === 'group') {
-    await socket.sendMessage(
-      context.chatId,
-      {
-        text: [
-          '*Safe group management*',
-          `${getCommandPrefix()}gname <name>`,
-          `${getCommandPrefix()}gdesc <description>`,
-          `${getCommandPrefix()}add <international number>`,
-          `${getCommandPrefix()}kick @user or reply`,
-          `${getCommandPrefix()}promote @user or reply`,
-          `${getCommandPrefix()}demote @user or reply`,
-          `${getCommandPrefix()}lock / ${getCommandPrefix()}unlock`,
-          `${getCommandPrefix()}grouplink`
-        ].join('\n')
-      },
-      { quoted: context.raw }
-    );
+    const p = getCommandPrefix();
+    const text = [
+      '*Safe group management*',
+      `${p}gname <name>`,
+      `${p}gdesc <description>`,
+      `${p}add <international number>`,
+      `${p}kick @user or reply`,
+      `${p}promote @user or reply`,
+      `${p}demote @user or reply`,
+      `${p}lock / ${p}unlock`,
+      `${p}grouplink`
+    ].join('\n');
+    await sendButtons(socket, context.chatId, {
+      text,
+      footer: `${config.botName} • ${config.ownerName}`,
+      buttons: [
+        { label: '🔗 Group Link', id: `${p}grouplink` },
+        { label: '👥 Tag All', id: `${p}tagall` },
+        { label: '☰ Menu', id: `${p}menu home` }
+      ],
+      fallbackText: text,
+      quoted: context.raw
+    });
     return;
   }
 
@@ -415,13 +433,17 @@ async function handleMenuCommand(socket, context, command) {
         title: 'Browse Categories',
         sections: [{
           title: 'Categories',
-          rows: categories.map((cat, i) => ({
+          rows: categories.map((cat) => ({
             header: cat.icon,
             title: cat.label,
             description: `${cat.commands.length} commands`,
-            id: `!menu ${cat.id}`
+            id: `${p}menu ${cat.id}`
           }))
         }],
+        actions: [
+          { label: '📊 Status', id: `${p}status` },
+          { label: '👑 Owner', id: `${p}owner` }
+        ],
         fallbackText: [
           `*${config.botName}*`,
           '',
@@ -440,7 +462,7 @@ async function handleMenuCommand(socket, context, command) {
     return;
   }
 
-  // Category view
+  // Category view: interactive list where every row runs a real command.
   const category = getCategory(categoryId);
   if (!category) {
     await socket.sendMessage(context.chatId, { text: `Unknown category. Type ${p}menu to see all categories.` }, { quoted: context.raw });
@@ -461,7 +483,30 @@ async function handleMenuCommand(socket, context, command) {
     `Type ${p}menu for the full menu.`
   ].join('\n');
 
-  await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
+  try {
+    await sendList(socket, context.chatId, {
+      text: `*${category.icon} ${category.label}*`,
+      footer: `Developer: ${config.developerName}`,
+      title: category.label,
+      sections: [{
+        title: category.label,
+        rows: category.commands.map((cmd) => ({
+          header: category.icon,
+          title: `${p}${cmd.name}${cmd.usage ? ` ${cmd.usage}` : ''}`,
+          description: cmd.description,
+          id: `${p}${cmd.name}`
+        }))
+      }],
+      actions: [
+        { label: '☰ All Categories', id: `${p}menu` },
+        { label: '🏠 Main Menu', id: `${p}menu home` }
+      ],
+      fallbackText: text,
+      quoted: context.raw
+    });
+  } catch (error) {
+    await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
+  }
 }
 
 // --- DOWNLOADER ---
@@ -781,12 +826,29 @@ async function handleAntiToggleCommand(socket, context, command) {
 
   if (action === 'status') {
     const settings = await groupSettings.get(context.chatId);
-    await socket.sendMessage(context.chatId, { text: `${label}: ${settings[settingKey] ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+    const text = `${label}: ${settings[settingKey] ? 'ON' : 'OFF'}.`;
+    await sendButtons(socket, context.chatId, {
+      text,
+      footer: `${config.botName} • ${config.ownerName}`,
+      buttons: [
+        { label: '✅ Turn ON', id: `${getCommandPrefix()}${command.name} on` },
+        { label: '❌ Turn OFF', id: `${getCommandPrefix()}${command.name} off` }
+      ],
+      fallbackText: text,
+      quoted: context.raw
+    });
     return;
   }
 
   const settings = await groupSettings.update(context.chatId, { [settingKey]: action === 'on' });
-  await socket.sendMessage(context.chatId, { text: `${label} is now ${settings[settingKey] ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+  const text = `${label} is now ${settings[settingKey] ? 'ON' : 'OFF'}.`;
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}${command.name} status` }],
+    fallbackText: text,
+    quoted: context.raw
+  });
 }
 
 async function handleWarnCommand(socket, context, command, group) {
@@ -846,11 +908,28 @@ async function handleAutomationToggle(socket, context, command, group) {
     }
     if (action === 'status') {
       const current = await automationStore.getGlobal('autostatus');
-      await socket.sendMessage(context.chatId, { text: `Auto-status: ${current ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+      const text = `Auto-status: ${current ? 'ON' : 'OFF'}.`;
+      await sendButtons(socket, context.chatId, {
+        text,
+        footer: `${config.botName} • ${config.ownerName}`,
+        buttons: [
+          { label: '✅ Turn ON', id: `${getCommandPrefix()}autostatus on` },
+          { label: '❌ Turn OFF', id: `${getCommandPrefix()}autostatus off` }
+        ],
+        fallbackText: text,
+        quoted: context.raw
+      });
       return;
     }
     await automationStore.setGlobal('autostatus', action === 'on');
-    await socket.sendMessage(context.chatId, { text: `Auto-status is now ${action === 'on' ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+    const text = `Auto-status is now ${action === 'on' ? 'ON' : 'OFF'}.`;
+    await sendButtons(socket, context.chatId, {
+      text,
+      footer: `${config.botName} • ${config.ownerName}`,
+      buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}autostatus status` }],
+      fallbackText: text,
+      quoted: context.raw
+    });
     return;
   }
 
@@ -866,7 +945,17 @@ async function handleAutomationToggle(socket, context, command, group) {
 
   if (action === 'status') {
     const current = await automationStore.getChat(context.chatId, settingKey);
-    await socket.sendMessage(context.chatId, { text: `${label}: ${current ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+    const text = `${label}: ${current ? 'ON' : 'OFF'}.`;
+    await sendButtons(socket, context.chatId, {
+      text,
+      footer: `${config.botName} • ${config.ownerName}`,
+      buttons: [
+        { label: '✅ Turn ON', id: `${getCommandPrefix()}${command.name} on` },
+        { label: '❌ Turn OFF', id: `${getCommandPrefix()}${command.name} off` }
+      ],
+      fallbackText: text,
+      quoted: context.raw
+    });
     return;
   }
 
@@ -876,7 +965,14 @@ async function handleAutomationToggle(socket, context, command, group) {
   }
 
   await automationStore.setChat(context.chatId, settingKey, action === 'on');
-  await socket.sendMessage(context.chatId, { text: `${label} is now ${action === 'on' ? 'ON' : 'OFF'}.` }, { quoted: context.raw });
+  const autoText = `${label} is now ${action === 'on' ? 'ON' : 'OFF'}.`;
+  await sendButtons(socket, context.chatId, {
+    text: autoText,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}${command.name} status` }],
+    fallbackText: autoText,
+    quoted: context.raw
+  });
 }
 
 // --- GAMES ---
@@ -1025,13 +1121,20 @@ async function handleSudolistCommand(socket, context) {
   const text = users.length
     ? `*Sudo users*\n${users.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
     : 'There are no sudo users.';
-  await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [{ label: '☰ Menu', id: `${getCommandPrefix()}menu home` }],
+    fallbackText: text,
+    quoted: context.raw
+  });
 }
 
 // --- MODE ---
 
 async function handleModeCommand(socket, context, command) {
   const arg = command.args[0]?.toLowerCase();
+  const p = getCommandPrefix();
   if (arg === 'public' || arg === 'self') {
     if (!(await requireOwner(socket, context))) return;
     publicMode = arg === 'public';
@@ -1040,7 +1143,17 @@ async function handleModeCommand(socket, context, command) {
     await socket.sendMessage(context.chatId, { text: `Bot mode is now ${arg}.` }, { quoted: context.raw });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: `Current mode: ${publicMode ? 'public' : 'self'}\n\nUse ${getCommandPrefix()}mode <public|self> to change.` }, { quoted: context.raw });
+  const text = `Current mode: ${publicMode ? 'public' : 'self'}\n\nUse ${p}mode <public|self> to change.`;
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [
+      { label: '🌍 Public', id: `${p}public` },
+      { label: '👤 Self', id: `${p}self` }
+    ],
+    fallbackText: text,
+    quoted: context.raw
+  });
 }
 
 // --- PREMIUM ---
@@ -1051,11 +1164,16 @@ async function handlePremiumCommand(socket, context, command) {
     const normalized = normalizePhoneNumber(number, 'User number');
     const store = await premiumStore.list();
     const record = store.find((r) => r.id === normalized);
-    if (record) {
-      await socket.sendMessage(context.chatId, { text: `*Premium status*\n\n${record.id} — expires ${formatDate(record.expiresAt)} UTC` }, { quoted: context.raw });
-    } else {
-      await socket.sendMessage(context.chatId, { text: `${normalized} does not have premium access.` }, { quoted: context.raw });
-    }
+    const premiumText = record
+      ? `*Premium status*\n\n${record.id} — expires ${formatDate(record.expiresAt)} UTC`
+      : `${normalized} does not have premium access.`;
+    await sendButtons(socket, context.chatId, {
+      text: premiumText,
+      footer: `${config.botName} • ${config.ownerName}`,
+      buttons: [{ label: '☰ Menu', id: `${getCommandPrefix()}menu home` }],
+      fallbackText: premiumText,
+      quoted: context.raw
+    });
   } catch (error) {
     await socket.sendMessage(context.chatId, { text: `Could not check premium: ${error.message}` }, { quoted: context.raw });
   }
@@ -1064,24 +1182,44 @@ async function handlePremiumCommand(socket, context, command) {
 // --- SESSIONS ---
 
 async function handleSessionsCommand(socket, context) {
-  await socket.sendMessage(context.chatId, {
-    text: [
-      `*${config.botName} Session*`,
-      '',
-      `Bot: ${socket.user?.id?.split(':')[0] || 'unknown'}`,
-      `Uptime: ${Math.floor(process.uptime())} seconds`,
-      `Auth directory: ${config.authDir}`,
-      `Data directory: ${config.dataDir}`
-    ].join('\n')
-  }, { quoted: context.raw });
+  const p = getCommandPrefix();
+  const text = [
+    `*${config.botName} Session*`,
+    '',
+    `Bot: ${socket.user?.id?.split(':')[0] || 'unknown'}`,
+    `Uptime: ${Math.floor(process.uptime())} seconds`,
+    `Auth directory: ${config.authDir}`,
+    `Data directory: ${config.dataDir}`
+  ].join('\n');
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [
+      { label: '📊 Status', id: `${p}status` },
+      { label: '☰ Menu', id: `${p}menu home` }
+    ],
+    fallbackText: text,
+    quoted: context.raw
+  });
 }
 
 async function handleStopSessionCommand(socket, context, command) {
+  const p = getCommandPrefix();
   if (!command.args[0]) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}stopsession <number>` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: `Usage: ${p}stopsession <number>` }, { quoted: context.raw });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: 'Use the Telegram controller `/stop <number>` to remove an unpaired session safely.' }, { quoted: context.raw });
+  const text = 'Use the Telegram controller `/stop <number>` to remove an unpaired session safely.';
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: [
+      { label: '✈️ Telegram', id: `${p}pairing` },
+      { label: '☰ Menu', id: `${p}menu home` }
+    ],
+    fallbackText: text,
+    quoted: context.raw
+  });
 }
 
 // --- DELETE CACHE (anti-delete) ---
@@ -1286,18 +1424,29 @@ async function handleMessage(socket, rawMessage) {
     }
 
     case 'convert':
-    case 'converter':
-      await socket.sendMessage(context.chatId, {
-        text: [
-          '*Converter commands*',
-          '',
-          `${getCommandPrefix()}sticker — Create a sticker from an image`,
-          `${getCommandPrefix()}toimg — Convert a sticker to an image`,
-          `${getCommandPrefix()}tts <text> — Text to speech`,
-          `${getCommandPrefix()}qr <text> — Generate a QR code`
-        ].join('\n')
-      }, { quoted: context.raw });
+    case 'converter': {
+      const p = getCommandPrefix();
+      const text = [
+        '*Converter commands*',
+        '',
+        `${p}sticker — Create a sticker from an image`,
+        `${p}toimg — Convert a sticker to an image`,
+        `${p}tts <text> — Text to speech`,
+        `${p}qr <text> — Generate a QR code`
+      ].join('\n');
+      await sendButtons(socket, context.chatId, {
+        text,
+        footer: `${config.botName} • ${config.ownerName}`,
+        buttons: [
+          { label: '🎨 Sticker', id: `${p}sticker` },
+          { label: '🖼 To Image', id: `${p}toimg` },
+          { label: '🔊 TTS', id: `${p}tts` }
+        ],
+        fallbackText: text,
+        quoted: context.raw
+      });
       break;
+    }
 
     case 'tts':
       await handleTTSCommand(socket, context, command);
@@ -1381,20 +1530,31 @@ async function handleMessage(socket, rawMessage) {
       break;
 
     case 'tools':
-    case 'utils':
-      await socket.sendMessage(context.chatId, {
-        text: [
-          '*Tools commands*',
-          '',
-          `${getCommandPrefix()}jid — Show JIDs`,
-          `${getCommandPrefix()}idch <url> — Channel info`,
-          `${getCommandPrefix()}calc <expr> — Calculator`,
-          `${getCommandPrefix()}ss <url> — Screenshot`,
-          `${getCommandPrefix()}short <url> — Shorten URL`,
-          `${getCommandPrefix()}translate [lang] <text> — Translate`
-        ].join('\n')
-      }, { quoted: context.raw });
+    case 'utils': {
+      const p = getCommandPrefix();
+      const text = [
+        '*Tools commands*',
+        '',
+        `${p}jid — Show JIDs`,
+        `${p}idch <url> — Channel info`,
+        `${p}calc <expr> — Calculator`,
+        `${p}ss <url> — Screenshot`,
+        `${p}short <url> — Shorten URL`,
+        `${p}translate [lang] <text> — Translate`
+      ].join('\n');
+      await sendButtons(socket, context.chatId, {
+        text,
+        footer: `${config.botName} • ${config.ownerName}`,
+        buttons: [
+          { label: '🧮 Calc', id: `${p}calc` },
+          { label: '✂️ Shorten', id: `${p}short` },
+          { label: '🌐 Translate', id: `${p}translate` }
+        ],
+        fallbackText: text,
+        quoted: context.raw
+      });
       break;
+    }
 
     // --- GROUP ---
     case 'hidetag':
@@ -1534,32 +1694,53 @@ async function handleMessage(socket, rawMessage) {
       break;
 
     case 'rpg':
-    case 'economy':
-      await socket.sendMessage(context.chatId, {
-        text: [
-          '*RPG & Economy commands*',
-          '',
-          `${getCommandPrefix()}balance — Check your wallet/bank`,
-          `${getCommandPrefix()}daily — Claim daily reward`,
-          `${getCommandPrefix()}work — Earn coins`,
-          `${getCommandPrefix()}give @user <amount> — Transfer coins`
-        ].join('\n')
-      }, { quoted: context.raw });
+    case 'economy': {
+      const p = getCommandPrefix();
+      const text = [
+        '*RPG & Economy commands*',
+        '',
+        `${p}balance — Check your wallet/bank`,
+        `${p}daily — Claim daily reward`,
+        `${p}work — Earn coins`,
+        `${p}give @user <amount> — Transfer coins`
+      ].join('\n');
+      await sendButtons(socket, context.chatId, {
+        text,
+        footer: `${config.botName} • ${config.ownerName}`,
+        buttons: [
+          { label: '💰 Balance', id: `${p}balance` },
+          { label: '🎁 Daily', id: `${p}daily` },
+          { label: '🛠 Work', id: `${p}work` }
+        ],
+        fallbackText: text,
+        quoted: context.raw
+      });
       break;
+    }
 
     // --- OWNER ---
     case 'status':
     case 'alive':
-    case 'runtime':
-      await socket.sendMessage(context.chatId, {
-        text: [
-          `*${config.botName} status*`,
-          `Mode: ${publicMode ? 'public' : 'self'}`,
-          `Uptime: ${Math.floor(process.uptime())} seconds`,
-          `Premium database: ready`
-        ].join('\n')
-      }, { quoted: context.raw });
+    case 'runtime': {
+      const p = getCommandPrefix();
+      const text = [
+        `*${config.botName} status*`,
+        `Mode: ${publicMode ? 'public' : 'self'}`,
+        `Uptime: ${Math.floor(process.uptime())} seconds`,
+        `Premium database: ready`
+      ].join('\n');
+      await sendButtons(socket, context.chatId, {
+        text,
+        footer: `${config.botName} • ${config.ownerName}`,
+        buttons: [
+          { label: '☰ Menu', id: `${p}menu home` },
+          { label: '🧩 Sessions', id: `${p}sessions` }
+        ],
+        fallbackText: text,
+        quoted: context.raw
+      });
       break;
+    }
 
     case 'owner':
     case 'creator':
@@ -1569,13 +1750,20 @@ async function handleMessage(socket, rawMessage) {
     case 'pairing':
     case 'tgpair':
     case 'telegram':
-    case 'tg':
-      await socket.sendMessage(context.chatId, {
-        text: config.telegramBotLink
-          ? `*Telegram pairing*\nOpen the authorized controller: ${config.telegramBotLink}\nThen use /pair <number>.`
-          : 'Telegram pairing is not configured. Ask the bot owner to set telegram.botLink and telegram.botToken in config.js.'
-      }, { quoted: context.raw });
+    case 'tg': {
+      const p = getCommandPrefix();
+      const pairText = config.telegramBotLink
+        ? `*Telegram pairing*\nOpen the authorized controller: ${config.telegramBotLink}\nThen use /pair <number>.`
+        : 'Telegram pairing is not configured. Ask the bot owner to set telegram.botLink and telegram.botToken in config.js.';
+      await sendButtons(socket, context.chatId, {
+        text: pairText,
+        footer: `${config.botName} • ${config.ownerName}`,
+        buttons: [{ label: '☰ Menu', id: `${p}menu home` }],
+        fallbackText: pairText,
+        quoted: context.raw
+      });
       break;
+    }
 
     case 'restart':
     case 'rst': {

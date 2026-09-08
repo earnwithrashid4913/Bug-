@@ -61,8 +61,25 @@ module.exports = {
     // Numeric Telegram IDs allowed to pair/manage sessions. REQUIRED when enabled.
     // Example: ["123456789"].
     ownerIds: ['YOUR_TELEGRAM_OWNER_ID'],
+    // Custom 8-character pairing code issued by the real WhatsApp pairing flow.
+    // Example: "GOATMODS" is entered in WhatsApp as GOAT-MODS (the dash is added
+    // by WhatsApp's input field). Leave blank for a WhatsApp-generated code.
+    // WhatsApp only accepts custom codes of exactly 8 letters/digits; any other
+    // value is kept as display branding and a real WhatsApp code is used instead.
+    pairingCode: 'GOATMODS',
     // Database path for Telegram controllers. OPTIONAL. Example: "./data/telegram-controllers.json".
     controllerDbPath: './data/telegram-controllers.json',
+    // Public pairing: true lets ANY Telegram user pair their own WhatsApp
+    // number. Every user only ever manages their own sessions. OPTIONAL;
+    // false keeps controller-only access (telegram.ownerIds + /addowner).
+    publicMode: false,
+    // true restricts pairing to premium Telegram users (granted with
+    // /addprem by a bootstrap owner). OPTIONAL. Ignored for bootstrap owners.
+    premiumOnly: false,
+    // Optional channels a user must join before they may pair. OPTIONAL.
+    // Example: [{ name: 'ANIME MD Updates', chatId: '@YourChannel' }].
+    // Leave empty to disable the join check. Bootstrap owners skip it.
+    requiredChannels: [],
     // Optional HTTPS images shown by Telegram.
     startImage: 'https://files.catbox.moe/cvdoo3.png',
     connectedImage: 'https://files.catbox.moe/uuuqdm.png'
