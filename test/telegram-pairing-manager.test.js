@@ -16,30 +16,44 @@ function sleep(ms) {
 // A fake Baileys whose auth state derives from the real files on disk, so
 // credential persistence flows (pair → link → restart → restore) behave like
 // the production implementation.
-function fakeBaileys({ failHandshake = false } = {}) {
+//
+// The event order mirrors real Baileys: "connecting" is emitted on the next
+// tick, BEFORE the WebSocket is open; the handshake is only complete once the
+// server issues the first QR (pair-device stanza). `qrDelayMs` controls how
+// long that gap lasts (0 = same microtask batch, real-world value > 0).
+function fakeBaileys({ failHandshake = false, qrDelayMs = 0 } = {}) {
   const sockets = [];
   const pairingCalls = [];
   return {
     sockets,
     pairingCalls,
-    makeWASocket: () => {
+    makeWASocket: (config) => {
       const ev = new EventEmitter();
       const socket = {
         ev,
         authState: { creds: { registered: false } },
+        requestedCreds: config?.auth?.creds,
+        qrSeen: false,
         requestPairingCode: async (number, custom) => {
-          pairingCalls.push({ number, custom });
+          pairingCalls.push({ number, custom, afterQr: socket.qrSeen });
           return custom ?? `code-${number}`;
         },
-        ws: { close() {} }
+        ws: { isOpen: false, close() {} }
       };
       sockets.push(socket);
       queueMicrotask(() => {
         if (failHandshake) {
           ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
-        } else {
-          ev.emit('connection.update', { connection: 'connecting' });
+          return;
         }
+        ev.emit('connection.update', { connection: 'connecting' });
+        const emitQr = () => {
+          socket.qrSeen = true;
+          socket.ws.isOpen = true;
+          ev.emit('connection.update', { qr: `qr-${sockets.length}` });
+        };
+        if (qrDelayMs > 0) setTimeout(emitQr, qrDelayMs);
+        else queueMicrotask(emitQr);
       });
       return socket;
     },
@@ -100,8 +114,62 @@ test('the custom GOATMODS pairing code is issued through the real Baileys flow',
   assert.equal(result.brand, 'GOAT-MODS');
   assert.equal(result.number, '923001234567');
   assert.equal(result.numberDisplay, '+92 300 1234567');
-  assert.deepEqual(fake.pairingCalls, [{ number: '923001234567', custom: 'GOATMODS' }]);
+  assert.deepEqual(fake.pairingCalls, [{ number: '923001234567', custom: 'GOATMODS', afterQr: true }]);
   assert.equal(manager.getSession('10', '923001234567').status, STATUS.WAITING_FOR_LINK);
+  await manager.shutdown();
+});
+
+test('the pairing code is requested only after the real handshake (first QR), never on "connecting"', async () => {
+  // Mirrors the production failure: Baileys emits "connecting" on the next
+  // tick, long before the WebSocket is open. Gating the code request on that
+  // event made requestPairingCode throw "Connection Closed" (428) and
+  // surfaced "Pairing could not be completed."
+  const fake = fakeBaileys({ qrDelayMs: 25 });
+  const { manager } = makeManager({ customPairingCode: 'GOATMODS', fake });
+  const result = await manager.requestPairing('10', '923001234567');
+  assert.equal(result.code, 'GOATMODS');
+  assert.equal(fake.pairingCalls.length, 1);
+  assert.equal(fake.pairingCalls[0].afterQr, true, 'the code request happened after the first QR (handshake complete)');
+  await manager.shutdown();
+});
+
+test('a failed attempt that left "me" in unregistered credentials is reset before the retry', async () => {
+  const { manager, fake, authDir } = makeManager({ customPairingCode: 'GOATMODS' });
+  const dir = path.join(authDir, 'telegram-pairings', '10', '923001234567');
+  await fs.mkdir(dir, { recursive: true });
+  // Poisoned state: requestPairingCode sets me + pairingCode on the live
+  // credentials (and they get saved) BEFORE the stanza is sent — a socket
+  // that dies at that moment leaves an unregistered file that would make
+  // Baileys attempt a login instead of a fresh registration.
+  await fs.writeFile(path.join(dir, 'creds.json'), JSON.stringify({
+    registered: false,
+    me: { id: '923001234567:0@s.whatsapp.net', name: '~' },
+    pairingCode: 'STALE1'
+  }));
+  const result = await manager.requestPairing('10', '923001234567');
+  assert.equal(result.code, 'GOATMODS');
+  const creds = fake.sockets[0].requestedCreds;
+  assert.equal(creds.registered, false);
+  assert.equal(creds.me, undefined, 'me was cleared so Baileys performs a fresh device registration');
+  assert.equal(creds.pairingCode, undefined, 'the stale pairing code was cleared');
+  await manager.shutdown();
+});
+
+test('a dead pairing socket after the code was issued notifies the owner with the real reason', async () => {
+  const { manager, fake } = makeManager();
+  const disconnected = [];
+  manager.onDisconnected = (ownerId, session, classification) => disconnected.push({ ownerId, session, classification });
+  const result = await manager.requestPairing('10', '923001234567');
+  assert.ok(result.code);
+  // WhatsApp closes the idle socket before the user enters the code (408).
+  // The owner must learn the actual reason instead of waiting on a dead code.
+  fake.sockets[0].ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } });
+  await sleep(20);
+  assert.equal(manager.getSession('10', '923001234567'), undefined, 'the dead session was cleaned up');
+  assert.equal(disconnected.length, 1, 'the owner was notified');
+  assert.equal(disconnected[0].ownerId, '10');
+  assert.equal(disconnected[0].classification.type, 'TIMEOUT');
+  assert.equal(disconnected[0].session.registered, false);
   await manager.shutdown();
 });
 
