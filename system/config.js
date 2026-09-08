@@ -44,6 +44,14 @@ function normalizePhoneNumber(value, fieldName) {
   if (!/^\d{7,15}$/.test(number)) throw new Error(`${fieldName} must contain a 7-15 digit international phone number.`);
   return number;
 }
+// Telegram pairing codes are normalized to uppercase letters/digits. Only
+// exactly-8-character values can be issued as a real WhatsApp pairing code;
+// the pairing manager enforces that and falls back to WhatsApp-generated
+// codes (keeping the value as branding) for anything else.
+function normalizeCustomPairingCode(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
 function assertWhatsappNumber(value, fieldName = 'Phone number') {
   const raw = String(value ?? '').trim();
   if (raw.includes('+')) throw new Error(`${fieldName} must not contain "+". ${PHONE_NUMBER_HELP}`);
@@ -66,6 +74,7 @@ function loadConfig(source = userConfig) {
   if (ownerIds.some((id) => !/^\d{1,20}$/.test(id))) throw configurationError('telegram.ownerIds must contain numeric Telegram IDs.');
   const usableTelegramToken = token && !PLACEHOLDER.test(token);
   if (enabled && Boolean(usableTelegramToken) !== Boolean(ownerIds.length)) throw configurationError('telegram.botToken and telegram.ownerIds must both be entered, or set telegram.enabled to false.');
+  const telegramPairingCode = normalizeCustomPairingCode(telegram.pairingCode);
   const baseDelay = integer(deployment.reconnectBaseDelayMs, 'deployment.reconnectBaseDelayMs', 3000, 1000, 300000);
   const maxDelay = integer(deployment.reconnectMaxDelayMs, 'deployment.reconnectMaxDelayMs', 60000, baseDelay, 900000);
   const logLevel = string(deployment.logLevel, 'deployment.logLevel', { required: true }).toLowerCase();
@@ -78,7 +87,7 @@ function loadConfig(source = userConfig) {
     stickerPackname: string(commands.stickerPackname, 'commands.stickerPackname', { required: true }), stickerAuthor: string(commands.stickerAuthor, 'commands.stickerAuthor', { required: true }), publicMode: bool(bot.publicMode, 'bot.publicMode', true),
     authMethod, authDir: runtimePath(whatsapp.authDir, 'whatsapp.authDir'), sessionId: string(whatsapp.sessionId, 'whatsapp.sessionId'), sessionOverwrite: bool(whatsapp.sessionOverwrite, 'whatsapp.sessionOverwrite', false),
     dataDir, premiumDbPath: db('premiumDbPath', 'premium.json'), groupSettingsDbPath: db('groupSettingsDbPath', 'groups.json'), modeDbPath: db('modeDbPath', 'mode.json'), sudoDbPath: db('sudoDbPath', 'sudo.json'), warningDbPath: db('warningDbPath', 'warnings.json'), economyDbPath: db('economyDbPath', 'economy.json'), settingsDbPath: db('settingsDbPath', 'settings.json'), automationDbPath: db('automationDbPath', 'automation.json'),
-    telegramEnabled: enabled, telegramBotToken: PLACEHOLDER.test(token) ? '' : token, telegramBotLink: optionalTelegramLink(telegram.botLink), telegramOwnerIds: Object.freeze(ownerIds), telegramControllerDbPath: optionalPath(telegram.controllerDbPath, path.join(dataDir, 'telegram-controllers.json'), 'telegram.controllerDbPath'),
+    telegramEnabled: enabled, telegramBotToken: PLACEHOLDER.test(token) ? '' : token, telegramBotLink: optionalTelegramLink(telegram.botLink), telegramOwnerIds: Object.freeze(ownerIds), telegramControllerDbPath: optionalPath(telegram.controllerDbPath, path.join(dataDir, 'telegram-controllers.json'), 'telegram.controllerDbPath'), telegramPairingCode,
     theme: Object.freeze({ name: string(theme.name, 'theme.name', { required: true }) }), webHost: string(deployment.webHost, 'deployment.webHost', { required: true }), webPort: integer(deployment.webPort, 'deployment.webPort', 3000, 1, 65535), webPairingEnabled: bool(deployment.webPairingEnabled, 'deployment.webPairingEnabled', false),
     welcomeMessage: string(commands.welcomeMessage, 'commands.welcomeMessage', { required: true }), goodbyeMessage: string(commands.goodbyeMessage, 'commands.goodbyeMessage', { required: true }), connectionSuccessImage: url(whatsapp.connectionSuccessImage, 'whatsapp.connectionSuccessImage'), telegramStartImage: url(telegram.startImage, 'telegram.startImage'), telegramConnectedImage: url(telegram.connectedImage, 'telegram.connectedImage'),
     groqApiKey: PLACEHOLDER.test(string(api.groqApiKey, 'api.groqApiKey')) ? '' : string(api.groqApiKey, 'api.groqApiKey'), groqModel: string(api.groqModel, 'api.groqModel', { required: true }), cobaltApiUrl: url(api.cobaltApiUrl, 'api.cobaltApiUrl'), uploadApiUrl: url(api.uploadApiUrl, 'api.uploadApiUrl'), reconnectBaseDelayMs: baseDelay, reconnectMaxDelayMs: maxDelay, logLevel, dryRun: bool(deployment.dryRun, 'deployment.dryRun', false)

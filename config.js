@@ -61,6 +61,12 @@ module.exports = {
     // Numeric Telegram IDs allowed to pair/manage sessions. REQUIRED when enabled.
     // Example: ["123456789"].
     ownerIds: ['YOUR_TELEGRAM_OWNER_ID'],
+    // Custom 8-character pairing code issued by the real WhatsApp pairing flow.
+    // Example: "GOATMODS" is entered in WhatsApp as GOAT-MODS (the dash is added
+    // by WhatsApp's input field). Leave blank for a WhatsApp-generated code.
+    // WhatsApp only accepts custom codes of exactly 8 letters/digits; any other
+    // value is kept as display branding and a real WhatsApp code is used instead.
+    pairingCode: 'GOATMODS',
     // Database path for Telegram controllers. OPTIONAL. Example: "./data/telegram-controllers.json".
     controllerDbPath: './data/telegram-controllers.json',
     // Optional HTTPS images shown by Telegram.
