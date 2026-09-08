@@ -25,6 +25,8 @@ stored as a static configuration value. Telegram supports `/start`, `/pair`,
 
 The normal Pterodactyl/host startup command remains `npm start`. Configure
 persistent `whatsapp.authDir` and `database.dataDir` in `config.js` for your
+host's persistent volume. The bot does not expose an HTTP dashboard, so no
+Pterodactyl port allocation is required.
 host's persistent volume. If an optional web pairing server is used, set its
 panel-assigned port in `deployment.webPort`; it is disabled by default.
 

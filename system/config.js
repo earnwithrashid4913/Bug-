@@ -33,6 +33,26 @@ function url(value, name, { required = true } = {}) {
 }
 function runtimePath(value, name) { return path.resolve(process.cwd(), string(value, name, { required: true })); }
 function optionalPath(value, fallback, name) { return runtimePath(value || fallback, name); }
+function optionalTelegramLink(value) {
+  const result = string(value, 'telegram.botLink');
+  // The documented placeholder must not become a clickable pairing link.
+  if (/\/YOUR_[A-Z0-9_]+(?:$|[/?#])/i.test(result)) return '';
+  return url(result, 'telegram.botLink', { required: false });
+}
+}
+function integer(value, name, fallback, min, max) {
+  const result = value === undefined ? fallback : value;
+  if (!Number.isSafeInteger(result) || result < min || result > max) throw configurationError(`${name} must be an integer between ${min} and ${max}.`);
+  return result;
+}
+function url(value, name, { required = true } = {}) {
+  const result = string(value, name, { required });
+  if (!result && !required) return '';
+  try { const parsed = new URL(result); if (parsed.protocol !== 'https:') throw new Error(); return parsed.toString().replace(/\/$/, ''); }
+  catch { throw configurationError(`${name} must be a valid HTTPS URL.`); }
+}
+function runtimePath(value, name) { return path.resolve(process.cwd(), string(value, name, { required: true })); }
+function optionalPath(value, fallback, name) { return runtimePath(value || fallback, name); }
 function normalizePhoneNumber(value, fieldName) {
   const number = String(value || '').replace(/\D/g, '');
   if (!/^\d{7,15}$/.test(number)) throw new Error(`${fieldName} must contain a 7-15 digit international phone number.`);
@@ -72,6 +92,8 @@ function loadConfig(source = userConfig) {
     stickerPackname: string(commands.stickerPackname, 'commands.stickerPackname', { required: true }), stickerAuthor: string(commands.stickerAuthor, 'commands.stickerAuthor', { required: true }), publicMode: bool(bot.publicMode, 'bot.publicMode', true),
     authMethod, authDir: runtimePath(whatsapp.authDir, 'whatsapp.authDir'), sessionId: string(whatsapp.sessionId, 'whatsapp.sessionId'), sessionOverwrite: bool(whatsapp.sessionOverwrite, 'whatsapp.sessionOverwrite', false),
     dataDir, premiumDbPath: db('premiumDbPath', 'premium.json'), groupSettingsDbPath: db('groupSettingsDbPath', 'groups.json'), modeDbPath: db('modeDbPath', 'mode.json'), sudoDbPath: db('sudoDbPath', 'sudo.json'), warningDbPath: db('warningDbPath', 'warnings.json'), economyDbPath: db('economyDbPath', 'economy.json'), settingsDbPath: db('settingsDbPath', 'settings.json'), automationDbPath: db('automationDbPath', 'automation.json'),
+    telegramEnabled: enabled, telegramBotToken: PLACEHOLDER.test(token) ? '' : token, telegramBotLink: optionalTelegramLink(telegram.botLink), telegramOwnerIds: Object.freeze(ownerIds), telegramControllerDbPath: optionalPath(telegram.controllerDbPath, path.join(dataDir, 'telegram-controllers.json'), 'telegram.controllerDbPath'),
+    theme: Object.freeze({ name: string(theme.name, 'theme.name', { required: true }) }),
     telegramEnabled: enabled, telegramBotToken: PLACEHOLDER.test(token) ? '' : token, telegramBotLink: url(telegram.botLink, 'telegram.botLink', { required: false }), telegramOwnerIds: Object.freeze(ownerIds), telegramControllerDbPath: optionalPath(telegram.controllerDbPath, path.join(dataDir, 'telegram-controllers.json'), 'telegram.controllerDbPath'),
     theme: Object.freeze({ name: string(theme.name, 'theme.name', { required: true }) }), webHost: string(deployment.webHost, 'deployment.webHost', { required: true }), webPort: integer(deployment.webPort, 'deployment.webPort', 3000, 1, 65535), webPairingEnabled: bool(deployment.webPairingEnabled, 'deployment.webPairingEnabled', false),
     welcomeMessage: string(commands.welcomeMessage, 'commands.welcomeMessage', { required: true }), goodbyeMessage: string(commands.goodbyeMessage, 'commands.goodbyeMessage', { required: true }), connectionSuccessImage: url(whatsapp.connectionSuccessImage, 'whatsapp.connectionSuccessImage'), telegramStartImage: url(telegram.startImage, 'telegram.startImage'), telegramConnectedImage: url(telegram.connectedImage, 'telegram.connectedImage'),

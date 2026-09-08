@@ -9,6 +9,10 @@ Use `npm start` as the startup command. Before starting, edit `config.js`:
 
 - Set `whatsapp.authDir` and `database.dataDir` to paths on persistent storage.
 - Enter Telegram credentials in `telegram` or set `telegram.enabled` to `false`.
+
+This bot does not run an HTTP dashboard or web-pairing server, so Pterodactyl
+port allocation is not required. It uses WhatsApp and Telegram outbound APIs.
+
 - If your panel allocates a port for the optional legacy web pairing server, set
   `deployment.webPort` to it and explicitly enable `deployment.webPairingEnabled`.
 

@@ -19,6 +19,7 @@ const {
 } = require('../system/lib/message');
 const { groupSettings, handleGroupParticipantsUpdate, renderGroupMessage } = require('../system/group-events');
 const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = require('../system/lib/ai');
+const { safeMath } = require('../system/lib/net-tools');
 const { GroupSettingsStore } = require('../system/lib/group-settings');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
@@ -65,6 +66,14 @@ test('Telegram pairing is optional and has no static WhatsApp phone number', () 
   source.telegram.ownerIds = [];
   const withoutTelegram = loadConfig(source);
   assert.equal(withoutTelegram.telegramBotToken, '');
+  assert.equal(withoutTelegram.telegramBotLink, '');
+  assert.deepEqual(withoutTelegram.telegramOwnerIds, []);
+});
+
+test('configuration rejects an insecure Telegram link with a clear config.js error', () => {
+  const source = structuredClone(require('../config'));
+  source.telegram.botLink = 'http://t.me/not_secure';
+  assert.throws(() => loadConfig(source), /telegram\.botLink must be a valid HTTPS URL/);
   assert.deepEqual(withoutTelegram.telegramOwnerIds, []);
 });
 
@@ -158,6 +167,13 @@ test('AI request builder is bounded and requires an explicitly configured key', 
   reserveAiRequest(sender);
   assert.throws(() => reserveAiRequest(sender), /Please wait/);
   assert.equal(AI_REQUEST_COOLDOWN_MS, 30_000);
+});
+
+test('calculator evaluates supported arithmetic without dynamic code execution', () => {
+  assert.equal(safeMath('2 + 3 * (4 - 1)'), 11);
+  assert.equal(safeMath('-5.5 % 2'), -1.5);
+  assert.throws(() => safeMath('process.exit()'), /Only numbers/);
+  assert.throws(() => safeMath('2 + )'), /Expected a number/);
 });
 
 test('LID senders resolve to mapped phone-number JIDs when available', async () => {
