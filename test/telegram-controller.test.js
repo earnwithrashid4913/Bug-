@@ -236,20 +236,27 @@ test('Telegram startup shows the Gojo intro, verifies the token, and starts one 
   assert.equal(await controller.start(), true);
   assert.deepEqual(methods.slice(0, 2), ['getMe', 'deleteWebhook']);
   assert.equal(await controller.start(), false, 'a second listener is never started');
-  const intro = captions[0];
-  assert.match(intro, /⚡ GOJO MODE ONLINE/);
-  assert.match(intro, /🟢 Telegram Controller/);
-  assert.match(intro, /🟢 Pairing System/);
-  assert.match(intro, /「 THE STRONGEST IS ONLINE 」/);
+    const intro = captions[0];
+  assert.match(intro, /𝙂𝙊𝙊 𝙄 𝙃𝙀𝙍𝙀./);
+  assert.match(intro, /🟢 𝙎𝙔𝙎𝙀𝙈 𝘼𝘿𝙔/);
+  assert.match(intro, /👇/);
+  // No server-dashboard jargon in the intro.
+  assert.doesNotMatch(intro, /Telegram Controller/);
+  assert.doesNotMatch(intro, /Pairing System/);
+  assert.doesNotMatch(intro, /Session Manager/);
+  assert.doesNotMatch(intro, /Traffic Manager/);
   assert.doesNotMatch(intro, /WhatsApp Connected/);
   assert.match(intro, /\/help/);
+
   controller.stop();
 });
 
 test('the startup box never claims a WhatsApp connection by itself', () => {
   const text = startupBox();
-  assert.match(text, /ANIME MD/);
-  assert.match(text, /GOJO MODE ONLINE/);
+  assert.match(text, /╰┈➤\ ⚡\ 𝘼𝙉𝙄𝙀\ 𝙈/);
+  assert.match(text, /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./);
+  assert.match(text, /🟢\ 𝙎𝙔𝙎𝙀𝙈\ 𝘼𝘿𝙔/);
+  assert.match(text, /𝙒𝙝𝙖𝙩'\ 𝙣𝙚𝙭𝙩\?\ 𝙔𝙤\ 𝙘𝙝𝙤𝙤𝙚\.\ 👇/);
   assert.doesNotMatch(text, /WhatsApp Connected/);
   assert.doesNotMatch(text, /Session is active/);
 });
@@ -337,7 +344,7 @@ test('public mode lets any Telegram user pair and manage only their own sessions
   });
   // A stranger receives the dashboard instead of an access-denied box.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/start' } });
-  assert.match(replies.at(-1).caption || replies.at(-1).text, /GOJO MODE ONLINE/);
+  assert.match(replies.at(-1).caption || replies.at(-1).text, /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./);
   // A stranger can pair their own number through the real flow.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match(replies.at(-1).text, /CODE: GOAT-MODS/);
@@ -507,7 +514,7 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
   // The home view is the dashboard with its navigation buttons.
   await callback('home');
   const home = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(home.payload.text, /GOJO MODE ONLINE/);
+  assert.match(home.payload.text, /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./);
   assert.deepEqual(home.payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data), [
     'pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help'
   ]);

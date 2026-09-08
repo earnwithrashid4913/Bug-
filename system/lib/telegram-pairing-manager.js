@@ -37,6 +37,7 @@ const {
 } = require('@whiskeysockets/baileys');
 const { normalizeTelegramId } = require('./telegram-controller');
 const { formatInternationalNumber, formatPairingCodeDisplay, normalizeWhatsAppNumber } = require('./pairing-number');
+const { MemoryCache } = require('./cache');
 
 // ---------------------------------------------------------------------------
 // Lifecycle states and traffic defaults.
@@ -234,6 +235,10 @@ class PairingSession {
     this.socketReserved = false;
     this.cleanupState = 'none';
     this.cleanupPromise = undefined;
+    // Live { state, saveCreds } pair of the current socket, so a reconnect
+    // after a server-forced restart reuses the in-memory credentials instead
+    // of racing a saveCreds() disk write.
+    this.authState = undefined;
   }
 
   setStatus(status) {
@@ -457,15 +462,19 @@ class TelegramPairingManager {
 
   async openSocket(session, { state, saveCreds }) {
     const logger = pino({ level: 'silent' });
+    // Each socket owns its retry cache; sharing one across sessions would
+    // leak retry state between controllers.
     const socket = this.baileys.makeWASocket({
       auth: { creds: state.creds, keys: this.baileys.makeCacheableSignalKeyStore(state.keys, logger) },
       logger,
       browser: ['ANIME MD', 'Chrome', '1.0.0'],
       markOnlineOnConnect: false,
-      syncFullHistory: false
+      syncFullHistory: false,
+      msgRetryCounterCache: new MemoryCache({ maxEntries: 1_000 })
     });
     this.reserveSocketSlot(session);
     session.socket = socket;
+    session.authState = { state, saveCreds };
     session.closeExpected = false;
     socket.ev.on('creds.update', (updatedCreds) => {
       // The phone-number link completes on the same socket: Baileys marks the
@@ -524,15 +533,22 @@ class TelegramPairingManager {
     if (socket && !session.socket && !session.closeExpected) return;
 
     if (update.connection === 'connecting' || update.qr) {
-      // The handshake reached the point where a pairing code can be issued.
-      if (session.readyResolve) {
+      // A pairing code may only be requested once the server has issued the
+      // first QR (pair-device stanza): that proves the WebSocket is open and
+      // the device-registration handshake completed. Baileys emits the
+      // initial "connecting" event on the next tick, before the network is
+      // ready; requesting a code at that point makes sendRawMessage throw
+      // "Connection Closed" (428) — the exact failure this session used to
+      // show. Registered sockets never receive a QR and stay on CONNECTING.
+      if (update.qr && session.readyResolve) {
         const resolve = session.readyResolve;
         session.readyResolve = undefined;
         session.readyReject = undefined;
         resolve();
       }
       if (session.status !== STATUS.WAITING_FOR_LINK && session.status !== STATUS.CONNECTED) {
-        session.setStatus(session.registered ? STATUS.CONNECTING : STATUS.PAIRING_READY);
+        if (update.qr && !session.registered) session.setStatus(STATUS.PAIRING_READY);
+        else if (session.registered) session.setStatus(STATUS.CONNECTING);
       }
       return;
     }
@@ -601,10 +617,24 @@ class TelegramPairingManager {
 
     if (!linked) {
       // The socket died before linking completed. If a pairing request is in
-      // flight its own error path performs the cleanup; otherwise clean up now.
+      // flight its own error path performs the cleanup and the Telegram layer
+      // already shows the failure. Otherwise the pairing code was already
+      // delivered to the owner: clean up and tell them the actual reason
+      // instead of leaving them waiting on a dead code.
       if (!session.request) {
         session.setStatus(STATUS.FAILED);
-        void this.cleanupSession(session, { deleteCreds: true });
+        const snapshot = this.sessionSnapshot(session);
+        void this.cleanupSession(session, { deleteCreds: true })
+          .then(() => {
+            try {
+              this.onDisconnected?.(session.ownerId, snapshot, classification);
+            } catch (error) {
+              this.log.error?.(`[telegram-pairing] onDisconnected callback failed: ${error.message}`);
+            }
+          })
+          .catch((error) => {
+            this.log.error?.(`[telegram-pairing] Cleanup after disconnect failed for ${session.numberDisplay}: ${error.message}`);
+          });
       } else {
         session.setStatus(STATUS.FAILED);
       }
@@ -628,7 +658,15 @@ class TelegramPairingManager {
     session.reconnectTimer = setTimeout(() => {
       session.reconnectTimer = undefined;
       if (session.stopped || this.shutdownCalled) return;
-      void this.connectRegistered(session).catch((error) => {
+      // Prefer the in-memory credentials of the socket that just closed:
+      // after a successful pairing the registered credentials are already
+      // live in memory, and re-reading them from disk could race the
+      // saveCreds() write triggered by the pairing completion.
+      const liveState = session.authState;
+      void (liveState
+        ? this.restartRegisteredSession(session, liveState)
+        : this.connectRegistered(session)
+      ).catch((error) => {
         this.log.error?.(`[telegram-pairing] Reconnect failed for ${session.numberDisplay}: ${error.message}`);
         if (!session.socket) session.setStatus(STATUS.FAILED);
       });
@@ -737,6 +775,22 @@ class TelegramPairingManager {
           throw pairingError(`${session.numberDisplay} is already paired on this controller and is being brought back online. Check /status ${number}.`, 'ALREADY_PAIRED', 409);
         }
 
+        // A previous failed attempt can leave "me" and "pairingCode" behind in
+        // an UNREGISTERED credential file (requestPairingCode sets them before
+        // the stanza is sent). Baileys would then treat the device as already
+        // logged in, the login attempt fails (401/500), and every retry dies
+        // differently. Reset the registration-in-progress fields so this
+        // attempt performs a fresh device registration.
+        if (!state.creds.registered && (state.creds.me || state.creds.pairingCode)) {
+          delete state.creds.me;
+          state.creds.pairingCode = undefined;
+          try {
+            await saveCreds();
+          } catch (error) {
+            this.log.warn?.(`[telegram-pairing] Could not persist the credential reset for ${session.numberDisplay}: ${error.message}`);
+          }
+        }
+
         session.setStatus(STATUS.INITIALIZING);
         session.ready = new Promise((resolve, reject) => {
           session.readyResolve = resolve;
@@ -754,6 +808,12 @@ class TelegramPairingManager {
         }
         if (typeof session.socket.requestPairingCode !== 'function') {
           throw pairingError('The installed Baileys version does not support native pairing codes.', 'UNSUPPORTED', 500);
+        }
+        // Defense in depth: the QR gate above should guarantee an open
+        // WebSocket; if it is not, fail with the true state instead of
+        // letting Baileys throw a raw "Connection Closed" into the fallback.
+        if (!session.socket.ws?.isOpen) {
+          throw pairingError('The WhatsApp connection is not open; the pairing socket closed before a pairing code could be generated.', 'CONNECTION_CLOSED', 502);
         }
 
         // The real WhatsApp pairing flow. The custom code (when configured and
@@ -919,6 +979,7 @@ class TelegramPairingManager {
         /* best effort */
       }
       session.socket = undefined;
+      session.authState = undefined;
       this.releasePairingSlot(session);
       this.releaseSocketReservation(session);
       this.numberLocks.delete(session.number);

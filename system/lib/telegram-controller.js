@@ -61,18 +61,17 @@ function box(title, lines) {
 
 const GOAT_MODS_BRAND = 'GOAT-MODS';
 
+// The ANIME MD intro. Gojo-style, no server-dashboard jargon. It never claims
+// a WhatsApp connection: the connected notification is a separate, real event.
 function startupBox() {
-  return box('ANIME MD', [
+  return [
+    '╰┈➤ ⚡ 𝘼𝙉𝙄𝙀 𝙈',
     '',
-    '⚡ GOJO MODE ONLINE',
+    '𝙂𝙊𝙊 𝙄 𝙃𝙀𝙍𝙀.',
+    '🟢 𝙎𝙔𝙎𝙀𝙈 𝘼𝘿𝙔',
     '',
-    '🟢 Telegram Controller',
-    '🟢 Pairing System',
-    '🟢 Session Manager',
-    '🟢 Traffic Manager',
-    '',
-    '「 THE STRONGEST IS ONLINE 」'
-  ]);
+    "𝙒𝙝𝙖𝙩' 𝙣𝙚𝙭𝙩? 𝙔𝙤 𝙘𝙝𝙤𝙤𝙚. 👇"
+  ].join('\n');
 }
 
 function pairingStartedBox(numberDisplay) {
@@ -112,8 +111,8 @@ function guideBox() {
     '',
     '1. Tap 🔗 Pair WhatsApp, or send',
     '   /pair <your number>',
-    '2. Wait for your pairing code',
-    '   (example: GOAT-MODS)',
+    '2. Wait — your pairing code',
+    '   arrives here as a message',
     '3. Open WhatsApp → Settings →',
     '   Linked Devices',
     '4. Tap "Link a Device"',
@@ -337,8 +336,8 @@ const PAIRING_ERROR_TEXTS = Object.freeze({
   QUEUE_TIMEOUT: { lines: ['The pairing system is busy right now.'], retry: true },
   COOLDOWN: { lines: ['You are starting pairings too quickly.'], retry: true },
   LIMIT: { lines: ['The session limit for this controller is reached.', 'Stop an unused session with /stop first.'], retry: false },
-  PAIRING_TIMEOUT: { lines: ['WhatsApp did not become ready for pairing in time.'], retry: true },
-  CONNECTION_CLOSED: { lines: ['The WhatsApp connection closed', 'before linking was completed.'], retry: true },
+  PAIRING_TIMEOUT: { lines: ['WhatsApp did not become ready for pairing in time.', 'This is usually a network issue — try again.'], retry: true },
+  CONNECTION_CLOSED: { lines: ['WhatsApp closed the connection before', 'pairing was completed.'], retry: true },
   NOT_FOUND: { lines: ['No session found for that number', 'on this controller.'], retry: false },
   NOT_PAIRED: { lines: ['That number is not paired yet.', 'Use /pair first.'], retry: false },
   CONNECTED: { lines: ['This session is connected.', 'Remove it from WhatsApp → Linked Devices first, then /stop again.'], retry: false },
@@ -1112,14 +1111,20 @@ class TelegramController {
 
   async notifySessionDisconnected(ownerId, session, classification) {
     if (!this.running) return;
+    // A session that never finished pairing reads as a failed pairing, not
+    // as an ended session; the reason line comes straight from the
+    // disconnect classification, so failures are never generic.
+    const failedBeforeLink = !session?.registered;
+    const title = failedBeforeLink ? 'ANIME MD • PAIRING FAILED' : 'ANIME MD • SESSION ENDED';
+    const lines = [
+      '',
+      `📱 ${session?.numberDisplay || session?.number || ''}`,
+      `⚠️ ${classification?.userMessage || 'The WhatsApp session ended.'}`
+    ];
+    if (failedBeforeLink) lines.push('', '❌ Pairing could not be completed.');
+    lines.push('', 'Pair again anytime with /pair.');
     try {
-      await this.reply(ownerId, box('ANIME MD • SESSION ENDED', [
-        '',
-        `📱 ${session?.numberDisplay || session?.number || ''}`,
-        `⚠️ ${classification?.userMessage || 'The WhatsApp session ended.'}`,
-        '',
-        'Pair again anytime with /pair.'
-      ]), pairAgainMarkup());
+      await this.reply(ownerId, box(title, lines), pairAgainMarkup());
     } catch (error) {
       this.log.warn?.(`[telegram] Could not deliver the disconnect notification to ${ownerId}: ${error.message}`);
     }
