@@ -74,6 +74,7 @@ test('configuration rejects an insecure Telegram link with a clear config.js err
   const source = structuredClone(require('../config'));
   source.telegram.botLink = 'http://t.me/not_secure';
   assert.throws(() => loadConfig(source), /telegram\.botLink must be a valid HTTPS URL/);
+  assert.deepEqual(withoutTelegram.telegramOwnerIds, []);
 });
 
 test('command parser accepts only the configured prefix', () => {

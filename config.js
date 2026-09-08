@@ -122,6 +122,12 @@ module.exports = {
 
   // =============================== PTERODACTYL / DEPLOYMENT SETTINGS =======
   deployment: {
+    // Keep false unless intentionally using the legacy web pairing server. OPTIONAL.
+    webPairingEnabled: false,
+    // Host for the optional server. OPTIONAL. Example: "0.0.0.0".
+    webHost: '0.0.0.0',
+    // Port for the optional server. OPTIONAL. Example: 3000; use your panel-assigned port.
+    webPort: 3000,
     // Logging level. OPTIONAL. Example: "info".
     logLevel: 'info',
     // true validates configuration without opening a WhatsApp connection. OPTIONAL; use for testing.

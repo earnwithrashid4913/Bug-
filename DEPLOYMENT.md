@@ -13,5 +13,8 @@ Use `npm start` as the startup command. Before starting, edit `config.js`:
 This bot does not run an HTTP dashboard or web-pairing server, so Pterodactyl
 port allocation is not required. It uses WhatsApp and Telegram outbound APIs.
 
+- If your panel allocates a port for the optional legacy web pairing server, set
+  `deployment.webPort` to it and explicitly enable `deployment.webPairingEnabled`.
+
 The application does not read `.env` or panel environment variables for bot
 configuration. Never paste session credentials or secrets into logs.
