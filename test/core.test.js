@@ -23,6 +23,7 @@ const { safeMath } = require('../system/lib/net-tools');
 const { GroupSettingsStore } = require('../system/lib/group-settings');
 const { COMMANDS, allAliases, resolveCommand } = require('../system/lib/menu');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
+const { sendList } = require('../system/lib/ui');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
 
@@ -396,4 +397,74 @@ test('premium store writes, lists, and removes an active record', async () => {
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// Interactive menu surface: rows and buttons follow the live command prefix.
+// ---------------------------------------------------------------------------
+
+test('the interactive menu rows use the live command prefix', async () => {
+  const relayed = [];
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid.replace(/:\\d+@/, '@'),
+    sendMessage: async () => ({ key: { id: 'fallback' } }),
+    relayMessage: async (chatId, message) => { relayed.push({ chatId, message }); }
+  };
+  await setCommandPrefix('$');
+  try {
+    await handleMessage(socket, {
+      key: { remoteJid: '15551234568@s.whatsapp.net', participant: '15551234568@s.whatsapp.net', fromMe: false },
+      message: { conversation: '$menu' }
+    });
+    assert.equal(relayed.length, 1, 'the menu is sent through the interactive relay');
+    const serialized = JSON.stringify(relayed[0]);
+    assert.match(serialized, /\$menu general/, 'category rows use the live prefix');
+    assert.doesNotMatch(serialized, /"!menu/, 'no hardcoded !menu ids remain');
+    assert.match(serialized, /\$status/, 'quick actions use the live prefix too');
+
+    // A category page is also an interactive list with working actions.
+    relayed.length = 0;
+    await handleMessage(socket, {
+      key: { remoteJid: '15551234568@s.whatsapp.net', participant: '15551234568@s.whatsapp.net', fromMe: false },
+      message: { conversation: '$menu games' }
+    });
+    assert.equal(relayed.length, 1);
+    const category = JSON.stringify(relayed[0]);
+    assert.match(category, /\$dice/, 'command rows carry their command id');
+    assert.match(category, /\$menu home/, 'the home action carries its id');
+  } finally {
+    await setCommandPrefix('!');
+  }
+});
+
+test('sendList renders list rows plus quick actions in one interactive message', async () => {
+  const relayed = [];
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    sendMessage: async () => ({ key: { id: 'fallback' } }),
+    relayMessage: async (chatId, message) => { relayed.push(message); }
+  };
+  await sendList(socket, 'chat@g.us', {
+    text: 'Choose:',
+    title: 'Browse',
+    sections: [{ title: 'S', rows: [{ header: '⚡', title: 'General', id: '!menu general' }] }],
+    actions: [{ label: '🏠 Main Menu', id: '!menu home' }],
+    footer: 'ANIME MD'
+  });
+  const serialized = JSON.stringify(relayed[0]);
+  assert.match(serialized, /single_select/, 'the list button is present');
+  assert.match(serialized, /quick_reply/, 'the quick action is present');
+  assert.match(serialized, /!menu home/, 'the action id survives');
+  // Without relay support the fallback keeps every option readable as text.
+  const plain = [];
+  await sendList({ sendMessage: async (_chatId, payload) => { plain.push(payload.text); } }, 'chat', {
+    text: 'Choose:',
+    title: 'Browse',
+    sections: [{ title: 'S', rows: [{ title: 'General', id: '!menu general' }] }],
+    actions: [{ label: '🏠 Main Menu', id: '!menu home' }]
+  });
+  assert.match(plain[0], /!menu general/);
+  assert.match(plain[0], /!menu home/);
 });
