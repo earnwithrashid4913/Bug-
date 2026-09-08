@@ -7,6 +7,15 @@
 const TELEGRAM_API = 'https://api.telegram.org';
 const POLL_TIMEOUT_SECONDS = 25;
 const SENSITIVE_COOLDOWN_MS = 20_000;
+const SENSITIVE_LOCK_TTL_MS = 2 * 60_000;
+
+// Telegram treats Markdown parsing errors as a failed API request. Keep all
+// controller output in HTML and escape untrusted values at the boundary.
+function escapeTelegramHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[character]));
+}
 
 function normalizeTelegramId(value) {
   const id = String(value ?? '').trim();
@@ -68,6 +77,8 @@ class TelegramController {
     this.bot = undefined;
     this.pollPromise = undefined;
     this.sensitiveRequests = new Map();
+    this.sensitiveLocks = new Map();
+    this.pendingPairNumbers = new Map();
   }
 
   async authorized(id) {
@@ -85,26 +96,41 @@ class TelegramController {
   }
 
   async reply(chatId, text, replyMarkup) {
-    return this.api('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+    return this.api('sendMessage', { chat_id: chatId, text: escapeTelegramHtml(text), parse_mode: 'HTML', ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
   }
 
   async replyPhoto(chatId, image, caption) {
     if (!image) return this.reply(chatId, caption);
-    return this.api('sendPhoto', { chat_id: chatId, photo: image, caption, parse_mode: 'Markdown' });
+    return this.api('sendPhoto', { chat_id: chatId, photo: image, caption: escapeTelegramHtml(caption), parse_mode: 'HTML' });
   }
 
-  reserveSensitiveRequest(senderId) {
+  reserveSensitiveRequest(senderId, scope = 'global') {
+    const key = `${String(senderId)}:${String(scope)}`;
     const now = Date.now();
-    const previous = this.sensitiveRequests.get(String(senderId)) || 0;
+    const active = this.sensitiveLocks.get(key);
+    if (active && now - active < SENSITIVE_LOCK_TTL_MS) {
+      throw new Error('That sensitive operation is already in progress. Please wait for it to finish.');
+    }
+    const previous = this.sensitiveRequests.get(key) || 0;
     if (now - previous < SENSITIVE_COOLDOWN_MS) {
       throw new Error(`Please wait ${Math.ceil((SENSITIVE_COOLDOWN_MS - (now - previous)) / 1000)} seconds before another sensitive operation.`);
     }
-    this.sensitiveRequests.set(String(senderId), now);
+    this.sensitiveRequests.set(key, now);
+    this.sensitiveLocks.set(key, now);
+    return () => this.sensitiveLocks.delete(key);
   }
 
   async handleUpdate(update) {
     if (update?.callback_query) return this.handleCallback(update.callback_query);
-    const command = commandFromUpdate(update);
+    let command = commandFromUpdate(update);
+    const message = update?.message;
+    if (!command && message?.text?.trim() && message.from?.id != null && message.chat?.id != null) {
+      const pending = this.pendingPairNumbers.get(String(message.from.id));
+      if (pending && pending.expiresAt > Date.now() && String(pending.chatId) === String(message.chat.id)) {
+        this.pendingPairNumbers.delete(String(message.from.id));
+        command = { chatId: message.chat.id, senderId: message.from.id, name: 'pair', args: [message.text.trim()], text: message.text.trim() };
+      }
+    }
     if (!command?.chatId || !command.senderId) return;
     if (!(await this.authorized(command.senderId))) {
       await this.reply(command.chatId, '*ERROR*\nYou are not authorized to control this bot.');
@@ -119,10 +145,14 @@ class TelegramController {
           await this.reply(command.chatId, 'Choose an action, or use a command:', menuMarkup());
           return;
         case 'pair': {
-          this.reserveSensitiveRequest(command.senderId);
           const number = normalizeWhatsappNumber(command.args[0]);
-          const code = await this.pairing.requestPairing(command.senderId, number);
-          await this.reply(command.chatId, `*PAIRING CODE*\nNumber: ${number}\nCode: \`${code}\``);
+          const release = this.reserveSensitiveRequest(command.senderId, `pair:${number}`);
+          try {
+            const code = await this.pairing.requestPairing(command.senderId, number);
+            await this.reply(command.chatId, `*PAIRING CODE*\nNumber: ${number}\nCode: \`${code}\``);
+          } finally {
+            release();
+          }
           return;
         }
         case 'sessions': {
@@ -143,10 +173,14 @@ class TelegramController {
             await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (telegram.ownerIds in config.js) can add controllers.');
             return;
           }
-          this.reserveSensitiveRequest(command.senderId);
-          const id = normalizeTelegramId(command.args[0]);
-          await this.controllerStore.add(id);
-          await this.reply(command.chatId, `*SUCCESS*\nTelegram controller ${id} authorized.`);
+          const release = this.reserveSensitiveRequest(command.senderId, 'addowner');
+          try {
+            const id = normalizeTelegramId(command.args[0]);
+            await this.controllerStore.add(id);
+            await this.reply(command.chatId, `*SUCCESS*\nTelegram controller ${id} authorized.`);
+          } finally {
+            release();
+          }
           return;
         }
         case 'delowner': {
@@ -154,18 +188,26 @@ class TelegramController {
             await this.reply(command.chatId, '*ERROR*\nOnly bootstrap owners (telegram.ownerIds in config.js) can remove controllers.');
             return;
           }
-          this.reserveSensitiveRequest(command.senderId);
-          const id = normalizeTelegramId(command.args[0]);
-          if (this.bootstrapOwners.has(id)) throw new Error('Bootstrap owners are configured through telegram.ownerIds in config.js and cannot be removed at runtime.');
-          const removed = await this.controllerStore.remove(id);
-          await this.reply(command.chatId, removed ? `*SUCCESS*\nTelegram controller ${id} removed.` : `*INFO*\nTelegram controller ${id} was not stored.`);
+          const release = this.reserveSensitiveRequest(command.senderId, 'delowner');
+          try {
+            const id = normalizeTelegramId(command.args[0]);
+            if (this.bootstrapOwners.has(id)) throw new Error('Bootstrap owners are configured through telegram.ownerIds in config.js and cannot be removed at runtime.');
+            const removed = await this.controllerStore.remove(id);
+            await this.reply(command.chatId, removed ? `*SUCCESS*\nTelegram controller ${id} removed.` : `*INFO*\nTelegram controller ${id} was not stored.`);
+          } finally {
+            release();
+          }
           return;
         }
         case 'stop': {
-          this.reserveSensitiveRequest(command.senderId);
           const number = normalizeWhatsappNumber(command.args[0]);
-          await this.pairing.stopSession(command.senderId, number);
-          await this.reply(command.chatId, `*SUCCESS*\nSession for ${number} stopped and removed.`);
+          const release = this.reserveSensitiveRequest(command.senderId, `stop:${number}`);
+          try {
+            await this.pairing.stopSession(command.senderId, number);
+            await this.reply(command.chatId, `*SUCCESS*\nSession for ${number} stopped and removed.`);
+          } finally {
+            release();
+          }
           return;
         }
         default:
@@ -184,7 +226,10 @@ class TelegramController {
     try {
       await this.api('answerCallbackQuery', { callback_query_id: callback.id });
       if (!(await this.authorized(senderId))) throw new Error('You are not authorized to control this bot.');
-      if (action === 'pair_help') return this.reply(chatId, 'Send `/pair <number>` using country code and no plus sign.');
+      if (action === 'pair_help') {
+        this.pendingPairNumbers.set(String(senderId), { chatId, expiresAt: Date.now() + 5 * 60_000 });
+        return this.reply(chatId, 'Send your WhatsApp number with country code, for example 923001234567. Do not include a plus sign.', { force_reply: true, input_field_placeholder: '923001234567' });
+      }
       if (action === 'help') return this.reply(chatId, helpText());
       if (action === 'status') return this.handleUpdate({ message: { chat: { id: chatId }, from: { id: senderId }, text: '/status' } });
       if (action === 'sessions') return this.handleUpdate({ message: { chat: { id: chatId }, from: { id: senderId }, text: '/sessions' } });
@@ -251,4 +296,4 @@ class TelegramController {
   stop() { this.running = false; }
 }
 
-module.exports = { SENSITIVE_COOLDOWN_MS, TelegramController, commandFromUpdate, helpText, menuMarkup, normalizeTelegramId, normalizeWhatsappNumber };
+module.exports = { SENSITIVE_COOLDOWN_MS, SENSITIVE_LOCK_TTL_MS, TelegramController, commandFromUpdate, escapeTelegramHtml, helpText, menuMarkup, normalizeTelegramId, normalizeWhatsappNumber };
