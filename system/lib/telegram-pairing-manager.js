@@ -152,6 +152,9 @@ class TelegramPairingManager {
     }
     entry = await this.ensureSocket(ownerId);
     if (entry.connected) throw Object.assign(new Error('Your WhatsApp session is already connected.'), { status: 409 });
+    if (typeof entry.socket?.requestPairingCode !== 'function') {
+      throw new Error('The installed Baileys version does not support native pairing codes.');
+    }
     if (entry.request) return entry.request;
     if (entry.number && entry.number !== number && entry.state === 'pairing') throw Object.assign(new Error('A pairing request is already active for your session.'), { status: 409 });
     entry.request = (async () => {
@@ -159,6 +162,9 @@ class TelegramPairingManager {
       entry.state = 'waiting';
       entry.updatedAt = Date.now();
       await waitForPairingReady(entry.ready);
+      if (entry.stopped || !entry.socket || typeof entry.socket.requestPairingCode !== 'function') {
+        throw new Error('The WhatsApp pairing socket closed before a pairing code could be generated.');
+      }
       const code = await entry.socket.requestPairingCode(number);
       entry.state = 'pairing';
       entry.updatedAt = Date.now();
@@ -167,7 +173,17 @@ class TelegramPairingManager {
       entry.timer.unref();
       return code;
     })();
-    try { return await entry.request; } finally { entry.request = undefined; }
+    try {
+      return await entry.request;
+    } catch (error) {
+      if (!entry.connected && !['reconnecting', 'logged_out'].includes(entry.state)) {
+        entry.state = 'failed';
+        entry.updatedAt = Date.now();
+      }
+      throw error;
+    } finally {
+      entry.request = undefined;
+    }
   }
 
   async stopSession(ownerId, rawNumber) {
