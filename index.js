@@ -163,6 +163,7 @@ function formatPairingCode(code) {
 function startTelegramController() {
   if (!config.telegramEnabled || (!config.telegramBotToken && !config.telegramOwnerIds.length)) {
     console.info('[telegram] Controller disabled: configure telegram.enabled, telegram.botToken, and telegram.ownerIds in config.js to enable it.');
+    console.info('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_IDS are not configured.');
     return;
   }
   if (!config.telegramBotToken) {
