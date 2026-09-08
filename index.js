@@ -161,16 +161,16 @@ function formatPairingCode(code) {
 }
 
 function startTelegramController() {
-  if (!config.telegramBotToken && !config.telegramOwnerIds.length) {
-    console.info('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_IDS are not configured.');
+  if (!config.telegramEnabled || (!config.telegramBotToken && !config.telegramOwnerIds.length)) {
+    console.info('[telegram] Controller disabled: configure telegram.enabled, telegram.botToken, and telegram.ownerIds in config.js to enable it.');
     return;
   }
   if (!config.telegramBotToken) {
-    console.error('[telegram] Controller disabled: TELEGRAM_BOT_TOKEN is missing. Get a token from @BotFather and add it to .env.');
+    console.error('[telegram] Controller disabled: telegram.botToken is missing. Get a token from @BotFather and add it to config.js.');
     return;
   }
   if (!config.telegramOwnerIds.length) {
-    console.error('[telegram] TELEGRAM_BOT_TOKEN is set but TELEGRAM_OWNER_IDS is empty; controller is disabled.');
+    console.error('[telegram] telegram.botToken is set but telegram.ownerIds is empty; controller is disabled.');
     return;
   }
   telegramPairingManager = new TelegramPairingManager({
@@ -190,7 +190,6 @@ function startTelegramController() {
       });
     }
   });
-  telegramPairingManager = new TelegramPairingManager({ authDir: config.authDir });
   telegramController = new TelegramController({
     token: config.telegramBotToken,
     owners: config.telegramOwnerIds,
@@ -214,7 +213,7 @@ function startTelegramController() {
     })
     .catch((error) => {
       telegramController = undefined;
-      console.error(`[telegram] Controller failed to start: ${error.message}. Check TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_IDS, and Telegram network access.`);
+      console.error(`[telegram] Controller failed to start: ${error.message}. Check telegram.botToken, telegram.ownerIds, and Telegram network access.`);
     });
 }
 
@@ -470,7 +469,6 @@ function launchChild() {
   const entry = path.join(__dirname, 'index.js');
   const child = spawn(process.execPath, [entry, CHILD_FLAG], {
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-    env: process.env
   });
   childProcess = child;
 
@@ -568,8 +566,6 @@ if (!isChildProcess && !config.dryRun) {
   console.log(`[startup] Dry run successful. Configuration for ${config.botName} is valid; no WhatsApp connection was opened.`);
 } else {
   bootstrapSession();
-  if (config.webPairingEnabled) startWebServer();
-  else console.info('[web] Web Pairing disabled: WEB_PAIRING_ENABLED=false.');
   startTelegramController();
   void startBot();
 }

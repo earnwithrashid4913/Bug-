@@ -4,7 +4,6 @@ node_modules/
 # Environment files and secrets
 .env
 .env.*
-!.env.example
 
 # WhatsApp/Baileys authentication state (contains credentials and private keys)
 session/

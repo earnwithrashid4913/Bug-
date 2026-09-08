@@ -184,8 +184,50 @@ function safeMath(expression) {
   const normalized = String(expression || '').replace(/\s+/g, '');
   if (!/^[\d+\-*/().%]+$/.test(normalized)) throw new Error('Only numbers and + - * / % ( ) are allowed.');
   if (normalized.includes('**')) throw new Error('Exponentiation is not allowed.');
-  // eslint-disable-next-line no-new-func
-  const result = Function(`"use strict"; return (${normalized});`)();
+  let position = 0;
+
+  const consume = (token) => {
+    if (normalized.slice(position, position + token.length) !== token) return false;
+    position += token.length;
+    return true;
+  };
+  const number = () => {
+    const match = normalized.slice(position).match(/^(?:\d+(?:\.\d*)?|\.\d+)/);
+    if (!match) throw new Error('Expected a number.');
+    position += match[0].length;
+    return Number(match[0]);
+  };
+  const primary = () => {
+    if (consume('(')) {
+      const value = addSubtract();
+      if (!consume(')')) throw new Error('Missing closing parenthesis.');
+      return value;
+    }
+    if (consume('+')) return primary();
+    if (consume('-')) return -primary();
+    return number();
+  };
+  const multiplyDivide = () => {
+    let value = primary();
+    while (position < normalized.length) {
+      if (consume('*')) value *= primary();
+      else if (consume('/')) value /= primary();
+      else if (consume('%')) value %= primary();
+      else break;
+    }
+    return value;
+  };
+  const addSubtract = () => {
+    let value = multiplyDivide();
+    while (position < normalized.length) {
+      if (consume('+')) value += multiplyDivide();
+      else if (consume('-')) value -= multiplyDivide();
+      else break;
+    }
+    return value;
+  };
+  const result = addSubtract();
+  if (position !== normalized.length) throw new Error('Invalid expression.');
   if (typeof result !== 'number' || !Number.isFinite(result)) throw new Error('That expression did not produce a valid number.');
   return result;
 }

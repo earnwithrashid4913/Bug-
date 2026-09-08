@@ -38,7 +38,7 @@ function reserveAiRequest(sender, cooldownMs = AI_REQUEST_COOLDOWN_MS) {
 }
 
 async function askGroq({ apiKey, model, prompt, botName }) {
-  if (!apiKey) throw new Error('AI is not configured. Set GROQ_API_KEY before using this command.');
+  if (!apiKey) throw new Error('AI is not configured. Set api.groqApiKey in config.js before using this command.');
   if (!prompt || prompt.length > MAX_AI_PROMPT_LENGTH) {
     throw new Error(`Prompt must contain 1-${MAX_AI_PROMPT_LENGTH} characters.`);
   }

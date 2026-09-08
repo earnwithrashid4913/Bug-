@@ -10,4 +10,4 @@ Do not open a public issue for a vulnerability involving credentials, session fi
 
 ## Deployment guidance
 
-Keep `.env`, `AUTH_DIR`, `DATA_DIR`, session credentials, trusted identity manifests, HMAC keys, and AI API keys private. The project intentionally rejects protected owner/developer environment overrides and locks privileged functionality if configured identity verification fails.
+Keep `config.js`, `AUTH_DIR`, `DATA_DIR`, session credentials, trusted identity manifests, HMAC keys, and AI API keys private. The project locks privileged functionality if configured identity verification fails.

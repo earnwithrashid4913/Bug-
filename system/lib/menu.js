@@ -127,13 +127,15 @@ const COMMANDS = Object.freeze([
   command('sessions', 'sessions', 'Show the active ANIME MD WhatsApp session.'),
   command('stopsession', 'sessions', 'Owner-only safe unpaired-session cleanup command.', { aliases: ['stop'], usage: '<number>', permission: 'owner' }),
 
-  command('pairing', 'telegram', 'Show the authorized Telegram pairing controller link.', { aliases: ['tgpair', 'telegram'] }),
+  command('pairing', 'telegram', 'Show the authorized Telegram pairing controller link.', { aliases: ['tgpair'] }),
   command('telegram', 'telegram', 'Show Telegram controller setup status.', { aliases: ['tg'] })
 ]);
 
 const ALIAS_MAP = COMMANDS.reduce((map, entry) => {
-  map[entry.name] = entry;
-  for (const alias of entry.aliases) map[alias] = entry;
+  for (const value of [entry.name, ...entry.aliases]) {
+    if (map[value]) throw new Error(`Duplicate command or alias: ${value}`);
+    map[value] = entry;
+  }
   return map;
 }, {});
 

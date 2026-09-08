@@ -2,14 +2,14 @@
 
 // Read-only inventory tool for an external migration archive. The archive is
 // deliberately never extracted into this repository: it can contain sessions,
-// .env files, and other private source material. Pass its absolute path (or
-// SOURCE_ARCHIVE_PATH) when it has been supplied to the migration environment.
+// old environment files, and other private source material. Pass its absolute
+// path when it has been supplied to the migration environment.
 
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const archivePath = path.resolve(process.argv[2] || process.env.SOURCE_ARCHIVE_PATH || 'abcd New Folder.zip');
+const archivePath = path.resolve(process.argv[2] || 'abcd New Folder.zip');
 const requiredRootFiles = [
   'func.js', 'app.json', 'README.md', 'welcome.js', 'config.js', '.env',
   'AnimeMd.js', 'index.js', 'case.js', 'settings.js', 'utils.js'
@@ -61,7 +61,7 @@ function hasSuffix(entries, suffix) {
 function main() {
   if (!fs.existsSync(archivePath)) {
     console.error(`[source-audit] Archive not found: ${archivePath}`);
-    console.error('[source-audit] Provide its absolute path as an argument or set SOURCE_ARCHIVE_PATH.');
+    console.error('[source-audit] Provide the archive absolute path as an argument.');
     process.exitCode = 2;
     return;
   }

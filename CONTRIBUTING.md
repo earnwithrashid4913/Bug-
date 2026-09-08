@@ -11,7 +11,7 @@ Thank you for improving ANIME MD. Keep contributions focused, tested, and safe f
 
 ## Security and identity rules
 
-Do not weaken or bypass `system/security.js`, the protected identity manifest verification, sender normalization, or group/bot-admin checks. Never commit `.env`, session files, private keys, API keys, trusted identity manifests, or HMAC secrets.
+Do not weaken or bypass `system/security.js`, the protected identity manifest verification, sender normalization, or group/bot-admin checks. Never commit a `config.js` containing real secrets, session files, private keys, API keys, trusted identity manifests, or HMAC secrets.
 
 `OWNER_NAME` is a deployer display setting. The linked WhatsApp account is selected only through the authorized Telegram pairing flow. This setting must not become Global Owner or Developer identity.
 

@@ -10,40 +10,7 @@
   ],
   "stack": "heroku-24",
   "logo": "https://files.catbox.moe/gacz1y.jpg",
-  "env": {
-    "OWNER_NAME": {
-      "description": "Owner display name.",
-      "required": true
-    },
-    "SESSION_ID": {
-      "description": "Contents of session/creds.json (raw JSON or base64). Required on Heroku: the filesystem is wiped on every dyno restart.",
-      "value": ""
-    },
-    "BOT_NAME": {
-      "description": "Bot display name.",
-      "value": "ANIME MD"
-    },
-    "COMMAND_PREFIX": {
-      "description": "Command prefix (1-4 characters).",
-      "value": "!"
-    },
-    "PUBLIC_MODE": {
-      "description": "Respond in every chat (true) or only for the owner (false).",
-      "value": "true"
-    },
-    "AUTH_METHOD": {
-      "description": "Keep 'pairing' for pairing-code capable WhatsApp startup.",
-      "value": "pairing"
-    },
-    "WEB_PAIRING_ENABLED": {
-      "description": "Keep false to disable legacy Web Pairing and avoid competing sockets.",
-      "value": "false"
-    },
-    "GROQ_API_KEY": {
-      "description": "Optional key for the !ai command. Never commit a real key.",
-      "value": ""
-    }
-  },
+  "env": {},
   "formation": {
     "worker": {
       "quantity": 1,

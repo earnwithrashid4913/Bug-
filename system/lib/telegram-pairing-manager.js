@@ -19,6 +19,23 @@ const PAIRING_READY_TIMEOUT_MS = 45_000;
 const PAIRING_CODE_TTL_MS = 5 * 60_000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
+async function waitForPairingReady(ready) {
+  let timeout;
+  try {
+    await Promise.race([
+      ready,
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(Object.assign(new Error('WhatsApp did not become ready for pairing in time.'), { status: 504 })),
+          PAIRING_READY_TIMEOUT_MS
+        );
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function safeSessionDirectory(root, telegramId) {
   const id = normalizeTelegramId(telegramId);
   const directory = path.resolve(root, id);
@@ -28,7 +45,6 @@ function safeSessionDirectory(root, telegramId) {
 
 class TelegramPairingManager {
   constructor({ authDir, log = console, onSocket, baileys = {} }) {
-  constructor({ authDir, log = console, baileys = {} }) {
     this.root = path.resolve(authDir, 'telegram-pairings');
     this.log = log;
     this.sessions = new Map();
@@ -45,7 +61,7 @@ class TelegramPairingManager {
     const id = normalizeTelegramId(ownerId);
     let entry = this.sessions.get(id);
     if (!entry) {
-      entry = { id, state: 'idle', connected: false, number: null, socket: undefined, ready: undefined, readyResolve: undefined, request: undefined, reconnects: 0, timer: undefined, startedAt: Date.now(), updatedAt: Date.now(), stopped: false };
+      entry = { id, state: 'idle', connected: false, number: null, socket: undefined, ready: undefined, readyResolve: undefined, request: undefined, reconnects: 0, timer: undefined, reconnectTimer: undefined, startedAt: Date.now(), updatedAt: Date.now(), stopped: false };
       this.sessions.set(id, entry);
     }
     return entry;
@@ -111,7 +127,15 @@ class TelegramPairingManager {
     if (entry.reconnects >= MAX_RECONNECT_ATTEMPTS) { entry.state = 'error'; return; }
     entry.state = 'reconnecting';
     entry.reconnects += 1;
-    setTimeout(() => { void this.ensureSocket(entry.id).catch(() => { entry.state = 'error'; }); }, Math.min(2_000 * 2 ** entry.reconnects, 30_000)).unref();
+    entry.reconnectTimer = setTimeout(() => {
+      entry.reconnectTimer = undefined;
+      if (entry.stopped) return;
+      void this.ensureSocket(entry.id).catch((error) => {
+        entry.state = 'error';
+        this.log.error?.(`[telegram-pairing] Reconnect failed: ${error.message}`);
+      });
+    }, Math.min(2_000 * 2 ** entry.reconnects, 30_000));
+    entry.reconnectTimer.unref();
   }
 
   async requestPairing(ownerId, rawNumber) {
@@ -134,7 +158,7 @@ class TelegramPairingManager {
       entry.number = number;
       entry.state = 'waiting';
       entry.updatedAt = Date.now();
-      await Promise.race([entry.ready, new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('WhatsApp did not become ready for pairing in time.'), { status: 504 })), PAIRING_READY_TIMEOUT_MS))]);
+      await waitForPairingReady(entry.ready);
       const code = await entry.socket.requestPairingCode(number);
       entry.state = 'pairing';
       entry.updatedAt = Date.now();
@@ -154,14 +178,20 @@ class TelegramPairingManager {
     entry.stopped = true;
     try { entry.socket?.ws?.close(); } catch { /* best effort */ }
     if (entry.timer) clearTimeout(entry.timer);
+    if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
     await fs.rm(safeSessionDirectory(this.root, entry.id), { recursive: true, force: true });
     this.sessions.delete(entry.id);
   }
 
   async shutdown() {
-    for (const entry of this.sessions.values()) { if (entry.timer) clearTimeout(entry.timer); try { entry.socket?.ws?.close(); } catch { /* best effort */ } }
+    for (const entry of this.sessions.values()) {
+      entry.stopped = true;
+      if (entry.timer) clearTimeout(entry.timer);
+      if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
+      try { entry.socket?.ws?.close(); } catch { /* best effort */ }
+    }
     this.sessions.clear();
   }
 }
 
-module.exports = { MAX_RECONNECT_ATTEMPTS, TelegramPairingManager, safeSessionDirectory };
+module.exports = { MAX_RECONNECT_ATTEMPTS, TelegramPairingManager, safeSessionDirectory, waitForPairingReady };

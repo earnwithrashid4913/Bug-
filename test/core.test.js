@@ -19,7 +19,9 @@ const {
 } = require('../system/lib/message');
 const { groupSettings, handleGroupParticipantsUpdate, renderGroupMessage } = require('../system/group-events');
 const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = require('../system/lib/ai');
+const { safeMath } = require('../system/lib/net-tools');
 const { GroupSettingsStore } = require('../system/lib/group-settings');
+const { COMMANDS, allAliases, resolveCommand } = require('../system/lib/menu');
 const { convertStickerToImage, createImageSticker } = require('../system/lib/sticker');
 const { PremiumStore, parseDuration } = require('../system/lib/premium');
 const sharp = require('sharp');
@@ -47,54 +49,32 @@ test('WhatsApp number validation rejects a leading plus sign', () => {
   assert.throws(() => assertWhatsappNumber('+15551234567', 'Phone number'), /Phone number must not contain/);
 });
 
-test('Telegram configuration uses the documented canonical environment variables', () => {
-  const saved = Object.fromEntries(['TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TELEGRAM_OWNER_IDS'].map((key) => [key, process.env[key]]));
-  try {
-    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
-    process.env.TELEGRAM_BOT_LINK = 'https://t.me/test_bot';
-    process.env.TELEGRAM_OWNER_IDS = '12345,67890';
-    const telegramConfig = loadConfig();
-    assert.equal(telegramConfig.telegramBotToken, 'test-token');
-    assert.equal(telegramConfig.telegramBotLink, 'https://t.me/test_bot');
-    assert.deepEqual(telegramConfig.telegramOwnerIds, ['12345', '67890']);
-  } finally {
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+test('Telegram configuration is read from config.js-shaped values', () => {
+  const source = structuredClone(require('../config'));
+  source.telegram.botToken = 'test-token';
+  source.telegram.botLink = 'https://t.me/test_bot';
+  source.telegram.ownerIds = ['12345', '67890'];
+  const telegramConfig = loadConfig(source);
+  assert.equal(telegramConfig.telegramBotToken, 'test-token');
+  assert.equal(telegramConfig.telegramBotLink, 'https://t.me/test_bot');
+  assert.deepEqual(telegramConfig.telegramOwnerIds, ['12345', '67890']);
 });
 
-test('configuration permits Telegram pairing without a deployment phone number', () => {
-  const saved = Object.fromEntries(['TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TELEGRAM_OWNER_IDS'].map((key) => [key, process.env[key]]));
-  try {
-    delete process.env.TELEGRAM_BOT_TOKEN;
-    delete process.env.TELEGRAM_BOT_LINK;
-    delete process.env.TELEGRAM_OWNER_IDS;
-    const withoutBotNumber = loadConfig();
-    assert.equal(withoutBotNumber.telegramBotToken, '');
-    assert.equal(withoutBotNumber.telegramBotLink, '');
-    assert.deepEqual(withoutBotNumber.telegramOwnerIds, []);
-test('configuration has no deployment bot-number dependency or Telegram aliases', () => {
-  const saved = Object.fromEntries(['BOT_NUMBER', 'PAIRING_NUMBER', 'TELEGRAM_BOT_TOKEN', 'BOT_TOKEN', 'TELEGRAM_BOT_LINK', 'TG_BOT_LINK', 'TELEGRAM_OWNER_IDS', 'BOT_OWNER_ID'].map((key) => [key, process.env[key]]));
-  try {
-    delete process.env.BOT_NUMBER;
-    delete process.env.PAIRING_NUMBER;
-    const withoutBotNumber = loadConfig();
-    assert.equal(withoutBotNumber.telegramBotToken, '');
-    process.env.BOT_TOKEN = 'compat-token';
-    process.env.TG_BOT_LINK = 'https://t.me/compat_bot';
-    process.env.BOT_OWNER_ID = '12345';
-    const compatibilityConfig = loadConfig();
-    assert.equal(compatibilityConfig.telegramBotToken, '');
-    assert.equal(compatibilityConfig.telegramBotLink, '');
-    assert.deepEqual(compatibilityConfig.telegramOwnerIds, []);
-  } finally {
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+test('Telegram pairing is optional and has no static WhatsApp phone number', () => {
+  const source = structuredClone(require('../config'));
+  source.telegram.enabled = false;
+  source.telegram.botToken = '';
+  source.telegram.ownerIds = [];
+  const withoutTelegram = loadConfig(source);
+  assert.equal(withoutTelegram.telegramBotToken, '');
+  assert.equal(withoutTelegram.telegramBotLink, '');
+  assert.deepEqual(withoutTelegram.telegramOwnerIds, []);
+});
+
+test('configuration rejects an insecure Telegram link with a clear config.js error', () => {
+  const source = structuredClone(require('../config'));
+  source.telegram.botLink = 'http://t.me/not_secure';
+  assert.throws(() => loadConfig(source), /telegram\.botLink must be a valid HTTPS URL/);
 });
 
 test('command parser accepts only the configured prefix', () => {
@@ -104,6 +84,14 @@ test('command parser accepts only the configured prefix', () => {
     text: '15551234567 30d'
   });
   assert.equal(commandFromText('addprem 15551234567'), undefined);
+});
+
+test('command names and aliases are unique and resolve to their documented command', () => {
+  const names = COMMANDS.flatMap((entry) => [entry.name, ...entry.aliases]);
+  assert.equal(new Set(names).size, names.length);
+  assert.equal(new Set(allAliases()).size, names.length);
+  assert.equal(resolveCommand('telegram').name, 'telegram');
+  assert.equal(resolveCommand('tgpair').name, 'pairing');
 });
 
 test('runtime prefix changes update command parsing without mutating frozen config', async () => {
@@ -189,6 +177,13 @@ test('AI request builder is bounded and requires an explicitly configured key', 
   assert.equal(AI_REQUEST_COOLDOWN_MS, 30_000);
 });
 
+test('calculator evaluates supported arithmetic without dynamic code execution', () => {
+  assert.equal(safeMath('2 + 3 * (4 - 1)'), 11);
+  assert.equal(safeMath('-5.5 % 2'), -1.5);
+  assert.throws(() => safeMath('process.exit()'), /Only numbers/);
+  assert.throws(() => safeMath('2 + )'), /Expected a number/);
+});
+
 test('LID senders resolve to mapped phone-number JIDs when available', async () => {
   const socket = {
     decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
@@ -226,6 +221,18 @@ test('command handler dispatches a menu response', async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chatId, message.key.remoteJid);
   assert.ok(sent[0].payload.text, 'menu response should contain text');
+});
+
+test('command send failures are awaited instead of becoming unhandled rejections', async () => {
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid,
+    sendMessage: async () => { throw new Error('transport unavailable'); }
+  };
+  await assert.rejects(handleMessage(socket, {
+    key: { remoteJid: '15551234568@s.whatsapp.net', participant: '15551234568@s.whatsapp.net', fromMe: false },
+    message: { conversation: '!dice' }
+  }), /transport unavailable/);
 });
 
 test('sticker command provides usage text when no image is supplied', async () => {
