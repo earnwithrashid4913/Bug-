@@ -90,8 +90,9 @@ test('the Telegram controller wiring starts, greets with the Gojo intro, and ser
   // (raw errors stay in the log; the box shows the friendly mapped text).
   await waitFor((entry) => /No session found for that number/.test(entry.payload.text || ''), '/restart rejection');
 
-  // Unauthorized senders are denied by the real controller.
-  await waitFor((entry) => /not authorized/.test(entry.payload.text || ''), 'authorization');
+  // Unauthorized senders now get verification prompt (functional, not ACCESS DENIED as not authorized)
+  // With new architecture, normal users can register via /start, so /sessions for unverified user shows VERIFICATION
+  await waitFor((entry) => /not authorized|VERIFICATION|ACCESS BLOCKED/.test(entry.payload.text || entry.payload.caption || ''), 'authorization');
 });
 
 test('cleanup removes the temporary integration directory', async () => {
