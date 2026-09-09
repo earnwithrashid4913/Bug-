@@ -37,8 +37,22 @@ const MAX_SESSION_BUTTONS = 8;
 const MEMBERSHIP_CACHE_TTL_MS = 60_000;
 // Repeated failed verification attempts only re-notify the owner this often.
 const VERIFY_FAILURE_NOTIFY_MS = 5 * 60_000;
-// Telegram member states that count as "joined" for a channel or group.
-const MEMBERSHIP_JOINED_STATUSES = new Set(['member', 'administrator', 'creator', 'restricted']);
+
+// Telegram member states that always count as "joined" for a channel/group.
+// `restricted` is handled separately: a restricted user counts as a member
+// ONLY while Telegram reports is_member === true. A restricted user with
+// is_member === false has been removed from the community and must be rejected.
+const MEMBERSHIP_JOINED_STATUSES = new Set(['member', 'administrator', 'creator']);
+// Statuses Telegram returns that definitively mean "not a member".
+const MEMBERSHIP_NOT_MEMBER_STATUSES = new Set(['left', 'kicked']);
+
+// Bounded retry for transient Telegram API failures (network errors, HTTP 408,
+// HTTP 429, and 5xx). Verification never loops forever and never retries
+// permission/configuration errors — those fail closed immediately.
+const MEMBERSHIP_RETRY_ATTEMPTS = 3;
+const MEMBERSHIP_RETRY_BASE_DELAY_MS = 300;
+const MEMBERSHIP_RETRY_MAX_DELAY_MS = 1_500;
+const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 // Database-driven tier labels (owner/admin/vip/premium/normal). No ID is ever
 // hardcoded: the role is resolved from the controller store / premium records.
@@ -78,6 +92,78 @@ function normalizeTelegramId(value) {
   const id = String(value ?? '').trim();
   if (!/^\d{1,20}$/.test(id)) throw new Error('Telegram IDs must be numeric.');
   return id;
+}
+
+// ---------------------------------------------------------------------------
+// Membership verification helpers.
+//
+// Telegram getChatMember errors are classified so the controller can tell the
+// difference between:
+//   * the user is not a member (a real, positive "reject" result), and
+//   * the bot cannot read membership at all (permission/configuration), and
+//   * a transient Telegram failure worth retrying.
+// ---------------------------------------------------------------------------
+
+// Maps a thrown Telegram API error to a membership error category:
+//   'transient'  — retryable (network failure, HTTP 408/429/5xx)
+//   'permission' — bot lacks the permission to read membership (HTTP 403)
+//   'config'     — the chat id/username is wrong or inaccessible (HTTP 400/404)
+//   'other'      — anything else we cannot confidently classify.
+function classifyMemberError(error) {
+  const httpStatus = Number(error?.httpStatus);
+  const code = error?.telegramErrorCode;
+  if (!httpStatus && !code) return { kind: 'transient', retryable: true };
+  if (httpStatus >= 500) return { kind: 'transient', retryable: true };
+  if (httpStatus === 408 || httpStatus === 429) return { kind: 'transient', retryable: true };
+  if (httpStatus === 403) return { kind: 'permission', retryable: false };
+  if (httpStatus === 400 || httpStatus === 404) return { kind: 'config', retryable: false };
+  return { kind: 'other', retryable: false };
+}
+
+// Bounded retry: repeats `operation` only for transient failures, with a short,
+// backoff-like delay. Non-transient errors and the final attempt always throw.
+async function retryTransient(operation, { attempts = MEMBERSHIP_RETRY_ATTEMPTS, baseDelayMs = MEMBERSHIP_RETRY_BASE_DELAY_MS, maxDelayMs = MEMBERSHIP_RETRY_MAX_DELAY_MS } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const { retryable } = classifyMemberError(error);
+      if (!retryable || attempt >= attempts) throw error;
+      const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
+// A status is a definitive, non-error "not a member" when Telegram reports a
+// left/kicked member, or a restricted member whose is_member is false.
+function isExplicitlyNotMember(status, member) {
+  if (MEMBERSHIP_NOT_MEMBER_STATUSES.has(status)) return true;
+  if (status === 'restricted') return member?.is_member === false;
+  return false;
+}
+
+// Whether the reported getChatMember status counts as joined. `restricted` is a
+// member ONLY while is_member is not explicitly false.
+function isJoinedMemberStatus(status, member) {
+  if (MEMBERSHIP_JOINED_STATUSES.has(status)) return true;
+  if (status === 'restricted') return member?.is_member !== false;
+  return false;
+}
+
+// Ranks failure categories so the most actionable one wins when several
+// communities report different problems (config > permission > other > transient).
+function membershipErrorSeverity(kind) {
+  switch (kind) {
+    case 'config': return 4;
+    case 'permission': return 3;
+    case 'other': return 2;
+    case 'transient': return 1;
+    default: return 0;
+  }
 }
 
 function commandFromUpdate(update) {
@@ -319,10 +405,10 @@ function stoppedBox(numberDisplay) {
 function verifyRequiredBox(membership) {
   const communities = Array.isArray(membership?.communities) ? membership.communities : [];
   if (!communities.length) return verifyBox();
-  // An API failure can never read as "joined": show the retryable error state
-  // instead of a misleading per-community "Not Joined" list.
-  if (membership?.error) return verificationErrorBox();
-  const lines = ['', '🔐 Membership required', '', 'Join BOTH communities to unlock:', ''];
+  // An API/permission failure can never read as "joined": route to the correct
+  // error box instead of a misleading per-community "Not Joined" list.
+  if (membership?.error) return verificationResultBox(membership);
+  const lines = ['', '🔐 Membership required', '', 'Join ALL required communities to unlock:', ''];
   for (const community of communities) {
     const icon = community.kind === 'group' ? '👥 Group' : '📢 Channel';
     lines.push(`${icon}: ${community.joined ? '✅ Joined' : '❌ Not Joined'}`);
@@ -339,7 +425,7 @@ function verificationSuccessBox(membership) {
   const communities = Array.isArray(membership?.communities) ? membership.communities : [];
   const lines = ['', '✅ Verification Successful', ''];
   if (communities.length) {
-    lines.push('You have joined both required communities.', '');
+    lines.push('You have joined all required communities.', '');
     for (const community of communities) {
       const icon = community.kind === 'group' ? '👥 Group' : '📢 Channel';
       lines.push(`${icon}: ✅ Joined`);
@@ -353,23 +439,54 @@ function verificationSuccessBox(membership) {
 
 function verificationFailureBox(membership) {
   const communities = Array.isArray(membership?.communities) ? membership.communities : [];
-  const lines = ['', '❌ Verification Failed', '', 'You must join BOTH required communities.', ''];
+  const lines = ['', '❌ Verification Failed', '', '⚠️ You have not joined all required', 'communities yet.', ''];
   for (const community of communities) {
     const icon = community.kind === 'group' ? '👥 Group' : '📢 Channel';
     lines.push(`${icon}: ${community.joined ? '✅ Joined' : '❌ Not Joined'}`);
   }
-  lines.push('', 'Join and press 🔄 VERIFY again.');
+  lines.push('', 'Join ALL communities and press 🔄 VERIFY again.');
   return box('ANIME MD • VERIFICATION', lines);
 }
 
+// Shown when Telegram can't tell us whether the user is a member because the
+// bot is missing from the community, lacks permission, or the chat id is wrong.
+// This is an operator/config problem, not the user failing to join.
+function verificationPermissionBox(membership) {
+  const communities = Array.isArray(membership?.communities) ? membership.communities : [];
+  const unreachable = communities.filter((community) => community.error || !community.joined);
+  const lines = ['', '⚠️ Membership verification could not be completed.', ''];
+  lines.push('The bot could not read membership status for:');
+  for (const community of unreachable.length ? unreachable : communities) {
+    lines.push(`• ${community.name}`);
+  }
+  lines.push('', 'Please make sure:');
+  lines.push('• The chat ID/username is correct.');
+  lines.push('• The bot is present in the community.');
+  lines.push('• The bot has the required Telegram permissions.');
+  lines.push('', 'Then press 🔄 VERIFY again.');
+  return box('ANIME MD • VERIFICATION', lines);
+}
+
+// Shown for transient Telegram failures (after a bounded retry). The user is
+// not blamed; the message is retryable and points at the owner as a last resort.
 function verificationErrorBox() {
   return box('ANIME MD • VERIFICATION', [
     '',
-    '⚠️ Could not verify your membership.',
+    '⚠️ The bot could not verify membership right now.',
     '',
-    'Please try again in a moment.',
-    'If this keeps happening, contact the owner.'
+    'Please try again shortly.',
+    'If the problem continues, contact the owner.'
   ]);
+}
+
+// Routes a membership result to the correct user-facing box based on the
+// most actionable error category.
+function verificationResultBox(membership) {
+  if (membership?.noRequirements) return verifyBox();
+  const errorType = membership?.errorType;
+  if (errorType === 'permission' || errorType === 'config') return verificationPermissionBox(membership);
+  if (errorType === 'transient' || errorType === 'other' || membership?.error) return verificationErrorBox();
+  return verificationFailureBox(membership);
 }
 
 function joinAllBox(communities = []) {
@@ -1215,19 +1332,27 @@ class TelegramController {
   async checkCommunityMembership(id, community) {
     const result = {
       name: community.name, chatId: community.chatId, link: community.link,
-      kind: community.kind, joined: false, status: null, error: false
+      kind: community.kind, joined: false, status: null,
+      error: false, errorType: 'none', httpStatus: undefined
     };
     try {
       const member = await this.getChatMember(community.chatId, id);
-      result.status = member?.status ?? null;
-      result.joined = Boolean(result.status && MEMBERSHIP_JOINED_STATUSES.has(result.status));
+      const status = member?.status ?? null;
+      result.status = status;
+      result.joined = isJoinedMemberStatus(status, member);
+      // A definitive non-membership is a positive result, not an error, so the
+      // user gets the clear "join the communities" message.
+      result.errorType = isExplicitlyNotMember(status, member) ? 'not_member' : 'none';
       return result;
     } catch (error) {
       // Never treat an API error (bot not a member, user not found, rate
       // limit, timeout, network failure) as a successful membership check.
+      const { kind } = classifyMemberError(error);
       result.error = true;
       result.joined = false;
-      this.log.warn?.(`[telegram] Could not verify membership of ${id} in ${community.chatId}: ${error.message}`);
+      result.errorType = kind;
+      result.httpStatus = Number(error?.httpStatus);
+      this.log.warn?.(`[telegram] Could not verify membership of ${id} in ${community.chatId}: ${error.message} (class=${kind}, http=${result.httpStatus})`);
       return result;
     }
   }
@@ -1236,7 +1361,7 @@ class TelegramController {
     const id = normalizeTelegramId(senderId);
     const communities = this.requiredCommunities || [];
     if (!communities.length) {
-      return { verified: true, noRequirements: true, error: false, communities: [] };
+      return { verified: true, noRequirements: true, error: false, errorType: 'none', communities: [] };
     }
     const key = String(id);
     const now = Date.now();
@@ -1247,11 +1372,31 @@ class TelegramController {
     const results = await Promise.all(communities.map((community) => this.checkCommunityMembership(id, community)));
     let allJoined = true;
     let error = false;
+    let errorType = 'none';
     for (const result of results) {
-      if (result.error) error = true;
+      if (result.error) {
+        error = true;
+        // Keep the most actionable failure category when several communities
+        // report different problems.
+        if (membershipErrorSeverity(result.errorType) > membershipErrorSeverity(errorType)) {
+          errorType = result.errorType;
+        }
+      }
       if (!result.joined) allJoined = false;
     }
-    const membership = { verified: !error && allJoined, noRequirements: false, error, communities: results };
+    // No API error but the user is missing from at least one community.
+    if (!error && !allJoined) errorType = 'not_member';
+    const failedCommunities = results
+      .filter((result) => result.error || !result.joined)
+      .map((result) => result.name);
+    const membership = {
+      verified: !error && allJoined,
+      noRequirements: false,
+      error,
+      errorType,
+      failedCommunities,
+      communities: results
+    };
     this.membershipCache.set(key, { checkedAt: now, result: membership });
     return membership;
   }
@@ -1310,8 +1455,12 @@ class TelegramController {
       return { ok: true, membership };
     }
     // Fail closed. A user who was previously verified but has since left the
-    // channel/group loses access here and the stale DB flag is cleared.
-    await this.markUnverified(id);
+    // channel/group loses access here. Only a definitive non-membership clears
+    // the stale DB flag; a transient/permission failure must not permanently
+    // unmark a user who may still be a member.
+    if (membership.errorType === 'not_member') {
+      await this.markUnverified(id);
+    }
     await this.showVerifyRequired(actor, { chatId, messageId, membership, update });
     return { ok: false, membership };
   }
@@ -1332,10 +1481,17 @@ class TelegramController {
     return result.result;
   }
 
-  // Live Telegram membership lookup. Errors are NOT swallowed here: callers
-  // must fail closed, so an API failure can never read as "joined".
+  // Live Telegram membership lookup. A bounded retry absorbs transient failures
+  // (network errors, HTTP 408/429/5xx). Permission/configuration errors are not
+  // retried and still bubble up: callers must fail closed, so an API failure can
+  // never read as "joined".
   async getChatMember(chatId, userId) {
-    return this.api('getChatMember', { chat_id: chatId, user_id: Number(userId) });
+    const operation = () => this.api('getChatMember', { chat_id: chatId, user_id: Number(userId) });
+    return retryTransient(operation, {
+      attempts: MEMBERSHIP_RETRY_ATTEMPTS,
+      baseDelayMs: MEMBERSHIP_RETRY_BASE_DELAY_MS,
+      maxDelayMs: MEMBERSHIP_RETRY_MAX_DELAY_MS
+    });
   }
 
   async reply(chatId, text, replyMarkup) {
@@ -1695,9 +1851,12 @@ class TelegramController {
       return;
     }
 
-    // Fail closed. A previously verified user who left the channel/group is
-    // re-marked unverified here.
-    await this.markUnverified(id);
+    // Fail closed. A previously verified user who definitively left the
+    // channel/group is re-marked unverified here. A transient/permission
+    // failure never clears the flag (the user may still be a member).
+    if (membership.errorType === 'not_member') {
+      await this.markUnverified(id);
+    }
     const lastFailure = this.verificationFailures.get(String(id)) || 0;
     if (Date.now() - lastFailure > VERIFY_FAILURE_NOTIFY_MS) {
       this.verificationFailures.set(String(id), Date.now());
@@ -1705,7 +1864,7 @@ class TelegramController {
         action: 'Verification Failed', actor: eventActor, userId: id, membership: 'Not Verified'
       });
     }
-    const text = membership.error ? verificationErrorBox() : verificationFailureBox(membership);
+    const text = verificationResultBox(membership);
     await this.present(chatId, messageId, text, joinVerifyMarkup(this.requiredCommunities || []));
   }
 
@@ -2600,6 +2759,10 @@ module.exports = {
   DEFAULT_BLOCK_DURATION_MS,
   MEMBERSHIP_CACHE_TTL_MS,
   MEMBERSHIP_JOINED_STATUSES,
+  MEMBERSHIP_NOT_MEMBER_STATUSES,
+  MEMBERSHIP_RETRY_ATTEMPTS,
+  MEMBERSHIP_RETRY_BASE_DELAY_MS,
+  MEMBERSHIP_RETRY_MAX_DELAY_MS,
   NORMAL_PAIRING_LIMIT,
   PREMIUM_PAIRING_LIMIT,
   SENSITIVE_COOLDOWN_MS,
@@ -2607,11 +2770,13 @@ module.exports = {
   SPINNER_FRAMES,
   SESSION_STATE_BADGES,
   TIER_LABELS,
+  TRANSIENT_HTTP_STATUSES,
   TelegramController,
   activityBox,
   actorFrom,
   badgeParts,
   blockedBox,
+  classifyMemberError,
   codeReadyBox,
   commandFromUpdate,
   communityLink,
@@ -2626,9 +2791,13 @@ module.exports = {
   guideMarkup,
   helpText,
   homeMarkup,
+  isExplicitlyNotMember,
+  isJoinedMemberStatus,
   joinAllBox,
   joinLinksMarkup,
   joinVerifyMarkup,
+  membershipErrorSeverity,
+  retryTransient,
   roleHomeMarkup,
   accountBox,
   adminPanelBox,
@@ -2660,6 +2829,8 @@ module.exports = {
   verificationErrorBox,
   verificationFailureBox,
   verificationLoadingBox,
+  verificationPermissionBox,
+  verificationResultBox,
   verificationSuccessBox,
   verifiedMarkup,
   verifyBox,
