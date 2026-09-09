@@ -11,7 +11,7 @@ const { TelegramControllerStore } = require('../system/lib/telegram-controllers'
 function fakePairing(overrides = {}) {
   return {
     requestPairing: async (_ownerId, number) => ({
-      code: 'GOATMODS', displayCode: 'GOAT-MODS', brand: 'GOAT-MODS', custom: true,
+      code: 'KJ4MNP2X', displayCode: 'KJ4M-NP2X', brand: 'WhatsApp-generated',
       number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000
     }),
     listSessions: async () => [],
@@ -56,9 +56,9 @@ test('/pair acknowledges first and shows the code only after the real flow retur
   assert.match(replies[0].text, /ANIME MD • PAIRING/);
   assert.match(replies[0].text, /📱 Number: \+92 300 1234567/);
   assert.match(replies[0].text, /⏳ Preparing WhatsApp pairing/);
-  assert.match(replies[1].text, /ANIME MD • GOAT-MODS/);
+  assert.match(replies[1].text, /ANIME MD • PAIRING CODE/);
   assert.match(replies[1].text, /✅ Pairing Code Ready/);
-  assert.match(replies[1].text, /🔐 CODE: GOAT-MODS/);
+  assert.match(replies[1].text, /🔐 CODE: KJ4M-NP2X/);
   assert.match(replies[1].text, /Link with phone number/);
   assert.doesNotMatch(replies[1].text, /Pairing Code Ready[\s\S]*Pairing Code Ready/, 'the ready box appears once');
 });
@@ -68,7 +68,7 @@ test('/pair with a + prefix and international formats works identically', async 
     const { controller, replies } = makeController();
     await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: `/pair ${input}` } });
     assert.equal(replies.length, 2, `two replies for ${input}`);
-    assert.match(replies[1].text, /CODE: GOAT-MODS/, `code shown for ${input}`);
+    assert.match(replies[1].text, /CODE: KJ4M-NP2X/, `code shown for ${input}`);
   }
 });
 
@@ -193,7 +193,7 @@ test('the pending number reply flow (force reply button) pairs like /pair', asyn
   assert.match(prompt.text, /Do not include a plus sign/);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '923001234567' } });
   assert.equal(replies.length, 2);
-  assert.match(replies[1].text, /CODE: GOAT-MODS/);
+  assert.match(replies[1].text, /CODE: KJ4M-NP2X/);
 });
 
 test('connected notifications use the connected box and are never sent early', async () => {
@@ -337,7 +337,7 @@ test('public mode lets any Telegram user pair and manage only their own sessions
     pairing: fakePairing({
       listSessions: async (ownerId) => { seen.push(String(ownerId)); return []; },
       requestPairing: async (ownerId, number) => ({
-        code: 'GOATMODS', displayCode: 'GOAT-MODS', brand: 'GOAT-MODS', custom: true,
+        code: 'KJ4MNP2X', displayCode: 'KJ4M-NP2X', brand: 'WhatsApp-generated',
         number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000
       })
     })
@@ -347,7 +347,7 @@ test('public mode lets any Telegram user pair and manage only their own sessions
   assert.match(replies.at(-1).caption || replies.at(-1).text, /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./);
   // A stranger can pair their own number through the real flow.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
-  assert.match(replies.at(-1).text, /CODE: GOAT-MODS/);
+  assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
   // Session listings stay scoped to the requesting user.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
   assert.deepEqual(seen, ['11']);
@@ -370,12 +370,12 @@ test('premium-only pairing blocks non-premium controllers and bootstrap owners b
   // An authorized controller with premium pairs normally.
   controller.sensitiveRequests.clear();
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 30 }, text: '/pair 923001234567' } });
-  assert.match(replies.at(-1).text, /CODE: GOAT-MODS/);
+  assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
 
   // Bootstrap owners bypass the premium requirement entirely.
   controller.sensitiveRequests.clear();
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 12025550123' } });
-  assert.match(replies.at(-1).text, /CODE: GOAT-MODS/);
+  assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
 });
 
 test('required channels gate pairing until joined; bootstrap owners skip the check', async () => {
@@ -383,7 +383,7 @@ test('required channels gate pairing until joined; bootstrap owners skip the che
   const { calls, fetchImpl } = captureApi({ chatMemberStatus: 'left' });
   const { controller, replies } = makeController({
     publicMode: true, requiredChannels, fetchImpl,
-    pairing: fakePairing({ requestPairing: async (_ownerId, number) => ({ code: 'GOATMODS', displayCode: 'GOAT-MODS', brand: 'GOAT-MODS', custom: true, number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 }) })
+    pairing: fakePairing({ requestPairing: async (_ownerId, number) => ({ code: 'KJ4MNP2X', displayCode: 'KJ4M-NP2X', brand: 'WhatsApp-generated', number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 }) })
   });
 
   // A public user who has not joined is blocked with the channel list.
@@ -395,7 +395,7 @@ test('required channels gate pairing until joined; bootstrap owners skip the che
 
   // Bootstrap owners skip the join check.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 923001234567' } });
-  assert.match(replies.at(-1).text, /CODE: GOAT-MODS/);
+  assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
 });
 
 test('required channels pass members through to the real pairing flow', async () => {
@@ -406,7 +406,7 @@ test('required channels pass members through to the real pairing flow', async ()
     fetchImpl
   });
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
-  assert.match(replies.at(-1).text, /CODE: GOAT-MODS/);
+  assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
 });
 
 test('/myid is open to everyone and shows the numeric Telegram ID', async () => {

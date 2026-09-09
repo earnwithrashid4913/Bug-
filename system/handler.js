@@ -21,9 +21,11 @@ const { SudoStore } = require('./lib/sudo');
 const { WarningStore } = require('./lib/warnings');
 const { AutomationStore } = require('./lib/automation');
 const { EconomyStore } = require('./lib/economy');
+const { ChatStore } = require('./lib/chats');
 const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
-const { sendButtons, sendList, cleanText } = require('./lib/ui');
-const { helpText: buildHelpText, categoriesWithCommands, getCategory, resolveCommand } = require('./lib/menu');
+const { sendButtons, sendList } = require('./lib/ui');
+const { contextButtons, menuButton, settingButtons } = require('./lib/whatsapp-actions');
+const { helpText: buildHelpText, categoriesWithCommands, getCategory } = require('./lib/menu');
 const {
   requestCobalt,
   youtubeSearch,
@@ -49,6 +51,7 @@ const warningStore = new WarningStore(config.warningDbPath);
 const automationStore = new AutomationStore(config.automationDbPath);
 const economyStore = new EconomyStore(config.economyDbPath);
 const settingsStore = new RuntimeSettingsStore(config.settingsDbPath, { prefix: config.commandPrefix });
+const chatStore = new ChatStore(config.chatsDbPath);
 const reportCooldowns = new Map();
 let publicMode = config.publicMode;
 let commandPrefix = config.commandPrefix;
@@ -134,21 +137,53 @@ function helpText(prefix) {
   return buildHelpText(prefix || getCommandPrefix());
 }
 
+// Every command reply goes through here: WhatsApp-bold text, the shared
+// footer, and the context buttons for the command that produced it. The id of
+// each button is built with the live prefix, so buttons survive !setprefix.
+async function sendResult(socket, context, { text, command, ctx, buttons, quoted }) {
+  const prefix = getCommandPrefix();
+  // An interactive message with zero buttons renders as an empty chip row, so a
+  // reply that has no command of its own (a permission refusal, for example)
+  // always keeps a way back to the menu.
+  const resolved = buttons
+    || (command ? contextButtons(prefix, command, ctx || {}) : [menuButton(prefix)]);
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} • ${config.ownerName}`,
+    buttons: resolved,
+    fallbackText: text,
+    quoted: quoted === undefined ? context.raw : quoted
+  });
+}
+
+// One-line command tutorial. Kept deliberately short: the full manual lives in
+// the menu, not after every command.
+function usageLine(name, usage, example) {
+  const prefix = getCommandPrefix();
+  return [
+    '*USAGE*',
+    `${prefix}${name}${usage ? ` ${usage}` : ''}`,
+    ...(example ? [`*Example:* ${prefix}${example}`] : [])
+  ].join('\n');
+}
+
 async function sendOwnerCard(socket, chatId, quoted) {
   const text = [
-    `*${config.botName}*`,
+    '👑 *OWNER DETAILS*',
     '',
-    `Owner: ${config.ownerName}`,
-    `Developer: ${config.developerName}`,
-    `Channel: ${config.whatsappChannel}`
+    '*Global Owner*',
+    `➜ ${config.ownerName}`,
+    '',
+    '*Developer*',
+    `➜ ${config.developerName}`,
+    '',
+    '*Contact*',
+    `➜ ${config.whatsappChannel}`
   ].join('\n');
   await sendButtons(socket, chatId, {
     text,
     footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [
-      { label: '☰ Menu', id: `${getCommandPrefix()}menu home` },
-      { label: '✈️ Telegram', id: `${getCommandPrefix()}pairing` }
-    ],
+    buttons: contextButtons(getCommandPrefix(), 'owner'),
     fallbackText: text,
     quoted
   });
@@ -179,13 +214,13 @@ async function getGroupInfo(socket, context) {
 
 async function requireOwner(socket, context) {
   if (isOwner(socket, context.sender)) return true;
-  await socket.sendMessage(context.chatId, { text: 'Only the bot owner can use this command.' }, { quoted: context.raw });
+  await sendResult(socket, context, { text: '👑 *OWNER ONLY*\nOnly the bot owner can use this command.' });
   return false;
 }
 
 async function requireSudoOrOwner(socket, context) {
   if (isOwner(socket, context.sender) || await sudoStore.has(senderNumber(context))) return true;
-  await socket.sendMessage(context.chatId, { text: 'This command requires owner or sudo access.' }, { quoted: context.raw });
+  await sendResult(socket, context, { text: '🔐 *ACCESS DENIED*\nThis command requires owner or sudo access.' });
   return false;
 }
 
@@ -236,7 +271,7 @@ async function handleReport(socket, context, message) {
   const owner = normalizeJid(socket, socket.user?.id);
   if (!owner) throw new Error('The WhatsApp owner account is not connected yet.');
   await socket.sendMessage(owner, { text: ownerMessage, mentions: context.sender ? [context.sender] : [] });
-  await socket.sendMessage(context.chatId, { text: 'Your request has been sent to the owner.' }, { quoted: context.raw });
+  await sendResult(socket, context, { text: '*REQUEST SENT* ✅\nThe owner has been notified.', command: 'request' });
 }
 
 async function handleGreetingSettings(socket, context, command, group) {
@@ -246,14 +281,20 @@ async function handleGreetingSettings(socket, context, command, group) {
 
   if (command.name === 'greet') {
     const settings = await groupSettings.get(context.chatId);
-    const text = [
-      '*Group greeting settings*',
-      `Welcome: ${settings.welcomeEnabled ? 'ON' : 'OFF'}`,
-      `Goodbye: ${settings.goodbyeEnabled ? 'ON' : 'OFF'}`,
-      '',
-      `Use ${getCommandPrefix()}welcome <on|off|status> or ${getCommandPrefix()}goodbye <on|off|status>.`
-    ].join('\n');
-    await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: [
+        '👋 *GREETING SETTINGS*',
+        '',
+        `*Welcome:* ${settings.welcomeEnabled ? 'ON ✅' : 'OFF ❌'}`,
+        `*Goodbye:* ${settings.goodbyeEnabled ? 'ON ✅' : 'OFF ❌'}`
+      ].join('\n'),
+      command: 'greet',
+      buttons: [
+        { label: '👋 Welcome', id: `${getCommandPrefix()}welcome status` },
+        { label: '👋 Goodbye', id: `${getCommandPrefix()}goodbye status` },
+        { label: '⬅️ Back', id: `${getCommandPrefix()}menu group` }
+      ]
+    });
     return;
   }
 
@@ -263,27 +304,18 @@ async function handleGreetingSettings(socket, context, command, group) {
   }
   if (action === 'status') {
     const settings = await groupSettings.get(context.chatId);
-    const text = `${label}: ${settings[settingKey] ? 'ON' : 'OFF'}.`;
-    await sendButtons(socket, context.chatId, {
-      text,
-      footer: `${config.botName} • ${config.ownerName}`,
-      buttons: [
-        { label: '✅ Turn ON', id: `${getCommandPrefix()}${command.name} on` },
-        { label: '❌ Turn OFF', id: `${getCommandPrefix()}${command.name} off` }
-      ],
-      fallbackText: text,
-      quoted: context.raw
+    await sendResult(socket, context, {
+      text: `${label}: *${settings[settingKey] ? 'ON ✅' : 'OFF ❌'}*`,
+      command: command.name,
+      buttons: settingButtons(getCommandPrefix(), command.name, { showStatus: true })
     });
     return;
   }
   const settings = await groupSettings.update(context.chatId, { [settingKey]: action === 'on' });
-  const text = `${label} are now ${settings[settingKey] ? 'ON' : 'OFF'}.`;
-  await sendButtons(socket, context.chatId, {
-    text,
-    footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}${command.name} status` }],
-    fallbackText: text,
-    quoted: context.raw
+  await sendResult(socket, context, {
+    text: `${label}: *${settings[settingKey] ? 'ON ✅' : 'OFF ❌'}*`,
+    command: command.name,
+    buttons: settingButtons(getCommandPrefix(), command.name, { enabled: settings[settingKey], showStatus: false })
   });
 }
 
@@ -291,26 +323,23 @@ async function handleGroupManagement(socket, context, command, group) {
   if (command.name === 'group') {
     const p = getCommandPrefix();
     const text = [
-      '*Safe group management*',
+      '👥 *GROUP MANAGEMENT*',
+      '',
       `${p}gname <name>`,
       `${p}gdesc <description>`,
-      `${p}add <international number>`,
-      `${p}kick @user or reply`,
-      `${p}promote @user or reply`,
-      `${p}demote @user or reply`,
+      `${p}add <number>`,
+      `${p}kick / promote / demote @user`,
       `${p}lock / ${p}unlock`,
       `${p}grouplink`
     ].join('\n');
-    await sendButtons(socket, context.chatId, {
+    await sendResult(socket, context, {
       text,
-      footer: `${config.botName} • ${config.ownerName}`,
+      command: 'group',
       buttons: [
         { label: '🔗 Group Link', id: `${p}grouplink` },
-        { label: '👥 Tag All', id: `${p}tagall` },
-        { label: '☰ Menu', id: `${p}menu home` }
-      ],
-      fallbackText: text,
-      quoted: context.raw
+        { label: '🛡 Security', id: `${p}menu anti` },
+        { label: '⬅️ Back', id: `${p}menu group` }
+      ]
     });
     return;
   }
@@ -354,15 +383,24 @@ async function handleGroupManagement(socket, context, command, group) {
       case 'grouplink': {
         const code = await socket.groupInviteCode(context.chatId);
         if (!code) throw new Error('Unable to retrieve this group invite code.');
-        await socket.sendMessage(context.chatId, { text: `Group invite link:\nhttps://chat.whatsapp.com/${code}` }, { quoted: context.raw });
+        await sendResult(socket, context, {
+          text: `*GROUP INVITE LINK* 🔗\n\nhttps://chat.whatsapp.com/${code}`,
+          command: 'grouplink'
+        });
         return;
       }
       default:
         return;
     }
-    await socket.sendMessage(context.chatId, { text: `Group action ${command.name} completed.` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*GROUP ACTION DONE* ✅\n➜ ${command.name}`,
+      command: command.name
+    });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Group action failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*GROUP ACTION FAILED* ❌\n${error.message}`,
+      command: command.name
+    });
   }
 }
 
@@ -375,25 +413,41 @@ async function handleAiCommand(socket, context, command) {
   try {
     reserveAiRequest(context.sender);
     const answer = await askGroq({ apiKey: config.groqApiKey, model: config.groqModel, prompt, botName: config.botName });
-    await socket.sendMessage(context.chatId, { text: answer }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `🤖 *${config.botName}*\n\n${answer}`, command: 'ai' });
   } catch (error) {
     console.error('[ai] Request failed:', error);
-    await socket.sendMessage(context.chatId, { text: `AI unavailable: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*AI UNAVAILABLE* ❌\n${error.message}`, command: 'ai' });
   }
 }
 
 async function handleGetProfilePhoto(socket, context, command) {
   let target = getTargetJid(context.raw) || (context.isGroup ? context.chatId : context.sender);
   if (command.args[0]) {
-    const number = normalizePhoneNumber(command.args[0], 'Profile picture number');
+    // A malformed number is user input, not a programming error: it must reach
+    // the user as a message instead of rejecting the whole handler (which used
+    // to leave the command silently unanswered).
+    let number;
+    try {
+      number = normalizePhoneNumber(command.args[0], 'Profile picture number');
+    } catch (error) {
+      await sendResult(socket, context, { text: `*INVALID NUMBER* ❌\n${error.message}`, command: 'getpp' });
+      return;
+    }
     target = `${number}@s.whatsapp.net`;
   }
   try {
     const profilePictureUrl = await socket.profilePictureUrl(target, 'image');
     if (!profilePictureUrl) throw new Error('No profile picture is available.');
-    await socket.sendMessage(context.chatId, { image: { url: profilePictureUrl }, caption: `Profile picture: ${target.split('@')[0]}` }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, {
+      image: { url: profilePictureUrl },
+      caption: '*PROFILE PICTURE* 🖼'
+    }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*PROFILE PICTURE* 🖼\n➜ ${target.split('@')[0]}`,
+      command: 'getpp'
+    });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Could not get profile picture: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*NO PROFILE PICTURE* ❌\n${error.message}`, command: 'getpp' });
   }
 }
 
@@ -401,16 +455,19 @@ async function handleSetBotProfilePhoto(socket, context) {
   if (!(await requireOwner(socket, context))) return;
   const imageMessage = getImageMessage(context.raw);
   if (!imageMessage) {
-    await socket.sendMessage(context.chatId, { text: `Reply to an image with ${getCommandPrefix()}setpp to update the bot profile picture.` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*REPLY TO AN IMAGE* 🖼\nThen send ${getCommandPrefix()}setpp.`,
+      command: 'setpp'
+    });
     return;
   }
   try {
     const imageBuffer = await downloadMediaBuffer(imageMessage, 'image');
     await socket.updateProfilePicture(socket.user.id, imageBuffer);
-    await socket.sendMessage(context.chatId, { text: 'Bot profile picture updated.' }, { quoted: context.raw });
+    await sendResult(socket, context, { text: '*PROFILE PICTURE UPDATED* ✅', command: 'setpp' });
   } catch (error) {
     console.error('[setpp] Profile picture update failed:', error);
-    await socket.sendMessage(context.chatId, { text: `Could not update profile picture: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*UPDATE FAILED* ❌\n${error.message}`, command: 'setpp' });
   }
 }
 
@@ -513,12 +570,12 @@ async function handleMenuCommand(socket, context, command) {
 
 async function handlePlayCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}play <song name or URL>` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: usageLine('play', '<song name | url>', 'play Faded'), command: 'play' });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: 'Searching…' }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, { text: '⏳ *Searching…*' }, { quoted: context.raw });
+  const query = command.text;
   try {
-    const query = command.text;
     let videoUrl = query;
     let title = query;
 
@@ -529,15 +586,25 @@ async function handlePlayCommand(socket, context, command) {
     }
 
     const result = await requestCobalt(config.cobaltApiUrl, videoUrl, { audio: true });
+    if (!result?.url) throw new Error('No audio stream was returned for that link.');
     await socket.sendMessage(context.chatId, {
       audio: { url: result.url },
       mimetype: 'audio/mpeg',
       fileName: result.filename || `${title}.mp3`,
       ptt: false
     }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: ['*AUDIO READY* ✅', '', `*Title:* ${title}`, '*Format:* mp3'].join('\n'),
+      command: 'play',
+      ctx: { query }
+    });
   } catch (error) {
     console.error('[play] Download failed:', error);
-    await socket.sendMessage(context.chatId, { text: `Download failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*DOWNLOAD FAILED* ❌\n${error.message}`,
+      command: 'play',
+      ctx: { query }
+    });
   }
 }
 
@@ -547,12 +614,12 @@ async function handleYtmp3Command(socket, context, command) {
 
 async function handleVideoCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}video <query or URL>` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: usageLine('video', '<query | url>', 'video Faded'), command: 'video' });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: 'Searching…' }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, { text: '⏳ *Searching…*' }, { quoted: context.raw });
+  const query = command.text;
   try {
-    const query = command.text;
     let videoUrl = query;
     let title = query;
 
@@ -563,77 +630,95 @@ async function handleVideoCommand(socket, context, command) {
     }
 
     const result = await requestCobalt(config.cobaltApiUrl, videoUrl, { audio: false });
+    if (!result?.url) throw new Error('No video stream was returned for that link.');
     await socket.sendMessage(context.chatId, {
       video: { url: result.url },
       mimetype: 'video/mp4',
-      caption: `*${title}*`,
+      caption: '*VIDEO READY* ✅',
       fileName: result.filename || `${title}.mp4`
     }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*VIDEO READY* ✅\n\n*Title:* ${title}\n*Format:* mp4`,
+      command: 'video',
+      ctx: { query }
+    });
   } catch (error) {
     console.error('[video] Download failed:', error);
-    await socket.sendMessage(context.chatId, { text: `Download failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*DOWNLOAD FAILED* ❌\n${error.message}`,
+      command: 'video',
+      ctx: { query }
+    });
   }
 }
 
 async function handleSpotifyCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}spotify <song name>` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: usageLine('spotify', '<song name>', 'spotify Faded'), command: 'spotify' });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: 'Searching Spotify…' }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, { text: '⏳ *Searching Spotify…*' }, { quoted: context.raw });
   try {
     const results = await spotifySearch(command.text, 5);
     if (!results.length) throw new Error('No results found.');
 
     const lines = results.map((track, i) => {
       const duration = track.duration ? `${Math.floor(track.duration / 60_000)}:${String(Math.floor((track.duration % 60_000) / 1000)).padStart(2, '0')}` : '';
-      return `${i + 1}. *${track.title}*\nby ${track.artist}${duration ? ` · ${duration}` : ''}\n${track.url}`;
+      return `${i + 1}. *${track.title}*\n➜ ${track.artist}${duration ? ` · ${duration}` : ''}\n${track.url}`;
     });
 
-    await socket.sendMessage(context.chatId, {
-      text: `*Spotify Results for:* ${command.text}\n\n${lines.join('\n\n')}`,
-      contextInfo: {
-        externalAdReply: {
-          title: results[0].title,
-          body: results[0].artist,
-          mediaType: 2,
-          mediaUrl: results[0].url,
-          sourceUrl: results[0].url,
-          thumbnailUrl: results[0].album?.images?.[0]?.url
-        }
-      }
-    }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*SPOTIFY RESULTS* 🎧\n*Query:* ${command.text}\n\n${lines.join('\n\n')}`,
+      command: 'spotify',
+      // The Download button re-runs the downloader with the top track name.
+      ctx: { track: `${results[0].title} ${results[0].artist || ''}`.trim() }
+    });
   } catch (error) {
     console.error('[spotify] Search failed:', error);
-    await socket.sendMessage(context.chatId, { text: `Spotify search failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*SPOTIFY FAILED* ❌\n${error.message}`,
+      command: 'spotify',
+      ctx: { track: command.text }
+    });
   }
 }
 
 async function handleMediaCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}media <URL>` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: usageLine('media', '<url>', 'media https://vm.tiktok.com/…'), command: 'media' });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: 'Downloading…' }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, { text: '⏳ *Downloading…*' }, { quoted: context.raw });
+  const url = command.text.trim();
   try {
-    const result = await requestCobalt(config.cobaltApiUrl, command.text);
+    const result = await requestCobalt(config.cobaltApiUrl, url);
+    if (!result?.url) throw new Error('The download service returned no file for that link.');
     const { buffer, type } = await downloadRemoteFile(result.url);
     const isVideo = type.includes('video');
     const isAudio = type.includes('audio');
     const isImage = type.includes('image');
+    const format = (type.split(';')[0] || 'file').trim();
+    const size = `${(buffer.length / 1024).toFixed(1)} KB`;
+    const caption = '*DOWNLOAD COMPLETE* ✅';
+    const details = `${caption}\n\n*Size:* ${size}\n*Format:* ${format}`;
 
     if (isImage) {
-      await socket.sendMessage(context.chatId, { image: buffer, caption: 'Media downloaded.' }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { image: buffer, caption }, { quoted: context.raw });
     } else if (isVideo) {
-      await socket.sendMessage(context.chatId, { video: buffer, mimetype: type, caption: 'Media downloaded.' }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { video: buffer, mimetype: type, caption }, { quoted: context.raw });
     } else if (isAudio) {
       await socket.sendMessage(context.chatId, { audio: buffer, mimetype: type, ptt: false }, { quoted: context.raw });
     } else {
-      await socket.sendMessage(context.chatId, { document: buffer, mimetype: type, fileName: result.filename || 'download.bin' }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { document: buffer, mimetype: type, caption, fileName: result.filename || 'download.bin' }, { quoted: context.raw });
     }
+    await sendResult(socket, context, { text: details, command: 'media', ctx: { url } });
   } catch (error) {
     console.error('[media] Download failed:', error);
-    await socket.sendMessage(context.chatId, { text: `Download failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*DOWNLOAD FAILED* ❌\n${error.message}`,
+      command: 'media',
+      ctx: { url }
+    });
   }
 }
 
@@ -646,22 +731,27 @@ async function handleVVCommand(socket, context) {
 
   const source = viewOnce || quotedViewOnce;
   if (!source) {
-    await socket.sendMessage(context.chatId, { text: `Reply to a view-once photo or video with ${getCommandPrefix()}vv to reveal it.` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*REPLY TO A VIEW-ONCE MEDIA* 👁\nThen send ${getCommandPrefix()}vv.`,
+      command: 'vv'
+    });
     return;
   }
 
   try {
     if (source.imageMessage) {
       const buffer = await downloadMediaBuffer(source.imageMessage, 'image');
-      await socket.sendMessage(context.chatId, { image: buffer, caption: source.imageMessage.caption || 'View-once revealed.' }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { image: buffer, caption: source.imageMessage.caption || '*VIEW-ONCE REVEALED* ✅' }, { quoted: context.raw });
     } else if (source.videoMessage) {
       const buffer = await downloadMediaBuffer(source.videoMessage, 'video');
-      await socket.sendMessage(context.chatId, { video: buffer, caption: source.videoMessage.caption || 'View-once revealed.' }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { video: buffer, caption: source.videoMessage.caption || '*VIEW-ONCE REVEALED* ✅' }, { quoted: context.raw });
     } else {
-      await socket.sendMessage(context.chatId, { text: 'No supported view-once media found.' }, { quoted: context.raw });
+      await sendResult(socket, context, { text: '*NO VIEW-ONCE MEDIA FOUND* ❌', command: 'vv' });
+      return;
     }
+    await sendResult(socket, context, { text: '*VIEW-ONCE REVEALED* ✅', command: 'vv' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Could not reveal: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*COULD NOT REVEAL* ❌\n${error.message}`, command: 'vv' });
   }
 }
 
@@ -674,9 +764,11 @@ async function handleTTSCommand(socket, context, command) {
   }
   try {
     const { buffer, mimetype } = await textToSpeech(command.text);
+    if (!buffer?.length) throw new Error('The speech service returned no audio.');
     await socket.sendMessage(context.chatId, { audio: buffer, mimetype, ptt: false }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SPEECH READY* 🔊\n*Format:* ${(mimetype || 'audio').split(';')[0]}`, command: 'tts' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `TTS failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*TTS FAILED* ❌\n${error.message}`, command: 'tts' });
   }
 }
 
@@ -687,9 +779,10 @@ async function handleQRCommand(socket, context, command) {
   }
   try {
     const buffer = await QRCode.toBuffer(command.text, { type: 'png', margin: 2, width: 512 });
-    await socket.sendMessage(context.chatId, { image: buffer, caption: 'QR code generated.' }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { image: buffer, caption: '*QR CODE READY* ✅' }, { quoted: context.raw });
+    await sendResult(socket, context, { text: '*QR CODE READY* ✅', command: 'qr' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `QR generation failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*QR FAILED* ❌\n${error.message}`, command: 'qr' });
   }
 }
 
@@ -700,7 +793,10 @@ async function handleTourlCommand(socket, context) {
   if (!media) {
     const docOrVideo = context.raw?.message?.documentMessage || context.raw?.message?.videoMessage;
     if (!docOrVideo) {
-      await socket.sendMessage(context.chatId, { text: `Reply to an image, video, sticker, or document with ${getCommandPrefix()}tourl.` }, { quoted: context.raw });
+      await sendResult(socket, context, {
+        text: `*REPLY TO MEDIA* 📤\nImage, video, sticker or document,\nthen send ${getCommandPrefix()}tourl.`,
+        command: 'tourl'
+      });
       return;
     }
     try {
@@ -708,9 +804,12 @@ async function handleTourlCommand(socket, context) {
       const buffer = await downloadMediaBuffer(docOrVideo, type);
       const ext = docOrVideo.mimetype?.split('/')[1] || 'bin';
       const url = await uploadToCatbox(config.uploadApiUrl, buffer, { filename: `upload.${ext}`, mimetype: docOrVideo.mimetype });
-      await socket.sendMessage(context.chatId, { text: `*Upload complete*\n\n${url}\n\nSize: ${(buffer.length / 1024).toFixed(1)} KB` }, { quoted: context.raw });
+      await sendResult(socket, context, {
+        text: `*UPLOAD COMPLETE* ✅\n\n*URL:* ${url}\n*Size:* ${(buffer.length / 1024).toFixed(1)} KB`,
+        command: 'tourl'
+      });
     } catch (error) {
-      await socket.sendMessage(context.chatId, { text: `Upload failed: ${error.message}` }, { quoted: context.raw });
+      await sendResult(socket, context, { text: `*UPLOAD FAILED* ❌\n${error.message}`, command: 'tourl' });
     }
     return;
   }
@@ -720,9 +819,12 @@ async function handleTourlCommand(socket, context) {
     const buffer = await downloadMediaBuffer(media, mediaType);
     const ext = media.mimetype?.split('/')[1] || 'jpg';
     const url = await uploadToCatbox(config.uploadApiUrl, buffer, { filename: `upload.${ext}`, mimetype: media.mimetype });
-    await socket.sendMessage(context.chatId, { text: `*Upload complete*\n\n${url}\n\nSize: ${(buffer.length / 1024).toFixed(1)} KB` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*UPLOAD COMPLETE* ✅\n\n*URL:* ${url}\n*Size:* ${(buffer.length / 1024).toFixed(1)} KB`,
+      command: 'tourl'
+    });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Upload failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*UPLOAD FAILED* ❌\n${error.message}`, command: 'tourl' });
   }
 }
 
@@ -735,9 +837,12 @@ async function handleCalcCommand(socket, context, command) {
   }
   try {
     const result = safeMath(command.text);
-    await socket.sendMessage(context.chatId, { text: `*Calc*\n\n${command.text} = ${result}` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*CALCULATOR* 🧮\n\n${command.text} = *${result}*`,
+      command: 'calc'
+    });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Calculation error: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*CALCULATION ERROR* ❌\n${error.message}`, command: 'calc' });
   }
 }
 
@@ -751,9 +856,11 @@ async function handleSSCommand(socket, context, command) {
   await socket.sendMessage(context.chatId, { text: 'Capturing screenshot…' }, { quoted: context.raw });
   try {
     const { buffer, mimetype } = await screenshotUrl(url);
-    await socket.sendMessage(context.chatId, { image: buffer, mimetype, caption: `Screenshot of ${url}` }, { quoted: context.raw });
+    if (!buffer?.length) throw new Error('The screenshot service returned no image.');
+    await socket.sendMessage(context.chatId, { image: buffer, mimetype, caption: '*SCREENSHOT* 📸' }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SCREENSHOT READY* 📸\n➜ ${url}`, command: 'ss' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Screenshot failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SCREENSHOT FAILED* ❌\n${error.message}`, command: 'ss' });
   }
 }
 
@@ -764,9 +871,9 @@ async function handleShortCommand(socket, context, command) {
   }
   try {
     const short = await shortenUrl(command.text);
-    await socket.sendMessage(context.chatId, { text: `*Shortened URL*\n\n${short}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SHORTENED URL* ✂️\n\n➜ ${short}`, command: 'short' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Shortening failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SHORTENING FAILED* ❌\n${error.message}`, command: 'short' });
   }
 }
 
@@ -790,9 +897,12 @@ async function handleTranslateCommand(socket, context, command) {
       return;
     }
     const { translated, source } = await translateText(text, target);
-    await socket.sendMessage(context.chatId, { text: `*Translation* (${source} → ${target})\n\n${translated}` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*TRANSLATION* 🌐 (${source} → ${target})\n\n${translated}`,
+      command: 'translate'
+    });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Translation failed: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*TRANSLATION FAILED* ❌\n${error.message}`, command: 'translate' });
   }
 }
 
@@ -826,35 +936,29 @@ async function handleAntiToggleCommand(socket, context, command) {
 
   if (action === 'status') {
     const settings = await groupSettings.get(context.chatId);
-    const text = `${label}: ${settings[settingKey] ? 'ON' : 'OFF'}.`;
-    await sendButtons(socket, context.chatId, {
-      text,
-      footer: `${config.botName} • ${config.ownerName}`,
-      buttons: [
-        { label: '✅ Turn ON', id: `${getCommandPrefix()}${command.name} on` },
-        { label: '❌ Turn OFF', id: `${getCommandPrefix()}${command.name} off` }
-      ],
-      fallbackText: text,
-      quoted: context.raw
+    await sendResult(socket, context, {
+      text: `${label}: *${settings[settingKey] ? 'ON ✅' : 'OFF ❌'}*`,
+      command: command.name,
+      buttons: settingButtons(getCommandPrefix(), command.name, { showStatus: true })
     });
     return;
   }
 
   const settings = await groupSettings.update(context.chatId, { [settingKey]: action === 'on' });
-  const text = `${label} is now ${settings[settingKey] ? 'ON' : 'OFF'}.`;
-  await sendButtons(socket, context.chatId, {
-    text,
-    footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}${command.name} status` }],
-    fallbackText: text,
-    quoted: context.raw
+  await sendResult(socket, context, {
+    text: `${label}: *${settings[settingKey] ? 'ON ✅' : 'OFF ❌'}*`,
+    command: command.name,
+    buttons: settingButtons(getCommandPrefix(), command.name, { enabled: settings[settingKey], showStatus: false })
   });
 }
 
 async function handleWarnCommand(socket, context, command, group) {
   const target = getTargetJid(context.raw);
   if (!target) {
-    await socket.sendMessage(context.chatId, { text: `Mention or reply to a user with ${getCommandPrefix()}warn <reason>` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*MENTION OR REPLY TO A USER* 👤\nThen send ${getCommandPrefix()}warn <reason>.`,
+      command: 'warn'
+    });
     return;
   }
   const reason = command.text || 'rule violation';
@@ -877,7 +981,10 @@ async function handleWarnCommand(socket, context, command, group) {
 async function handleUnwarnCommand(socket, context, command) {
   const target = getTargetJid(context.raw);
   if (!target) {
-    await socket.sendMessage(context.chatId, { text: `Mention or reply to a user with ${getCommandPrefix()}unwarn.` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: `*MENTION OR REPLY TO A USER* 👤\nThen send ${getCommandPrefix()}unwarn.`,
+      command: 'unwarn'
+    });
     return;
   }
   await warningStore.remove(context.chatId, target);
@@ -888,11 +995,14 @@ async function handleUnwarnCommand(socket, context, command) {
 async function handleWarnsCommand(socket, context) {
   const records = await warningStore.list(context.chatId);
   if (!records.length) {
-    await socket.sendMessage(context.chatId, { text: 'No active warnings in this group.' }, { quoted: context.raw });
+    await sendResult(socket, context, { text: '🛡 *GROUP WARNINGS*\n\n➜ No active warnings.', command: 'warns' });
     return;
   }
   const lines = records.map((record, i) => `${i + 1}. @${record.userJid.split('@')[0]} — ${record.count} warning(s)`);
-  await socket.sendMessage(context.chatId, { text: `*Group warnings*\n\n${lines.join('\n')}` }, { quoted: context.raw, mentions: records.map((r) => r.userJid) });
+  await socket.sendMessage(context.chatId, {
+    text: `🛡 *GROUP WARNINGS*\n\n${lines.join('\n')}`,
+    mentions: records.map((r) => r.userJid)
+  }, { quoted: context.raw });
 }
 
 // --- AUTOMATION ---
@@ -908,27 +1018,18 @@ async function handleAutomationToggle(socket, context, command, group) {
     }
     if (action === 'status') {
       const current = await automationStore.getGlobal('autostatus');
-      const text = `Auto-status: ${current ? 'ON' : 'OFF'}.`;
-      await sendButtons(socket, context.chatId, {
-        text,
-        footer: `${config.botName} • ${config.ownerName}`,
-        buttons: [
-          { label: '✅ Turn ON', id: `${getCommandPrefix()}autostatus on` },
-          { label: '❌ Turn OFF', id: `${getCommandPrefix()}autostatus off` }
-        ],
-        fallbackText: text,
-        quoted: context.raw
+      await sendResult(socket, context, {
+        text: `Auto-status: *${current ? 'ON ✅' : 'OFF ❌'}*`,
+        command: 'autostatus',
+        buttons: settingButtons(getCommandPrefix(), 'autostatus', { showStatus: true })
       });
       return;
     }
     await automationStore.setGlobal('autostatus', action === 'on');
-    const text = `Auto-status is now ${action === 'on' ? 'ON' : 'OFF'}.`;
-    await sendButtons(socket, context.chatId, {
-      text,
-      footer: `${config.botName} • ${config.ownerName}`,
-      buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}autostatus status` }],
-      fallbackText: text,
-      quoted: context.raw
+    await sendResult(socket, context, {
+      text: `Auto-status: *${action === 'on' ? 'ON ✅' : 'OFF ❌'}*`,
+      command: 'autostatus',
+      buttons: settingButtons(getCommandPrefix(), 'autostatus', { enabled: action === 'on', showStatus: false })
     });
     return;
   }
@@ -945,16 +1046,10 @@ async function handleAutomationToggle(socket, context, command, group) {
 
   if (action === 'status') {
     const current = await automationStore.getChat(context.chatId, settingKey);
-    const text = `${label}: ${current ? 'ON' : 'OFF'}.`;
-    await sendButtons(socket, context.chatId, {
-      text,
-      footer: `${config.botName} • ${config.ownerName}`,
-      buttons: [
-        { label: '✅ Turn ON', id: `${getCommandPrefix()}${command.name} on` },
-        { label: '❌ Turn OFF', id: `${getCommandPrefix()}${command.name} off` }
-      ],
-      fallbackText: text,
-      quoted: context.raw
+    await sendResult(socket, context, {
+      text: `${label}: *${current ? 'ON ✅' : 'OFF ❌'}*`,
+      command: command.name,
+      buttons: settingButtons(getCommandPrefix(), command.name, { showStatus: true })
     });
     return;
   }
@@ -965,13 +1060,10 @@ async function handleAutomationToggle(socket, context, command, group) {
   }
 
   await automationStore.setChat(context.chatId, settingKey, action === 'on');
-  const autoText = `${label} is now ${action === 'on' ? 'ON' : 'OFF'}.`;
-  await sendButtons(socket, context.chatId, {
-    text: autoText,
-    footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [{ label: '📊 Check Status', id: `${getCommandPrefix()}${command.name} status` }],
-    fallbackText: autoText,
-    quoted: context.raw
+  await sendResult(socket, context, {
+    text: `${label}: *${action === 'on' ? 'ON ✅' : 'OFF ❌'}*`,
+    command: command.name,
+    buttons: settingButtons(getCommandPrefix(), command.name, { enabled: action === 'on', showStatus: false })
   });
 }
 
@@ -980,69 +1072,89 @@ async function handleAutomationToggle(socket, context, command, group) {
 async function handleDiceCommand(socket, context) {
   const result = Math.floor(Math.random() * 6) + 1;
   const emoji = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'][result - 1];
-  await socket.sendMessage(context.chatId, { text: `${emoji}  You rolled a *${result}*` }, { quoted: context.raw });
+  await sendResult(socket, context, { text: `${emoji} *YOU ROLLED* ${result}`, command: 'dice' });
 }
 
 async function handleCoinCommand(socket, context) {
   const result = Math.random() < 0.5 ? 'Heads' : 'Tails';
-  await socket.sendMessage(context.chatId, { text: `🪙  *${result}*` }, { quoted: context.raw });
+  await sendResult(socket, context, { text: `🪙 *COIN FLIP*\n➜ *${result}*`, command: 'coin' });
 }
 
 async function handleRPSCommand(socket, context, command) {
   const choices = ['rock', 'paper', 'scissors'];
   const pick = choices.indexOf((command.args[0] || '').toLowerCase());
   if (pick < 0) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}rps <rock|paper|scissors>` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: usageLine('rps', '<rock|paper|scissors>', 'rps rock'), command: 'rps' });
     return;
   }
   const bot = Math.floor(Math.random() * 3);
   const icons = { rock: '🪨', paper: '📄', scissors: '✂️' };
   const diff = (pick - bot + 3) % 3;
   const result = diff === 0 ? "It's a draw!" : diff === 1 ? 'You win!' : 'I win!';
-  await socket.sendMessage(context.chatId, { text: `${icons[choices[pick]]} vs ${icons[choices[bot]]}\n\n*${result}*` }, { quoted: context.raw });
+  await sendResult(socket, context, {
+    text: `${icons[choices[pick]]} vs ${icons[choices[bot]]}\n\n*${result.toUpperCase()}*`,
+    command: 'rps'
+  });
 }
 
 // --- RPG / ECONOMY ---
 
 async function handleBalanceCommand(socket, context) {
   const user = await economyStore.get(context.sender);
-  await socket.sendMessage(context.chatId, {
-    text: `*${config.botName} Balance*\n\nWallet: ${user.balance.toLocaleString()} coins\nBank: ${user.bank.toLocaleString()} coins\nXP: ${user.xp}`
-  }, { quoted: context.raw });
+  await sendResult(socket, context, {
+    text: [
+      '💰 *BALANCE*',
+      '',
+      `*Wallet:* ${user.balance.toLocaleString()} coins`,
+      `*Bank:* ${user.bank.toLocaleString()} coins`,
+      `*XP:* ${user.xp}`
+    ].join('\n'),
+    command: 'balance'
+  });
 }
 
 async function handleDailyCommand(socket, context) {
   const result = await economyStore.daily(context.sender);
   if (!result.ok) {
     const minutes = Math.ceil(result.waitMs / 60_000);
-    await socket.sendMessage(context.chatId, { text: `You already claimed your daily reward. Wait ${minutes} minutes.` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*ALREADY CLAIMED* ⏳\nTry again in ${minutes} minutes.`, command: 'daily' });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: `*Daily reward claimed!*\n\n+${result.amount} coins\nBalance: ${result.user.balance.toLocaleString()}` }, { quoted: context.raw });
+  await sendResult(socket, context, {
+    text: `*DAILY REWARD CLAIMED* 🎁\n\n*+${result.amount}* coins\n*Balance:* ${result.user.balance.toLocaleString()}`,
+    command: 'daily'
+  });
 }
 
 async function handleWorkCommand(socket, context) {
   const result = await economyStore.work(context.sender);
   if (!result.ok) {
     const minutes = Math.ceil(result.waitMs / 60_000);
-    await socket.sendMessage(context.chatId, { text: `You need to rest. Wait ${minutes} minutes before working again.` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*YOU NEED TO REST* ⏳\nWork again in ${minutes} minutes.`, command: 'work' });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: `*Work complete!*\n\n+${result.amount} coins\nBalance: ${result.user.balance.toLocaleString()}` }, { quoted: context.raw });
+  await sendResult(socket, context, {
+    text: `*WORK COMPLETE* 🛠\n\n*+${result.amount}* coins\n*Balance:* ${result.user.balance.toLocaleString()}`,
+    command: 'work'
+  });
 }
 
 async function handleGiveCommand(socket, context, command) {
   const target = getTargetJid(context.raw);
   const amount = Number(command.args[command.args.length - 1]);
   if (!target || !Number.isInteger(amount) || amount <= 0) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}give @user <amount>` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: usageLine('give', '@user <amount>', 'give @user 100'), command: 'give' });
     return;
   }
   try {
     const result = await economyStore.transfer(context.sender, target, amount);
-    await socket.sendMessage(context.chatId, { text: `Transferred ${result.amount} coins to @${target.split('@')[0]}.` }, { quoted: context.raw, mentions: [target] });
+    await socket.sendMessage(context.chatId, {
+      text: `*TRANSFER SENT* ✅\n\n*${result.amount}* coins ➜ @${target.split('@')[0]}`,
+      mentions: [target]
+    }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*TRANSFER SENT* ✅\n*Balance updated.*`, command: 'give' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: error.message }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*TRANSFER FAILED* ❌\n${error.message}`, command: 'give' });
   }
 }
 
@@ -1050,10 +1162,37 @@ async function handleGiveCommand(socket, context, command) {
 
 async function handleBroadcastCommand(socket, context, command) {
   if (!command.text) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}broadcast <message>` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: usageLine('broadcast', '<message>', 'broadcast Maintenance at 9pm'),
+      command: 'broadcast'
+    });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: `*Broadcast sent.*\n\n${command.text}` }, { quoted: context.raw });
+  // Delivered to every chat the bot has actually seen (tracked in
+  // data/chats.json). The reply reports the real delivery counts — it never
+  // claims success for messages that were not sent.
+  const targets = (await chatStore.list()).filter((chatId) => chatId !== context.chatId);
+  let delivered = 0;
+  let failed = 0;
+  for (const chatId of targets) {
+    try {
+      await socket.sendMessage(chatId, { text: `📢 *${config.botName} Announcement*\n\n${command.text}` });
+      delivered += 1;
+    } catch (error) {
+      failed += 1;
+      console.warn(`[broadcast] Could not deliver to ${chatId}: ${error.message}`);
+    }
+  }
+  await sendResult(socket, context, {
+    text: [
+      '*BROADCAST FINISHED* ✅',
+      '',
+      `*Delivered:* ${delivered}`,
+      `*Failed:* ${failed}`,
+      ...(targets.length ? [] : ['', 'No other chats are known yet. The bot learns a', 'chat the first time it receives a message in it.'])
+    ].join('\n'),
+    command: 'broadcast'
+  });
 }
 
 async function handleSetPrefixCommand(socket, context, command) {
@@ -1063,7 +1202,8 @@ async function handleSetPrefixCommand(socket, context, command) {
     return;
   }
   await setCommandPrefix(prefix);
-  await socket.sendMessage(context.chatId, { text: `Command prefix is now: ${prefix}` }, { quoted: context.raw });
+  // Buttons are rebuilt from the live prefix, so the next reply already uses it.
+  await sendResult(socket, context, { text: `*PREFIX UPDATED* ✅\n➜ *${prefix}*`, command: 'setprefix' });
 }
 
 async function setCommandPrefix(prefix) {
@@ -1082,9 +1222,9 @@ async function handleSetNameCommand(socket, context, command) {
   }
   try {
     await socket.updateProfileName(name);
-    await socket.sendMessage(context.chatId, { text: `Profile name updated to: ${name}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*NAME UPDATED* ✅\n➜ ${name}`, command: 'setname' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Could not update name: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*NAME UPDATE FAILED* ❌\n${error.message}`, command: 'setname' });
   }
 }
 
@@ -1097,9 +1237,9 @@ async function handleSudoCommand(socket, context, command) {
   }
   try {
     const result = await sudoStore.add(command.args[0]);
-    await socket.sendMessage(context.chatId, { text: `Sudo access granted to ${result.id}.` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SUDO GRANTED* ✅\n➜ ${result.id}`, command: 'sudo' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Could not add sudo: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SUDO FAILED* ❌\n${error.message}`, command: 'sudo' });
   }
 }
 
@@ -1110,24 +1250,21 @@ async function handleDelsudoCommand(socket, context, command) {
   }
   try {
     const result = await sudoStore.remove(command.args[0]);
-    await socket.sendMessage(context.chatId, { text: result.removed ? `Sudo access removed from ${result.id}.` : 'That number is not a sudo user.' }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: result.removed ? `*SUDO REMOVED* ✅\n➜ ${result.id}` : '*NOT A SUDO USER* ❌',
+      command: 'delsudo'
+    });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Could not remove sudo: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*SUDO FAILED* ❌\n${error.message}`, command: 'delsudo' });
   }
 }
 
 async function handleSudolistCommand(socket, context) {
   const users = await sudoStore.list();
   const text = users.length
-    ? `*Sudo users*\n${users.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
-    : 'There are no sudo users.';
-  await sendButtons(socket, context.chatId, {
-    text,
-    footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [{ label: '☰ Menu', id: `${getCommandPrefix()}menu home` }],
-    fallbackText: text,
-    quoted: context.raw
-  });
+    ? `🔐 *SUDO USERS*\n\n${users.map((u, i) => `${i + 1}. ➜ ${u}`).join('\n')}`
+    : '🔐 *SUDO USERS*\n\n➜ None yet.';
+  await sendResult(socket, context, { text, command: 'sudolist' });
 }
 
 // --- MODE ---
@@ -1140,19 +1277,12 @@ async function handleModeCommand(socket, context, command) {
     publicMode = arg === 'public';
     socket.public = publicMode;
     await modeStore.set(arg);
-    await socket.sendMessage(context.chatId, { text: `Bot mode is now ${arg}.` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*BOT MODE* 💬\n➜ *${arg.toUpperCase()}*`, command: 'mode' });
     return;
   }
-  const text = `Current mode: ${publicMode ? 'public' : 'self'}\n\nUse ${p}mode <public|self> to change.`;
-  await sendButtons(socket, context.chatId, {
-    text,
-    footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [
-      { label: '🌍 Public', id: `${p}public` },
-      { label: '👤 Self', id: `${p}self` }
-    ],
-    fallbackText: text,
-    quoted: context.raw
+  await sendResult(socket, context, {
+    text: `*BOT MODE* 💬\n➜ *${publicMode ? 'PUBLIC 🌍' : 'SELF 👤'}*`,
+    command: 'mode'
   });
 }
 
@@ -1165,60 +1295,37 @@ async function handlePremiumCommand(socket, context, command) {
     const store = await premiumStore.list();
     const record = store.find((r) => r.id === normalized);
     const premiumText = record
-      ? `*Premium status*\n\n${record.id} — expires ${formatDate(record.expiresAt)} UTC`
-      : `${normalized} does not have premium access.`;
-    await sendButtons(socket, context.chatId, {
-      text: premiumText,
-      footer: `${config.botName} • ${config.ownerName}`,
-      buttons: [{ label: '☰ Menu', id: `${getCommandPrefix()}menu home` }],
-      fallbackText: premiumText,
-      quoted: context.raw
-    });
+      ? `💎 *PREMIUM STATUS*\n\n➜ ${record.id}\n*Expires:* ${formatDate(record.expiresAt)} UTC`
+      : `💎 *PREMIUM STATUS*\n\n➜ ${normalized} has no premium access.`;
+    await sendResult(socket, context, { text: premiumText, command: 'premium' });
   } catch (error) {
-    await socket.sendMessage(context.chatId, { text: `Could not check premium: ${error.message}` }, { quoted: context.raw });
+    await sendResult(socket, context, { text: `*PREMIUM CHECK FAILED* ❌\n${error.message}`, command: 'premium' });
   }
 }
 
 // --- SESSIONS ---
 
 async function handleSessionsCommand(socket, context) {
-  const p = getCommandPrefix();
   const text = [
-    `*${config.botName} Session*`,
+    `🧩 *${config.botName.toUpperCase()} SESSION*`,
     '',
-    `Bot: ${socket.user?.id?.split(':')[0] || 'unknown'}`,
-    `Uptime: ${Math.floor(process.uptime())} seconds`,
-    `Auth directory: ${config.authDir}`,
-    `Data directory: ${config.dataDir}`
+    `*Bot:* ${socket.user?.id?.split(':')[0] || 'unknown'}`,
+    `*Uptime:* ${Math.floor(process.uptime())}s`
   ].join('\n');
-  await sendButtons(socket, context.chatId, {
-    text,
-    footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [
-      { label: '📊 Status', id: `${p}status` },
-      { label: '☰ Menu', id: `${p}menu home` }
-    ],
-    fallbackText: text,
-    quoted: context.raw
-  });
+  await sendResult(socket, context, { text, command: 'sessions' });
 }
 
 async function handleStopSessionCommand(socket, context, command) {
-  const p = getCommandPrefix();
   if (!command.args[0]) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${p}stopsession <number>` }, { quoted: context.raw });
+    await sendResult(socket, context, {
+      text: usageLine('stopsession', '<number>', 'stopsession 923001234567'),
+      command: 'stopsession'
+    });
     return;
   }
-  const text = 'Use the Telegram controller `/stop <number>` to remove an unpaired session safely.';
-  await sendButtons(socket, context.chatId, {
-    text,
-    footer: `${config.botName} • ${config.ownerName}`,
-    buttons: [
-      { label: '✈️ Telegram', id: `${p}pairing` },
-      { label: '☰ Menu', id: `${p}menu home` }
-    ],
-    fallbackText: text,
-    quoted: context.raw
+  await sendResult(socket, context, {
+    text: '*SESSION CLEANUP* 🧹\n\nUse the Telegram controller\n`/stop <number>` to remove an\nunpaired session safely.',
+    command: 'stopsession'
   });
 }
 
@@ -1252,6 +1359,10 @@ function cacheMessageForAntiDelete(socket, rawMessage) {
 async function handleMessage(socket, rawMessage) {
   const context = await getMessageContext(socket, rawMessage);
   if (!context.chatId || !context.sender) return;
+
+  // Feeds the !broadcast target list. Errors are swallowed on purpose: the
+  // registry is a convenience and must never break message handling.
+  void chatStore.track(context.chatId).catch(() => {});
 
   // Cache incoming messages for anti-delete feature
   if (context.chatId.endsWith('@g.us')) {
@@ -1303,6 +1414,22 @@ async function handleMessage(socket, rawMessage) {
     }
   }
 
+  // No command may ever fail silently. Anything that escapes a handler's own
+  // try/catch is reported to the user with a short message, logged here, and
+  // then re-thrown so the caller (index.js / the pairing manager) still sees
+  // the failure — a transport outage must never be swallowed.
+  try {
+    await dispatchCommand(socket, context, command, rawMessage);
+  } catch (error) {
+    console.error(`[command] ${command.name} failed:`, error);
+    await socket.sendMessage(context.chatId, {
+      text: `*COMMAND FAILED* ❌\n${error?.message || 'Unexpected error.'}`
+    }, { quoted: context.raw }).catch(() => {});
+    throw error;
+  }
+}
+
+async function dispatchCommand(socket, context, command, rawMessage) {
   switch (command.name) {
     // --- GENERAL ---
     case 'menu':
@@ -1313,8 +1440,11 @@ async function handleMessage(socket, rawMessage) {
     case 'ping':
     case 'p': {
       const started = Date.now();
-      const sent = await socket.sendMessage(context.chatId, { text: 'Checking latency…' }, { quoted: context.raw });
-      await socket.sendMessage(context.chatId, { text: `Pong: ${Date.now() - started}ms`, edit: sent.key });
+      await socket.sendMessage(context.chatId, { text: '⏳ *Measuring…*' }, { quoted: context.raw });
+      await sendResult(socket, context, {
+        text: `🏓 *PONG*\n➜ *${Date.now() - started}ms*`,
+        command: 'ping'
+      });
       break;
     }
 
@@ -1330,14 +1460,21 @@ async function handleMessage(socket, rawMessage) {
       publicMode = command.name === 'public';
       socket.public = publicMode;
       await modeStore.set(publicMode ? 'public' : 'self');
-      await socket.sendMessage(context.chatId, { text: `Bot mode is now ${publicMode ? 'public' : 'self'}.` }, { quoted: context.raw });
+      await sendResult(socket, context, {
+        text: `*BOT MODE* 💬\n➜ *${publicMode ? 'PUBLIC 🌍' : 'SELF 👤'}*`,
+        command: command.name
+      });
       break;
     }
 
     case 'mode':
-    case 'botmode':
+    case 'botmode': {
+      // menu.js declares this command owner-only; the bare `!mode` view used to
+      // skip that gate. `!status` still shows the mode to everyone.
+      if (!(await requireOwner(socket, context))) break;
       await handleModeCommand(socket, context, command);
       break;
+    }
 
     // --- DOWNLOADER ---
     case 'play':
@@ -1390,16 +1527,20 @@ async function handleMessage(socket, rawMessage) {
     case 'stiker': {
       const imageMessage = getImageMessage(rawMessage);
       if (!imageMessage) {
-        await socket.sendMessage(context.chatId, { text: `Reply to an image with ${getCommandPrefix()}sticker to create a sticker.` }, { quoted: context.raw });
+        await sendResult(socket, context, {
+          text: `*REPLY TO AN IMAGE* 🖼\nThen send ${getCommandPrefix()}sticker.`,
+          command: 'sticker'
+        });
         break;
       }
       try {
         const imageBuffer = await downloadMediaBuffer(imageMessage, 'image');
         const sticker = await createImageSticker(imageBuffer, { packname: config.stickerPackname, author: config.stickerAuthor });
         await socket.sendMessage(context.chatId, { sticker }, { quoted: context.raw });
+        await sendResult(socket, context, { text: '*STICKER READY* 🎨', command: 'sticker' });
       } catch (error) {
         console.error('[sticker] Conversion failed:', error);
-        await socket.sendMessage(context.chatId, { text: `Could not create a sticker: ${error.message}` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: `*STICKER FAILED* ❌\n${error.message}`, command: 'sticker' });
       }
       break;
     }
@@ -1409,16 +1550,20 @@ async function handleMessage(socket, rawMessage) {
     case 'img': {
       const stickerMessage = getStickerMessage(rawMessage);
       if (!stickerMessage) {
-        await socket.sendMessage(context.chatId, { text: `Reply to a sticker with ${getCommandPrefix()}toimg to convert it to an image.` }, { quoted: context.raw });
+        await sendResult(socket, context, {
+          text: `*REPLY TO A STICKER* 🎨\nThen send ${getCommandPrefix()}toimg.`,
+          command: 'toimg'
+        });
         break;
       }
       try {
         const stickerBuffer = await downloadMediaBuffer(stickerMessage, 'sticker');
         const image = await convertStickerToImage(stickerBuffer);
-        await socket.sendMessage(context.chatId, { image, caption: 'Sticker converted to image.' }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { image, caption: '*CONVERTED TO IMAGE* ✅' }, { quoted: context.raw });
+        await sendResult(socket, context, { text: '*CONVERTED TO IMAGE* ✅', command: 'toimg' });
       } catch (error) {
         console.error('[toimg] Conversion failed:', error);
-        await socket.sendMessage(context.chatId, { text: `Could not convert this sticker: ${error.message}` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: `*CONVERSION FAILED* ❌\n${error.message}`, command: 'toimg' });
       }
       break;
     }
@@ -1427,24 +1572,14 @@ async function handleMessage(socket, rawMessage) {
     case 'converter': {
       const p = getCommandPrefix();
       const text = [
-        '*Converter commands*',
+        '🧰 *CONVERTER*',
         '',
-        `${p}sticker — Create a sticker from an image`,
-        `${p}toimg — Convert a sticker to an image`,
-        `${p}tts <text> — Text to speech`,
-        `${p}qr <text> — Generate a QR code`
+        `${p}sticker — image ➜ sticker`,
+        `${p}toimg — sticker ➜ image`,
+        `${p}tts <text> — text ➜ audio`,
+        `${p}qr <text> — text ➜ QR`
       ].join('\n');
-      await sendButtons(socket, context.chatId, {
-        text,
-        footer: `${config.botName} • ${config.ownerName}`,
-        buttons: [
-          { label: '🎨 Sticker', id: `${p}sticker` },
-          { label: '🖼 To Image', id: `${p}toimg` },
-          { label: '🔊 TTS', id: `${p}tts` }
-        ],
-        fallbackText: text,
-        quoted: context.raw
-      });
+      await sendResult(socket, context, { text, command: 'convert' });
       break;
     }
 
@@ -1482,9 +1617,16 @@ async function handleMessage(socket, rawMessage) {
     // --- TOOLS ---
     case 'jid':
     case 'chatid':
-      await socket.sendMessage(context.chatId, {
-        text: [`Chat JID: ${context.chatId}`, `Sender JID: ${context.sender}`, `Type: ${context.isGroup ? 'group' : 'private'}`].join('\n')
-      }, { quoted: context.raw });
+      await sendResult(socket, context, {
+        text: [
+          '🔎 *JID INFO*',
+          '',
+          `*Chat:* ${context.chatId}`,
+          `*Sender:* ${context.sender}`,
+          `*Type:* ${context.isGroup ? 'group' : 'private'}`
+        ].join('\n'),
+        command: 'jid'
+      });
       break;
 
     case 'idch':
@@ -1504,10 +1646,19 @@ async function handleMessage(socket, rawMessage) {
       }
       try {
         const channel = await socket.newsletterMetadata('invite', inviteCode);
-        const details = [`ID: ${channel.id}`, `Name: ${channel.name}`, `Followers: ${channel.subscribers}`, `Verified: ${channel.verification === 'VERIFIED' ? 'yes' : 'no'}`].join('\n');
-        await socket.sendMessage(context.chatId, { text: details }, { quoted: context.raw });
+        await sendResult(socket, context, {
+          text: [
+            '📣 *CHANNEL INFO*',
+            '',
+            `*ID:* ${channel.id}`,
+            `*Name:* ${channel.name}`,
+            `*Followers:* ${channel.subscribers}`,
+            `*Verified:* ${channel.verification === 'VERIFIED' ? 'yes ✅' : 'no ❌'}`
+          ].join('\n'),
+          command: 'idch'
+        });
       } catch (error) {
-        await socket.sendMessage(context.chatId, { text: `Could not fetch that channel: ${error.message}` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: `*CHANNEL FETCH FAILED* ❌\n${error.message}`, command: 'idch' });
       }
       break;
     }
@@ -1533,26 +1684,16 @@ async function handleMessage(socket, rawMessage) {
     case 'utils': {
       const p = getCommandPrefix();
       const text = [
-        '*Tools commands*',
+        '🛠 *TOOLS*',
         '',
-        `${p}jid — Show JIDs`,
-        `${p}idch <url> — Channel info`,
-        `${p}calc <expr> — Calculator`,
-        `${p}ss <url> — Screenshot`,
-        `${p}short <url> — Shorten URL`,
-        `${p}translate [lang] <text> — Translate`
+        `${p}jid — show JIDs`,
+        `${p}idch <url> — channel info`,
+        `${p}calc <expr> — calculator`,
+        `${p}ss <url> — screenshot`,
+        `${p}short <url> — shorten URL`,
+        `${p}translate [lang] <text> — translate`
       ].join('\n');
-      await sendButtons(socket, context.chatId, {
-        text,
-        footer: `${config.botName} • ${config.ownerName}`,
-        buttons: [
-          { label: '🧮 Calc', id: `${p}calc` },
-          { label: '✂️ Shorten', id: `${p}short` },
-          { label: '🌐 Translate', id: `${p}translate` }
-        ],
-        fallbackText: text,
-        quoted: context.raw
-      });
+      await sendResult(socket, context, { text, command: 'tools' });
       break;
     }
 
@@ -1563,7 +1704,7 @@ async function handleMessage(socket, rawMessage) {
       if (!group) break;
       const message = context.quotedText || command.text;
       if (!message) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}hidetag <message>` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: usageLine('hidetag', '<message>', 'hidetag Meeting at 8'), command: 'hidetag' });
         break;
       }
       await socket.sendMessage(context.chatId, { text: message, mentions: group.participants.map((entry) => entry.id) }, { quoted: context.raw });
@@ -1575,7 +1716,7 @@ async function handleMessage(socket, rawMessage) {
       const group = await requireGroupAdmin(socket, context);
       if (!group) break;
       if (!command.text) {
-        await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}tagall <message>` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: usageLine('tagall', '<message>', 'tagall Attendance'), command: 'tagall' });
         break;
       }
       const mentions = group.participants.map((entry) => entry.id);
@@ -1697,23 +1838,21 @@ async function handleMessage(socket, rawMessage) {
     case 'economy': {
       const p = getCommandPrefix();
       const text = [
-        '*RPG & Economy commands*',
+        '💰 *RPG & ECONOMY*',
         '',
-        `${p}balance — Check your wallet/bank`,
-        `${p}daily — Claim daily reward`,
-        `${p}work — Earn coins`,
-        `${p}give @user <amount> — Transfer coins`
+        `${p}balance — wallet / bank`,
+        `${p}daily — daily reward`,
+        `${p}work — earn coins`,
+        `${p}give @user <amount> — transfer`
       ].join('\n');
-      await sendButtons(socket, context.chatId, {
+      await sendResult(socket, context, {
         text,
-        footer: `${config.botName} • ${config.ownerName}`,
+        command: 'rpg',
         buttons: [
           { label: '💰 Balance', id: `${p}balance` },
           { label: '🎁 Daily', id: `${p}daily` },
           { label: '🛠 Work', id: `${p}work` }
-        ],
-        fallbackText: text,
-        quoted: context.raw
+        ]
       });
       break;
     }
@@ -1722,23 +1861,15 @@ async function handleMessage(socket, rawMessage) {
     case 'status':
     case 'alive':
     case 'runtime': {
-      const p = getCommandPrefix();
       const text = [
-        `*${config.botName} status*`,
-        `Mode: ${publicMode ? 'public' : 'self'}`,
-        `Uptime: ${Math.floor(process.uptime())} seconds`,
-        `Premium database: ready`
+        `📊 *${config.botName.toUpperCase()} STATUS*`,
+        '',
+        `*Mode:* ${publicMode ? 'public 🌍' : 'self 👤'}`,
+        `*Uptime:* ${Math.floor(process.uptime())}s`,
+        `*Commands:* ${categoriesWithCommands().reduce((total, category) => total + category.commands.length, 0)}`,
+        `*Developer:* ${config.developerName}`
       ].join('\n');
-      await sendButtons(socket, context.chatId, {
-        text,
-        footer: `${config.botName} • ${config.ownerName}`,
-        buttons: [
-          { label: '☰ Menu', id: `${p}menu home` },
-          { label: '🧩 Sessions', id: `${p}sessions` }
-        ],
-        fallbackText: text,
-        quoted: context.raw
-      });
+      await sendResult(socket, context, { text, command: 'status' });
       break;
     }
 
@@ -1751,17 +1882,10 @@ async function handleMessage(socket, rawMessage) {
     case 'tgpair':
     case 'telegram':
     case 'tg': {
-      const p = getCommandPrefix();
       const pairText = config.telegramBotLink
-        ? `*Telegram pairing*\nOpen the authorized controller: ${config.telegramBotLink}\nThen use /pair <number>.`
-        : 'Telegram pairing is not configured. Ask the bot owner to set telegram.botLink and telegram.botToken in config.js.';
-      await sendButtons(socket, context.chatId, {
-        text: pairText,
-        footer: `${config.botName} • ${config.ownerName}`,
-        buttons: [{ label: '☰ Menu', id: `${p}menu home` }],
-        fallbackText: pairText,
-        quoted: context.raw
-      });
+        ? `✈️ *TELEGRAM PAIRING*\n\n➜ ${config.telegramBotLink}\n\nThen send *\/pair <number>*.`
+        : '✈️ *TELEGRAM PAIRING*\n\n➜ Not configured. Ask the owner to set\ntelegram.botLink in config.js.';
+      await sendResult(socket, context, { text: pairText, command: 'pairing' });
       break;
     }
 
@@ -1769,11 +1893,12 @@ async function handleMessage(socket, rawMessage) {
     case 'rst': {
       if (!(await requireOwner(socket, context))) break;
       const mode = requestRestart();
-      await socket.sendMessage(context.chatId, {
+      await sendResult(socket, context, {
         text: mode === 'supervisor'
-          ? 'Restarting now. The built-in supervisor will bring the bot back in a few seconds.'
-          : 'Restart requested. Ensure your host is configured to restart this process after it exits.'
-      }, { quoted: context.raw });
+          ? '🔄 *RESTARTING*\nThe supervisor will bring the bot back in a few seconds.'
+          : '🔄 *RESTART REQUESTED*\nYour host must restart this process.',
+        command: 'restart'
+      });
       break;
     }
 
@@ -1826,9 +1951,12 @@ async function handleMessage(socket, rawMessage) {
       }
       try {
         const record = await premiumStore.add(phoneNumber, duration);
-        await socket.sendMessage(context.chatId, { text: `Premium access saved for ${record.id} until ${formatDate(record.expiresAt)} UTC.` }, { quoted: context.raw });
+        await sendResult(socket, context, {
+          text: `*PREMIUM GRANTED* 💎\n\n➜ ${record.id}\n*Until:* ${formatDate(record.expiresAt)} UTC`,
+          command: 'addprem'
+        });
       } catch (error) {
-        await socket.sendMessage(context.chatId, { text: `Could not add premium access: ${error.message}` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: `*PREMIUM FAILED* ❌\n${error.message}`, command: 'addprem' });
       }
       break;
     }
@@ -1842,9 +1970,12 @@ async function handleMessage(socket, rawMessage) {
       try {
         const phoneNumber = normalizePhoneNumber(command.args[0], 'Premium user number');
         const removed = await premiumStore.remove(phoneNumber);
-        await socket.sendMessage(context.chatId, { text: removed ? `Premium access removed for ${phoneNumber}.` : 'That number has no active premium record.' }, { quoted: context.raw });
+        await sendResult(socket, context, {
+          text: removed ? `*PREMIUM REMOVED* ✅\n➜ ${phoneNumber}` : '*NO ACTIVE PREMIUM* ❌',
+          command: 'delprem'
+        });
       } catch (error) {
-        await socket.sendMessage(context.chatId, { text: `Could not remove premium access: ${error.message}` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: `*PREMIUM FAILED* ❌\n${error.message}`, command: 'delprem' });
       }
       break;
     }
@@ -1854,11 +1985,11 @@ async function handleMessage(socket, rawMessage) {
       try {
         const records = await premiumStore.list();
         const text = records.length
-          ? `*Active premium users*\n${records.map((record, index) => `${index + 1}. ${record.id} — ${formatDate(record.expiresAt)} UTC`).join('\n')}`
-          : 'There are no active premium users.';
-        await socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
+          ? `💎 *PREMIUM USERS*\n\n${records.map((record, index) => `${index + 1}. ➜ ${record.id} — ${formatDate(record.expiresAt)} UTC`).join('\n')}`
+          : '💎 *PREMIUM USERS*\n\n➜ None active.';
+        await sendResult(socket, context, { text, command: 'listprem' });
       } catch (error) {
-        await socket.sendMessage(context.chatId, { text: `Could not read premium access: ${error.message}` }, { quoted: context.raw });
+        await sendResult(socket, context, { text: `*PREMIUM READ FAILED* ❌\n${error.message}`, command: 'listprem' });
       }
       break;
     }
@@ -1885,7 +2016,10 @@ async function handleMessage(socket, rawMessage) {
       if (command.args[0] === 'start') {
         const num = Math.floor(Math.random() * 100) + 1;
         guessGames.set(context.sender, { number: num, attempts: 0, started: Date.now() });
-        await socket.sendMessage(context.chatId, { text: 'I picked a number between 1 and 100. Reply with your guess!' }, { quoted: context.raw });
+        await sendResult(socket, context, {
+          text: `🎮 *GUESS THE NUMBER*\n\n➜ 1 - 100. Reply with your guess.`,
+          command: 'guess'
+        });
       } else if (/^\d+$/.test(command.args[0])) {
         const game = guessGames.get(context.sender);
         if (!game) {
@@ -1896,11 +2030,14 @@ async function handleMessage(socket, rawMessage) {
         game.attempts++;
         if (guess === game.number) {
           guessGames.delete(context.sender);
-          await socket.sendMessage(context.chatId, { text: `🎉 Correct! The number was ${game.number}. It took you ${game.attempts} attempts.` }, { quoted: context.raw });
+          await sendResult(socket, context, {
+            text: `🎉 *CORRECT!*\nThe number was *${game.number}* in ${game.attempts} attempts.`,
+            command: 'guess'
+          });
         } else if (guess < game.number) {
-          await socket.sendMessage(context.chatId, { text: '⬆️ Higher!' }, { quoted: context.raw });
+          await sendResult(socket, context, { text: '⬆️ *HIGHER!*', command: 'guess' });
         } else {
-          await socket.sendMessage(context.chatId, { text: '⬇️ Lower!' }, { quoted: context.raw });
+          await sendResult(socket, context, { text: '⬇️ *LOWER!*', command: 'guess' });
         }
       } else if (command.args[0] === 'stop') {
         guessGames.delete(context.sender);

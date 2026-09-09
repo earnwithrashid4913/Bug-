@@ -59,7 +59,7 @@ function box(title, lines) {
   return `╭━━〔 ${title} 〕━╮\n${body}\n╰${'━'.repeat(24)}╯`;
 }
 
-const GOAT_MODS_BRAND = 'GOAT-MODS';
+const CODE_SOURCE_LABEL = 'WhatsApp-generated';
 
 // The ANIME MD intro. Gojo-style, no server-dashboard jargon. It never claims
 // a WhatsApp connection: the connected notification is a separate, real event.
@@ -84,11 +84,11 @@ function pairingStartedBox(numberDisplay) {
   ]);
 }
 
-function codeReadyBox({ displayCode, brand, numberDisplay, expiresAt }, { ttlMinutes = 5 } = {}) {
+function codeReadyBox({ displayCode, numberDisplay, expiresAt }, { ttlMinutes = 5 } = {}) {
   const minutes = Number.isFinite(expiresAt)
     ? Math.max(1, Math.ceil((expiresAt - Date.now()) / 60_000))
     : ttlMinutes;
-  return box(`ANIME MD • ${brand || GOAT_MODS_BRAND}`, [
+  return box('ANIME MD • PAIRING CODE', [
     '',
     '✅ Pairing Code Ready',
     '',
@@ -100,7 +100,7 @@ function codeReadyBox({ displayCode, brand, numberDisplay, expiresAt }, { ttlMin
     'Link a Device →',
     'Link with phone number',
     '',
-    'Roman Urdu: WhatsApp Settings kholein, Linked Devices → Link a Device → Link with phone number mein ye code daalein.'
+    `This code was issued by WhatsApp itself and is valid once.`
   ]);
 }
 
@@ -485,7 +485,7 @@ const BOOTSTRAP_COMMANDS = new Set(['addowner', 'delowner', 'addprem', 'delprem'
 class TelegramController {
   constructor({
     token, owners = [], controllerStore, pairing, startImage = '', connectedImage = '',
-    publicMode = false, premiumOnly = false, requiredChannels = [], sessionLimit = 5, pairingBrand = '',
+    publicMode = false, premiumOnly = false, requiredChannels = [], sessionLimit = 5, codeSource = '',
     fetchImpl = globalThis.fetch, log = console
   }) {
     this.token = token;
@@ -500,7 +500,7 @@ class TelegramController {
       .filter((channel) => channel && String(channel.chatId || '').trim())
       .map((channel) => ({ name: String(channel.name || 'Channel').slice(0, 60), chatId: String(channel.chatId).trim() }));
     this.sessionLimit = Number.isSafeInteger(sessionLimit) && sessionLimit > 0 ? sessionLimit : 5;
-    this.pairingBrand = String(pairingBrand || '');
+    this.codeSource = String(codeSource || '');
     this.fetch = fetchImpl;
     this.log = log;
     this.offset = 0;
@@ -742,7 +742,7 @@ class TelegramController {
       const text = settingsBox({
         id: senderId, premium: premium.premium, owner: true,
         publicMode: this.publicMode, premiumOnly: this.premiumOnly,
-        brand: this.pairingBrand || GOAT_MODS_BRAND, controllers, premiumUsers
+        brand: this.codeSource || CODE_SOURCE_LABEL, controllers, premiumUsers
       });
       return this.present(chatId, messageId, text, settingsMarkup({ owner: true, publicMode: this.publicMode, premiumOnly: this.premiumOnly }));
     }
@@ -1172,7 +1172,7 @@ class TelegramController {
 }
 
 module.exports = {
-  GOAT_MODS_BRAND,
+  CODE_SOURCE_LABEL,
   SENSITIVE_COOLDOWN_MS,
   SENSITIVE_LOCK_TTL_MS,
   SESSION_STATE_BADGES,

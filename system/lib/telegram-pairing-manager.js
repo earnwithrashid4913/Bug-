@@ -14,10 +14,13 @@
 //   and on failure: FAILED → CLEANUP
 //
 // Pairing codes are always produced by the real Baileys/WhatsApp pairing flow.
-// A configured custom code (exactly 8 characters, e.g. GOATMODS) is passed to
-// Baileys' native requestPairingCode(number, customCode) and is cryptographically
-// bound into the link flow — WhatsApp accepts it because the code derives the
-// key that protects the pairing handshake. Codes are never invented locally.
+// sock.requestPairingCode(number) is called with the phone number ONLY, so
+// WhatsApp generates the code itself and returns it. The exact code returned by
+// the live socket is the code shown to the Telegram controller — it is never
+// invented, transformed, replaced by a custom value, or taken from anywhere
+// else. This matters: WhatsApp derives the pairing key from the code using its
+// own 32-symbol alphabet (1-9 A-Z without I, O, U), so a hand-written code such
+// as "GOATMODS" can be displayed but can never be entered or linked.
 //
 // Traffic is protected by: a global socket budget, a concurrent-pairing limit,
 // a bounded FIFO pairing queue, per-number locks (across all controllers),
@@ -150,11 +153,6 @@ function pairingError(message, code, status = 400) {
   return Object.assign(new Error(message), { code, status });
 }
 
-function normalizeCustomPairingCode(value) {
-  const cleaned = String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return cleaned || undefined;
-}
-
 async function waitForPairingReady(ready, timeoutMs) {
   let timeout;
   try {
@@ -253,7 +251,7 @@ class PairingSession {
 // ---------------------------------------------------------------------------
 
 class TelegramPairingManager {
-  constructor({ authDir, log = console, onSocket, baileys = {}, customPairingCode, limits = {} }) {
+  constructor({ authDir, log = console, onSocket, baileys = {}, limits = {} }) {
     this.root = path.resolve(authDir, 'telegram-pairings');
     this.log = log;
     this.onConnected = undefined;
@@ -266,15 +264,10 @@ class TelegramPairingManager {
     };
     this.limits = { ...DEFAULT_LIMITS, ...limits };
 
-    // A custom pairing code is only real when Baileys/WhatsApp can accept it:
-    // exactly 8 characters. Anything else falls back to WhatsApp-generated
-    // codes and the configured value is used for display branding only.
-    const normalizedCode = normalizeCustomPairingCode(customPairingCode);
-    this.customPairingCode = normalizedCode?.length === 8 ? normalizedCode : undefined;
-    this.brandLabel = normalizedCode ? formatPairingCodeDisplay(normalizedCode) : 'PAIRING';
-    if (customPairingCode && normalizedCode && normalizedCode.length !== 8) {
-      log.warn?.(`[telegram-pairing] Custom pairing code "${customPairingCode}" is not exactly 8 characters; WhatsApp cannot accept it as a real code. Using WhatsApp-generated codes and keeping the value as branding only.`);
-    }
+    // Pairing codes are always WhatsApp-generated. This label is display-only
+    // metadata for the Telegram settings page; it is never shown as a code.
+    this.codeSourceLabel = 'WhatsApp-generated';
+    this.brandLabel = this.codeSourceLabel;
 
     this.sessions = new Map();       // "ownerId:number" → PairingSession
     this.numberLocks = new Set();    // numbers with an in-flight pairing flow
@@ -816,9 +809,13 @@ class TelegramPairingManager {
           throw pairingError('The WhatsApp connection is not open; the pairing socket closed before a pairing code could be generated.', 'CONNECTION_CLOSED', 502);
         }
 
-        // The real WhatsApp pairing flow. The custom code (when configured and
-        // exactly 8 characters) is forwarded to Baileys' native implementation.
-        const code = await session.socket.requestPairingCode(number, this.customPairingCode);
+        // The real WhatsApp pairing flow. Only the phone number is passed, so
+        // WhatsApp itself generates the code and Baileys returns it. That exact
+        // value is what the Telegram controller displays.
+        const code = await session.socket.requestPairingCode(number);
+        if (!code || typeof code !== 'string') {
+          throw pairingError('WhatsApp did not return a pairing code. Please try again.', 'PAIRING_FAILED', 502);
+        }
         session.pairingCode = code;
         session.codeRequestedAt = Date.now();
         session.codeExpiresAt = Date.now() + this.limits.pairingCodeTtlMs;
@@ -830,7 +827,6 @@ class TelegramPairingManager {
           code,
           displayCode: formatPairingCodeDisplay(code),
           brand: this.brandLabel,
-          custom: this.customPairingCode === code,
           number,
           numberDisplay: session.numberDisplay,
           expiresAt: session.codeExpiresAt
@@ -1168,7 +1164,6 @@ module.exports = {
   STATUS,
   TelegramPairingManager,
   classifyDisconnect,
-  normalizeCustomPairingCode,
   safeSessionDirectory,
   waitForPairingReady
 };

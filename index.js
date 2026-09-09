@@ -174,7 +174,6 @@ function startTelegramController() {
   }
   telegramPairingManager = new TelegramPairingManager({
     authDir: config.authDir,
-    customPairingCode: config.telegramPairingCode,
     onSocket: async (socket) => {
       socket.decodeJid = decodeJid;
       socket.public = (await handleMessage.initializeMode(socket)) === 'public';
@@ -209,7 +208,7 @@ function startTelegramController() {
     premiumOnly: config.telegramPremiumOnly,
     requiredChannels: config.telegramRequiredChannels,
     sessionLimit: telegramPairingManager.limits.maxSessionsPerController,
-    pairingBrand: telegramPairingManager.brandLabel
+    codeSource: telegramPairingManager.codeSourceLabel
   });
   telegramPairingManager.onConnected = async (ownerId, session) => {
     // This notification is scoped to the Telegram owner whose isolated

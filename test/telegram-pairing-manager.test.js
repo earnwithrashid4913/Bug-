@@ -13,6 +13,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// The 32 symbols WhatsApp uses for pairing codes. It deliberately excludes
+// 0, I, O and U, which is why a hand-written code such as "GOATMODS" (two O
+// characters) can be displayed but never entered or linked.
+const PAIRING_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTVWXYZ';
+
+// Deterministic stand-in for the code WhatsApp itself generates.
+function whatsappStyleCode(number) {
+  let out = '';
+  for (let i = 0; i < 8; i += 1) {
+    const digit = Number(number[i % number.length] || 0);
+    out += PAIRING_ALPHABET[(digit * 7 + i * 3) % PAIRING_ALPHABET.length];
+  }
+  return out;
+}
+
 // A fake Baileys whose auth state derives from the real files on disk, so
 // credential persistence flows (pair → link → restart → restore) behave like
 // the production implementation.
@@ -34,9 +49,17 @@ function fakeBaileys({ failHandshake = false, qrDelayMs = 0 } = {}) {
         authState: { creds: { registered: false } },
         requestedCreds: config?.auth?.creds,
         qrSeen: false,
-        requestPairingCode: async (number, custom) => {
-          pairingCalls.push({ number, custom, afterQr: socket.qrSeen });
-          return custom ?? `code-${number}`;
+        requestPairingCode: async (...args) => {
+          // Mirrors real Baileys 7: requestPairingCode(phoneNumber) generates
+          // an 8-character code from WhatsApp's Crockford-style 32-symbol
+          // alphabet. Passing a second (custom) argument is the exact defect
+          // that produced unlinkable "GOAT-MODS" codes, so it is rejected here.
+          const [number] = args;
+          pairingCalls.push({ number, argCount: args.length, afterQr: socket.qrSeen });
+          if (args.length > 1) {
+            throw new Error('requestPairingCode must be called with the phone number only');
+          }
+          return whatsappStyleCode(number);
         },
         ws: { isOpen: false, close() {} }
       };
@@ -70,13 +93,12 @@ function fakeBaileys({ failHandshake = false, qrDelayMs = 0 } = {}) {
   };
 }
 
-function makeManager({ fake = fakeBaileys(), limits = {}, customPairingCode } = {}) {
+function makeManager({ fake = fakeBaileys(), limits = {} } = {}) {
   const authDir = path.join(os.tmpdir(), `anime-md-pairing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const manager = new TelegramPairingManager({
     authDir,
     baileys: fake,
-    customPairingCode,
-    log: { info: () => {}, warn: () => {}, error: () => {} },
+    log: { info: () => {}, warn: () => {}, error: () => {}},
     limits: { ownerCooldownMs: 0, reconnectBaseDelayMs: 5, reconnectMaxDelayMs: 10, ...limits }
   });
   return { manager, fake, authDir };
@@ -106,16 +128,35 @@ async function linkSession(manager, fake, ownerId, number) {
   return manager.getSession(ownerId, number);
 }
 
-test('the custom GOATMODS pairing code is issued through the real Baileys flow', async () => {
-  const { manager, fake } = makeManager({ customPairingCode: 'GOATMODS' });
+test('the pairing code shown to Telegram is the exact code the real Baileys socket returned', async () => {
+  const { manager, fake } = makeManager();
+  const expected = whatsappStyleCode('923001234567');
   const result = await manager.requestPairing('10', '923001234567');
-  assert.equal(result.code, 'GOATMODS');
-  assert.equal(result.displayCode, 'GOAT-MODS');
-  assert.equal(result.brand, 'GOAT-MODS');
+
+  // The real flow: one phone-number-only call to the live socket.
+  assert.deepEqual(fake.pairingCalls, [{ number: '923001234567', argCount: 1, afterQr: true }]);
+  // Whatever WhatsApp returned is what is displayed — verbatim, unmodified.
+  assert.equal(result.code, expected);
+  assert.equal(result.displayCode, `${expected.slice(0, 4)}-${expected.slice(4)}`);
   assert.equal(result.number, '923001234567');
   assert.equal(result.numberDisplay, '+92 300 1234567');
-  assert.deepEqual(fake.pairingCalls, [{ number: '923001234567', custom: 'GOATMODS', afterQr: true }]);
   assert.equal(manager.getSession('10', '923001234567').status, STATUS.WAITING_FOR_LINK);
+  await manager.shutdown();
+});
+
+test('no custom pairing code can ever be forwarded to Baileys (GOAT-MODS regression)', async () => {
+  // A legacy deployment may still ship `telegram.pairingCode: 'GOATMODS'` in a
+  // private config.js. It must be ignored entirely: WhatsApp cannot link a code
+  // containing characters outside its pairing alphabet.
+  const { manager, fake } = makeManager();
+  const result = await manager.requestPairing('10', '923001234567');
+  assert.equal(fake.pairingCalls[0].argCount, 1, 'requestPairingCode received the phone number only');
+  assert.notEqual(result.code, 'GOATMODS');
+  for (const character of result.code) {
+    assert.ok(PAIRING_ALPHABET.includes(character), `${character} is not a WhatsApp pairing-alphabet symbol`);
+  }
+  assert.equal(result.code.length, 8);
+  assert.equal(manager.customPairingCode, undefined);
   await manager.shutdown();
 });
 
@@ -125,16 +166,16 @@ test('the pairing code is requested only after the real handshake (first QR), ne
   // event made requestPairingCode throw "Connection Closed" (428) and
   // surfaced "Pairing could not be completed."
   const fake = fakeBaileys({ qrDelayMs: 25 });
-  const { manager } = makeManager({ customPairingCode: 'GOATMODS', fake });
+  const { manager } = makeManager({ fake });
   const result = await manager.requestPairing('10', '923001234567');
-  assert.equal(result.code, 'GOATMODS');
+  assert.equal(result.code, whatsappStyleCode('923001234567'));
   assert.equal(fake.pairingCalls.length, 1);
   assert.equal(fake.pairingCalls[0].afterQr, true, 'the code request happened after the first QR (handshake complete)');
   await manager.shutdown();
 });
 
 test('a failed attempt that left "me" in unregistered credentials is reset before the retry', async () => {
-  const { manager, fake, authDir } = makeManager({ customPairingCode: 'GOATMODS' });
+  const { manager, fake, authDir } = makeManager();
   const dir = path.join(authDir, 'telegram-pairings', '10', '923001234567');
   await fs.mkdir(dir, { recursive: true });
   // Poisoned state: requestPairingCode sets me + pairingCode on the live
@@ -147,7 +188,7 @@ test('a failed attempt that left "me" in unregistered credentials is reset befor
     pairingCode: 'STALE1'
   }));
   const result = await manager.requestPairing('10', '923001234567');
-  assert.equal(result.code, 'GOATMODS');
+  assert.equal(result.code, whatsappStyleCode('923001234567'));
   const creds = fake.sockets[0].requestedCreds;
   assert.equal(creds.registered, false);
   assert.equal(creds.me, undefined, 'me was cleared so Baileys performs a fresh device registration');
@@ -173,14 +214,18 @@ test('a dead pairing socket after the code was issued notifies the owner with th
   await manager.shutdown();
 });
 
-test('a custom pairing code that is not exactly 8 characters falls back to a WhatsApp-generated code', async () => {
-  const { manager, fake } = makeManager({ customPairingCode: 'GOAT-MODS-2025' });
-  assert.equal(manager.customPairingCode, undefined, '11 characters cannot be a real code');
-  assert.equal(manager.brandLabel, 'GOAT-MODS-2025');
-  const result = await manager.requestPairing('10', '923001234567');
-  assert.equal(result.code, 'code-923001234567');
-  assert.equal(result.custom, false);
-  assert.equal(fake.pairingCalls[0].custom, undefined);
+test('an empty WhatsApp response is reported as a failure instead of showing a blank code', async () => {
+  const fake = fakeBaileys();
+  fake.makeWASocket = ((original) => (config) => {
+    const socket = original(config);
+    socket.requestPairingCode = async () => undefined;
+    return socket;
+  })(fake.makeWASocket);
+  const { manager } = makeManager({ fake });
+  await assert.rejects(
+    manager.requestPairing('10', '923001234567'),
+    (error) => error.code === 'PAIRING_FAILED'
+  );
   await manager.shutdown();
 });
 
@@ -339,7 +384,7 @@ test('a logged-out session is terminal: no reconnect, credentials removed, owner
 test('the post-link restartRequired close never destroys the just-linked session', async () => {
   const { manager, fake } = makeManager();
   const codes = await manager.requestPairing('10', '923001234567');
-  assert.equal(codes.code, 'code-923001234567');
+  assert.equal(codes.code, whatsappStyleCode('923001234567'));
   const session = manager.getSession('10', '923001234567');
   // The link completes: credentials become registered, then WhatsApp forces a
   // connection restart — on the SAME socket, before any connection open.
