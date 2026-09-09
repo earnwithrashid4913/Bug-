@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { TelegramController, commandFromUpdate, helpText, normalizeWhatsappNumber, startupBox } = require('../system/lib/telegram-controller');
+const { TelegramController, commandFromUpdate, helpText, joinVerifyMarkup, normalizeWhatsappNumber, startupBox } = require('../system/lib/telegram-controller');
 const { TelegramControllerStore } = require('../system/lib/telegram-controllers');
 
 function fakePairing(overrides = {}) {
@@ -362,7 +362,8 @@ function memoryUserStore({ controllers = [], premium = [], verified = new Set(),
     },
     updateUser: async (id, patch) => {
       const key = String(id);
-      if (patch.verified) verified.add(key);
+      if (patch.verified === true) verified.add(key);
+      else if (patch.verified === false) verified.delete(key);
       if (patch.pairedNumbers) paired.set(key, patch.pairedNumbers);
       return { verified: verified.has(key) };
     },
@@ -420,11 +421,12 @@ test('public mode lets any Telegram user verify, pair and manage only their own 
   // Restricted commands require self-verification before they run.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match((replies.at(-1).caption || replies.at(-1).text) || '', /VERIFICATION/);
-  // The user verifies and is not asked again.
+  // The user verifies. The previously-blocked /pair then continues automatically,
+  // so both the success box and the pairing code appear.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
-  assert.match(replies.at(-1).text, /Verification complete/);
-  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
-  assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
+  const afterVerify = replies.map((reply) => reply.text || reply.caption || '').join('\n');
+  assert.match(afterVerify, /Verification complete/);
+  assert.match(afterVerify, /CODE: KJ4M-NP2X/);
   // Session listings stay scoped to the requesting user.
   // pairingUsageOf now also calls listSessions, so seen may have extra entries, but must include '11'
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
@@ -463,7 +465,7 @@ test('premium-only pairing blocks non-premium controllers and bootstrap owners b
 });
 
 test('required channels gate pairing until joined; bootstrap owners skip the check', async () => {
-  const requiredChannels = [{ name: 'ANIME MD Updates', chatId: '@animemd' }];
+  const requiredChannels = [{ name: 'ANIME MD Updates', chatId: '@animemd', link: 'https://t.me/animemd', kind: 'channel' }];
   const { calls, fetchImpl } = captureApi({ chatMemberStatus: 'left' });
   const { controller, replies } = makeController({
     publicMode: true, requiredChannels, fetchImpl,
@@ -471,13 +473,16 @@ test('required channels gate pairing until joined; bootstrap owners skip the che
     pairing: fakePairing({ requestPairing: async (_ownerId, number) => ({ code: 'KJ4MNP2X', displayCode: 'KJ4M-NP2X', brand: 'WhatsApp-generated', number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 }) })
   });
 
-  // A public user verifies, then is blocked with the channel list until joined.
+  // A public user who is not in the channel fails the live check on /verify.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
-  assert.match(replies.at(-1).text, /Verification complete/);
+  assert.match(replies.at(-1).text, /Verification Failed/);
+  assert.match(replies.at(-1).text, /Channel: ❌ Not Joined/);
+
+  // Pairing is blocked with the live membership list until joined.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
-  const blocked = replies.at(-1).text;
-  assert.match(blocked, /JOIN REQUIRED/);
-  assert.match(blocked, /@animemd/);
+  const blocked = replies.at(-1).caption || replies.at(-1).text;
+  assert.match(blocked, /Membership required/);
+  assert.match(blocked, /Channel: ❌ Not Joined/);
   assert.ok(calls.some((call) => call.method === 'getChatMember'));
 
   // Bootstrap owners skip the join check.
@@ -489,12 +494,13 @@ test('required channels pass members through to the real pairing flow', async ()
   const { fetchImpl } = captureApi({ chatMemberStatus: 'member' });
   const { controller, replies } = makeController({
     publicMode: true,
-    requiredChannels: [{ name: 'ANIME MD Updates', chatId: '@animemd' }],
+    requiredChannels: [{ name: 'ANIME MD Updates', chatId: '@animemd', kind: 'channel' }],
     controllerStore: memoryUserStore(),
     fetchImpl
   });
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
-  assert.match(replies.at(-1).text, /Verification complete/);
+  assert.match(replies.at(-1).text, /Verification Successful/);
+  assert.match(replies.at(-1).text, /Channel: ✅ Joined/);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
 });
@@ -834,8 +840,12 @@ test('verification is enforced functionally and persists across attempts', async
   const { controller, replies } = makeController({ publicMode: true, controllerStore: store, pairing: flowPairing() });
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
   assert.match((replies.at(-1).caption || replies.at(-1).text) || '', /VERIFICATION/);
+  // Verification persists in the store; the blocked /sessions continues automatically.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
-  assert.match(replies.at(-1).text, /Verification complete/);
+  const afterVerify = replies.map((reply) => reply.text || reply.caption || '').join('\n');
+  assert.match(afterVerify, /Verification complete/);
+  assert.match(afterVerify, /ANIME MD • SESSIONS/);
+  assert.equal(await store.isVerified('11'), true);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
   assert.match(replies.at(-1).text, /ANIME MD • SESSIONS/);
 });
@@ -897,4 +907,233 @@ test('public chats never reveal a phone number or session detail', async () => {
   await controller.handleUpdate({ message: { chat: { id: 1, type: 'private' }, from: { id: 10 }, text: '/pair 92355817646' } });
   const pairSends = calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload.text);
   assert.ok(pairSends.some((text) => /Preparing WhatsApp pairing/.test(text)), 'the private chat still pairs');
+});
+
+// ---------------------------------------------------------------------------
+// Mandatory dual-community verification, live re-check, callback security,
+// pairing protection, tier display and owner activity monitoring.
+// ---------------------------------------------------------------------------
+
+const FIXA_COMMUNITIES = Object.freeze([
+  { name: 'Fixa Updates', chatId: '@fixaupdates', link: 'https://t.me/fixaupdates', kind: 'channel' },
+  { name: 'Fixa Dev GB Group', chatId: '@FixaDevGBGroup', link: 'https://t.me/FixaDevGBGroup', kind: 'group' }
+]);
+
+function membershipApi(statusByChat) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const method = url.split('/').pop();
+    const payload = JSON.parse(init.body || '{}');
+    calls.push({ method, payload });
+    if (method === 'getChatMember') {
+      const key = String(payload.chat_id);
+      const entry = statusByChat.get(key);
+      if (entry instanceof Error) {
+        return { ok: false, json: async () => ({ ok: false, description: entry.message }) };
+      }
+      return { ok: true, json: async () => ({ ok: true, result: { status: entry || 'left' } }) };
+    }
+    return { ok: true, json: async () => ({ ok: true, result: payload }) };
+  };
+  return { calls, fetchImpl };
+}
+
+test('dual membership requires BOTH communities; joining only one is not verified', async () => {
+  const statusByChat = new Map([['@fixaupdates', 'member'], ['@FixaDevGBGroup', 'left']]);
+  const { fetchImpl } = membershipApi(statusByChat);
+  const store = memoryUserStore();
+  const { controller, replies } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: store
+  });
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  const text = replies.at(-1).text;
+  assert.match(text, /Verification Failed/);
+  assert.match(text, /Channel: ✅ Joined/);
+  assert.match(text, /Group: ❌ Not Joined/);
+
+  // A protected command stays blocked until BOTH are joined.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
+  const blocked = replies.at(-1).caption || replies.at(-1).text;
+  assert.match(blocked, /Membership required/);
+  assert.match(blocked, /Channel: ✅ Joined/);
+  assert.match(blocked, /Group: ❌ Not Joined/);
+  assert.equal(await store.isVerified('11'), false);
+});
+
+test('leaving a community after verification revokes access on the next live check', async () => {
+  const statusByChat = new Map([['@fixaupdates', 'member'], ['@FixaDevGBGroup', 'member']]);
+  const { fetchImpl } = membershipApi(statusByChat);
+  const store = memoryUserStore();
+  const { controller, replies } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: store, pairing: flowPairing()
+  });
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification Successful/);
+  assert.equal(await store.isVerified('11'), true);
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 92355817646' } });
+  assert.match(replies.at(-1).text, /CODE:/);
+
+  // The user leaves the group. The next protected command forces a live check,
+  // revokes access and clears the stale DB flag.
+  statusByChat.set('@FixaDevGBGroup', 'left');
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
+  const blocked = replies.at(-1).caption || replies.at(-1).text;
+  assert.match(blocked, /Membership required/);
+  assert.equal(await store.isVerified('11'), false, 'the stale verified flag is cleared');
+});
+
+test('a Telegram API failure during verification fails closed', async () => {
+  const statusByChat = new Map([
+    ['@fixaupdates', new Error('Forbidden: bot is not a member of the chat')],
+    ['@FixaDevGBGroup', new Error('Forbidden: bot is not a member of the chat')]
+  ]);
+  const { fetchImpl } = membershipApi(statusByChat);
+  const { controller, replies } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: memoryUserStore()
+  });
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Could not verify your membership/);
+
+  // Protected commands refuse (fail closed) rather than granting on error.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
+  const blocked = replies.at(-1).caption || replies.at(-1).text;
+  assert.match(blocked, /Could not verify your membership/);
+});
+
+test('inline VERIFY shows loading, then success with ✅ VERIFIED and 🏠 MAIN MENU', async () => {
+  const { calls, fetchImpl } = captureApi({ chatMemberStatus: 'member' });
+  const { controller } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: memoryUserStore()
+  });
+  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 11 }, data: 'verify:me', message: { chat: { id: 1 }, message_id: 55 } } });
+  const edits = calls.filter((call) => call.method === 'editMessageText');
+  assert.match(edits[0].payload.text, /Checking your membership/);
+  const last = edits.at(-1).payload;
+  assert.match(last.text, /Verification Successful/);
+  assert.match(last.text, /Channel: ✅ Joined/);
+  assert.match(last.text, /Group: ✅ Joined/);
+  const buttons = last.reply_markup.inline_keyboard.flat().map((button) => button.text);
+  assert.ok(buttons.includes('✅ VERIFIED'));
+  assert.ok(buttons.includes('🏠 MAIN MENU'));
+});
+
+test('JOIN buttons point at the exact configured community links', () => {
+  const buttons = joinVerifyMarkup(FIXA_COMMUNITIES).inline_keyboard.flat();
+  const joinChannel = buttons.find((button) => button.text === '📢 JOIN CHANNEL');
+  const joinGroup = buttons.find((button) => button.text === '👥 JOIN GROUP');
+  assert.equal(joinChannel.url, 'https://t.me/fixaupdates');
+  assert.equal(joinGroup.url, 'https://t.me/FixaDevGBGroup');
+  assert.equal(buttons.find((button) => button.text === '🔄 VERIFY').callback_data, 'verify:me');
+  assert.ok(buttons.some((button) => button.text === '🚀 JOIN ALL'));
+});
+
+test('JOIN ALL opens both destinations and returns to VERIFY', async () => {
+  const { calls, fetchImpl } = captureApi({ chatMemberStatus: 'left' });
+  const { controller } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: memoryUserStore()
+  });
+  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 11 }, data: 'verify:joinall', message: { chat: { id: 1 }, message_id: 55 } } });
+  const edit = calls.filter((call) => call.method === 'editMessageText').at(-1);
+  assert.match(edit.payload.text, /JOIN ALL/);
+  assert.match(edit.payload.text, /Fixa Updates/);
+  assert.match(edit.payload.text, /Fixa Dev GB Group/);
+  const buttons = edit.payload.reply_markup.inline_keyboard.flat();
+  assert.equal(buttons.find((button) => button.text === '📢 JOIN CHANNEL').url, 'https://t.me/fixaupdates');
+  assert.equal(buttons.find((button) => button.text === '👥 JOIN GROUP').url, 'https://t.me/FixaDevGBGroup');
+  assert.ok(buttons.some((button) => button.text === '🔄 VERIFY'));
+});
+
+test('verification callbacks are scoped to the actual callback user', async () => {
+  const statusByChat = new Map([['@fixaupdates', 'member'], ['@FixaDevGBGroup', 'member']]);
+  const { fetchImpl } = membershipApi(statusByChat);
+  const store = memoryUserStore();
+  const { controller } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: store
+  });
+
+  // User 11 (joined both) verifies via callback; only user 11 is marked.
+  await controller.handleUpdate({ callback_query: { id: 'c1', from: { id: 11 }, data: 'verify:me', message: { chat: { id: 1 }, message_id: 6 } } });
+  assert.equal(await store.isVerified('11'), true);
+
+  // User 12 has not joined; their own VERIFY callback cannot ride on user 11's
+  // state — the guard resolves identity from the callback's from.id.
+  statusByChat.set('@fixaupdates', 'left');
+  await controller.handleUpdate({ callback_query: { id: 'c2', from: { id: 12 }, data: 'verify:me', message: { chat: { id: 1 }, message_id: 7 } } });
+  assert.equal(await store.isVerified('12'), false);
+  assert.equal(await store.isVerified('11'), true, 'another user\'s failed callback never clears user 11');
+});
+
+test('/status shows the requesting user\'s database tier and membership', async () => {
+  const store = memoryUserStore({
+    controllers: ['20'],
+    premium: [{ id: '30', expiresAt: Date.now() + 86_400_000 }],
+    vip: new Map([['40', true]]),
+    verified: new Set(['30', '40', '50'])
+  });
+  const { controller, replies } = makeController({ controllerStore: store, owners: ['10'], pairing: fakePairing({ listSessions: async () => [] }) });
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/status' } });
+  assert.match(replies.at(-1).text, /👑 Tier: OWNER/);
+  assert.match(replies.at(-1).text, /🔐 Membership: Verified/);
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 20 }, text: '/status' } });
+  assert.match(replies.at(-1).text, /🛡 Tier: ADMIN/);
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 30 }, text: '/status' } });
+  assert.match(replies.at(-1).text, /⭐ Tier: PREMIUM/);
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 40 }, text: '/status' } });
+  assert.match(replies.at(-1).text, /👑 Tier: VIP PREMIUM/);
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 50 }, text: '/status' } });
+  assert.match(replies.at(-1).text, /👤 Tier: FREE/);
+  assert.match(replies.at(-1).text, /🔐 Membership: Verified/);
+});
+
+test('owner activity notifications carry only non-sensitive fields', async () => {
+  const events = [];
+  const { fetchImpl } = flowApi();
+  const controller = new TelegramController({
+    token: 'token', owners: ['10'],
+    controllerStore: memoryUserStore(),
+    pairing: flowPairing(),
+    fetchImpl,
+    activityLogger: async (event) => events.push(event),
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+  controller.running = true;
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10, first_name: 'Rashid', username: 'rashid' }, text: '/pair 92355817646' } });
+  const actions = events.map((event) => event.action);
+  assert.ok(actions.includes('Pair Request'));
+  assert.ok(actions.includes('Pairing Code Generated'));
+  // The pairing code and flow token must never reach the activity log.
+  const serialized = JSON.stringify(events);
+  assert.doesNotMatch(serialized, /CODE-1/);
+  assert.doesNotMatch(serialized, /KJ4M/);
+});
+
+test('sendOwnerActivity formats a compact activity box for every bootstrap owner', async () => {
+  const { calls, fetchImpl } = captureApi();
+  const controller = new TelegramController({
+    token: 'token', owners: ['10', '20'],
+    controllerStore: memoryUserStore(),
+    pairing: fakePairing(),
+    fetchImpl,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+  controller.running = true;
+  await controller.sendOwnerActivity({ action: 'Pair Request', actor: { id: '30', username: 'joiner' }, userId: '30', details: ['📱 Number: +92 300 1234567'] });
+  const messages = calls.filter((call) => call.method === 'sendMessage');
+  assert.equal(messages.length, 2, 'both bootstrap owners receive the activity');
+  const text = messages[0].payload.text;
+  assert.match(text, /ANIME MD • ACTIVITY/);
+  assert.match(text, /👤 User: @joiner/);
+  assert.match(text, /🆔 ID: 30/);
+  assert.match(text, /⚡ Action: Pair Request/);
+  assert.match(text, /🕒 Time:/);
+  assert.doesNotMatch(text, /token|CODE|creds/i);
 });

@@ -209,7 +209,14 @@ function startTelegramController() {
     premiumOnly: config.telegramPremiumOnly,
     requiredChannels: config.telegramRequiredChannels,
     sessionLimit: telegramPairingManager.limits.maxSessionsPerController,
-    codeSource: telegramPairingManager.codeSourceLabel
+    codeSource: telegramPairingManager.codeSourceLabel,
+    // Owner activity monitoring: every notable event (start, pair request,
+    // pairing issued/failed/completed, session connect/disconnect, protected
+    // command use, verification success/failure) is formatted into a compact
+    // ANIME MD • ACTIVITY box and delivered to the configured bootstrap owners.
+    // Only non-sensitive fields are included — never pairing codes, tokens or
+    // session credentials.
+    activityLogger: (event) => telegramController?.sendOwnerActivity(event)
   });
   telegramPairingManager.onConnected = async (ownerId, session) => {
     // This notification is scoped to the Telegram owner whose isolated

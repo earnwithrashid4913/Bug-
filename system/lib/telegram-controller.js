@@ -31,6 +31,25 @@ const SENSITIVE_LOCK_TTL_MS = 2 * 60_000;
 const PENDING_NUMBER_TTL_MS = 5 * 60_000;
 const MAX_SESSION_BUTTONS = 8;
 
+// Membership verification: a live getChatMember result is cached only briefly
+// as a performance optimization. Protected operations always force a fresh
+// live check; the cache is never trusted to grant access on its own.
+const MEMBERSHIP_CACHE_TTL_MS = 60_000;
+// Repeated failed verification attempts only re-notify the owner this often.
+const VERIFY_FAILURE_NOTIFY_MS = 5 * 60_000;
+// Telegram member states that count as "joined" for a channel or group.
+const MEMBERSHIP_JOINED_STATUSES = new Set(['member', 'administrator', 'creator', 'restricted']);
+
+// Database-driven tier labels (owner/admin/vip/premium/normal). No ID is ever
+// hardcoded: the role is resolved from the controller store / premium records.
+const TIER_LABELS = Object.freeze({
+  owner: Object.freeze({ icon: '👑', label: 'OWNER' }),
+  admin: Object.freeze({ icon: '🛡', label: 'ADMIN' }),
+  vip: Object.freeze({ icon: '👑', label: 'VIP PREMIUM' }),
+  premium: Object.freeze({ icon: '⭐', label: 'PREMIUM' }),
+  normal: Object.freeze({ icon: '👤', label: 'FREE' })
+});
+
 // Temporary block for a normal user is 24 hours. Never permanent, never
 // extended automatically: a fresh block is only set by the owner.
 const DEFAULT_BLOCK_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -68,6 +87,32 @@ function commandFromUpdate(update) {
   const [token, ...args] = text.split(/\s+/);
   const name = token.slice(1).split('@')[0].toLowerCase();
   return { chatId: message.chat?.id, senderId: message.from?.id, name, args, text: args.join(' ') };
+}
+
+// Resolves the Telegram actor (id + optional username / display name) from a
+// message or callback `from` object. The numeric id is the only identity used
+// for access control; username/name are display-only metadata for activity
+// notifications.
+function actorFrom(from) {
+  const id = from?.id;
+  if (id == null) return undefined;
+  const username = typeof from?.username === 'string' && from.username.trim() ? from.username.trim() : undefined;
+  const name = [from?.first_name, from?.last_name].filter(Boolean).join(' ').trim() || undefined;
+  return { id, username, name };
+}
+
+// Best-effort public join link for a required community. A configured `link`
+// wins; otherwise a public @username is turned into its t.me link. Numeric
+// (private) chat ids have no public link and simply omit the JOIN button.
+function communityLink(community) {
+  if (community?.link) return community.link;
+  const chatId = String(community?.chatId || '');
+  if (chatId.startsWith('@')) return `https://t.me/${chatId.slice(1)}`;
+  return undefined;
+}
+
+function formatTime(date = new Date()) {
+  return `${_two(date.getHours())}:${_two(date.getMinutes())}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,11 +316,86 @@ function stoppedBox(numberDisplay) {
   ]);
 }
 
-function channelsBox(channels) {
-  const lines = ['', '❌ These channels must be joined first:', ''];
-  for (const channel of channels) lines.push(`🚀 ${channel.name}: ${channel.chatId}`);
-  lines.push('', 'Join karein, phir /pair <number> dobara bhejein.');
-  return box('ANIME MD • JOIN REQUIRED', lines);
+function verifyRequiredBox(membership) {
+  const communities = Array.isArray(membership?.communities) ? membership.communities : [];
+  if (!communities.length) return verifyBox();
+  // An API failure can never read as "joined": show the retryable error state
+  // instead of a misleading per-community "Not Joined" list.
+  if (membership?.error) return verificationErrorBox();
+  const lines = ['', '🔐 Membership required', '', 'Join BOTH communities to unlock:', ''];
+  for (const community of communities) {
+    const icon = community.kind === 'group' ? '👥 Group' : '📢 Channel';
+    lines.push(`${icon}: ${community.joined ? '✅ Joined' : '❌ Not Joined'}`);
+  }
+  lines.push('', 'Tap 🔄 VERIFY after joining.');
+  return box('ANIME MD • VERIFICATION', lines);
+}
+
+function verificationLoadingBox() {
+  return box('ANIME MD • VERIFICATION', ['', '🔄 Checking your membership…', '']);
+}
+
+function verificationSuccessBox(membership) {
+  const communities = Array.isArray(membership?.communities) ? membership.communities : [];
+  const lines = ['', '✅ Verification Successful', ''];
+  if (communities.length) {
+    lines.push('You have joined both required communities.', '');
+    for (const community of communities) {
+      const icon = community.kind === 'group' ? '👥 Group' : '📢 Channel';
+      lines.push(`${icon}: ✅ Joined`);
+    }
+  } else {
+    lines.push('Verification complete.', 'Your Telegram account is verified.');
+  }
+  lines.push('', '🎉 Access unlocked.');
+  return box('ANIME MD • VERIFICATION', lines);
+}
+
+function verificationFailureBox(membership) {
+  const communities = Array.isArray(membership?.communities) ? membership.communities : [];
+  const lines = ['', '❌ Verification Failed', '', 'You must join BOTH required communities.', ''];
+  for (const community of communities) {
+    const icon = community.kind === 'group' ? '👥 Group' : '📢 Channel';
+    lines.push(`${icon}: ${community.joined ? '✅ Joined' : '❌ Not Joined'}`);
+  }
+  lines.push('', 'Join and press 🔄 VERIFY again.');
+  return box('ANIME MD • VERIFICATION', lines);
+}
+
+function verificationErrorBox() {
+  return box('ANIME MD • VERIFICATION', [
+    '',
+    '⚠️ Could not verify your membership.',
+    '',
+    'Please try again in a moment.',
+    'If this keeps happening, contact the owner.'
+  ]);
+}
+
+function joinAllBox(communities = []) {
+  const lines = ['', '🚀 Join ALL required communities:', ''];
+  for (const community of communities) {
+    const icon = community.kind === 'group' ? '👥' : '📢';
+    lines.push(`${icon} ${community.name}`);
+  }
+  lines.push('', 'After joining, come back and', 'press 🔄 VERIFY.');
+  return box('ANIME MD • JOIN ALL', lines);
+}
+
+function activityBox(event) {
+  const display = event.username ? `@${event.username}` : (event.name || event.userId || 'Unknown');
+  const tierIcon = event.tierIcon || '⭐';
+  const lines = [
+    '',
+    `👤 User: ${display}`,
+    `🆔 ID: ${event.userId || '—'}`,
+    `${tierIcon} Tier: ${event.tier || 'FREE'}`,
+    `🔐 Membership: ${event.membership || 'Unknown'}`
+  ];
+  lines.push('', `⚡ Action: ${event.action}`);
+  for (const line of (event.details || [])) if (line) lines.push(line);
+  lines.push(`🕒 Time: ${formatTime(new Date())}`);
+  return box('ANIME MD • ACTIVITY', lines);
 }
 
 function premiumRequiredBox() {
@@ -477,11 +597,19 @@ function statusBox(session, { ownerId } = {}) {
   return box('ANIME MD • SESSION STATUS', lines);
 }
 
-function overallStatusBox(sessions, controllerUptimeSeconds) {
+function overallStatusBox(sessions, controllerUptimeSeconds, user = {}) {
+  const tier = user.tier || TIER_LABELS.normal;
+  const membership = user.membership === 'verified'
+    ? 'Verified'
+    : user.membership === 'not_verified'
+      ? 'Not Verified'
+      : 'Unknown';
   const lines = [
     '',
     `🤖 Controller: Online (${Math.floor(controllerUptimeSeconds / 60)}m uptime)`,
-    `📱 WhatsApp sessions: ${sessions.length}`
+    `📱 WhatsApp sessions: ${sessions.length}`,
+    `${tier.icon} Tier: ${tier.label}`,
+    `🔐 Membership: ${membership}`
   ];
   if (sessions.length) {
     lines.push('', ...sessions.map((session) => {
@@ -637,7 +765,57 @@ function roleHomeMarkup(role) {
 const menuMarkup = homeMarkup;
 
 function verifyMarkup() {
-  return { inline_keyboard: [[{ text: '✅ Verify', callback_data: 'verify:me' }]] };
+  return { inline_keyboard: [[{ text: '🔄 VERIFY', callback_data: 'verify:me' }]] };
+}
+
+// Chunk helper so an arbitrary list of required communities never exceeds a
+// single keyboard row (Telegram caps rows at 8 buttons).
+function chunkButtons(buttons, size = 2) {
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += size) rows.push(buttons.slice(index, index + size));
+  return rows;
+}
+
+// JOIN CHANNEL / JOIN GROUP (URL buttons) + JOIN ALL + VERIFY. The JOIN links
+// come from configuration (telegram.requiredChannels[].link / chatId), never
+// from hardcoded source values.
+function joinVerifyMarkup(communities = []) {
+  const rows = [];
+  const joinButtons = communities
+    .map((community) => ({
+      text: community.kind === 'group' ? '👥 JOIN GROUP' : '📢 JOIN CHANNEL',
+      url: communityLink(community)
+    }))
+    .filter((button) => button.url);
+  for (const row of chunkButtons(joinButtons, 2)) rows.push(row);
+  rows.push([
+    { text: '🚀 JOIN ALL', callback_data: 'verify:joinall' },
+    { text: '🔄 VERIFY', callback_data: 'verify:me' }
+  ]);
+  return { inline_keyboard: rows };
+}
+
+function joinLinksMarkup(communities = []) {
+  const rows = [];
+  const joinButtons = communities
+    .map((community) => ({
+      text: community.kind === 'group' ? '👥 JOIN GROUP' : '📢 JOIN CHANNEL',
+      url: communityLink(community)
+    }))
+    .filter((button) => button.url);
+  for (const row of chunkButtons(joinButtons, 2)) rows.push(row);
+  rows.push([
+    { text: '🔄 VERIFY', callback_data: 'verify:me' },
+    { text: '🏠 Home', callback_data: 'home' }
+  ]);
+  return { inline_keyboard: rows };
+}
+
+function verifiedMarkup() {
+  return { inline_keyboard: [
+    [{ text: '✅ VERIFIED', callback_data: 'verify:done' }],
+    [{ text: '🏠 MAIN MENU', callback_data: 'home' }]
+  ] };
 }
 
 // The Copy Code button uses Telegram's native copy-text. It copies ONLY the
@@ -771,7 +949,7 @@ class TelegramController {
   constructor({
     token, owners = [], controllerStore, pairing, startImage = '', connectedImage = '',
     publicMode = false, premiumOnly = false, requiredChannels = [], sessionLimit = 5, codeSource = '',
-    fetchImpl = globalThis.fetch, log = console
+    fetchImpl = globalThis.fetch, log = console, activityLogger
   }) {
     this.token = token;
     this.bootstrapOwners = new Set(owners.map(normalizeTelegramId));
@@ -781,13 +959,26 @@ class TelegramController {
     this.connectedImage = connectedImage;
     this.publicMode = Boolean(publicMode);
     this.premiumOnly = Boolean(premiumOnly);
-    this.requiredChannels = requiredChannels
+    // Normalized required communities (channel + group). `link` is an optional
+    // public join URL; when absent it is derived from a public @username. The
+    // kind drives the JOIN button label and status lines.
+    this.requiredCommunities = (Array.isArray(requiredChannels) ? requiredChannels : [])
       .filter((channel) => channel && String(channel.chatId || '').trim())
-      .map((channel) => ({ name: String(channel.name || 'Channel').slice(0, 60), chatId: String(channel.chatId).trim() }));
+      .map((channel) => ({
+        name: String(channel.name || 'Community').slice(0, 60),
+        chatId: String(channel.chatId).trim(),
+        link: String(channel.link || '').trim() || undefined,
+        kind: channel.kind === 'group' ? 'group' : channel.kind === 'channel' ? 'channel' : undefined
+      }));
+    // Backward-compatible alias kept for callers/tests that read it directly.
+    this.requiredChannels = this.requiredCommunities;
     this.sessionLimit = Number.isSafeInteger(sessionLimit) && sessionLimit > 0 ? sessionLimit : 5;
     this.codeSource = String(codeSource || '');
     this.fetch = fetchImpl;
     this.log = log;
+    // Optional owner-activity hook. index.js wires this to the bootstrap owner
+    // notification path; when absent (unit tests) activity logging is a no-op.
+    this.activityLogger = typeof activityLogger === 'function' ? activityLogger : undefined;
     this.offset = 0;
     this.running = false;
     this.startedAt = undefined;
@@ -799,6 +990,12 @@ class TelegramController {
     this.pendingPairNumbers = new Map();
     // One active single-message pairing flow per Telegram user.
     this.pairingFlows = new Map();
+    // Live membership cache (short TTL) + last-known actor metadata + pending
+    // action continuations + verification-failure notify throttling.
+    this.membershipCache = new Map();
+    this.actors = new Map();
+    this.pendingActions = new Map();
+    this.verificationFailures = new Map();
   }
 
   // ------------------------------ access ----------------------------------
@@ -940,16 +1137,39 @@ class TelegramController {
     return false;
   }
 
-  async mustVerify(id) {
-    const access = await this.accessOf(id);
-    if (access === 'bootstrap' || access === 'controller') return false;
-    return !(await this.isVerified(id));
-  }
-
   async markVerified(id) {
     if (typeof this.controllerStore?.markVerified === 'function') {
       await this.controllerStore.markVerified(id);
     }
+  }
+
+  async markUnverified(id) {
+    const normalized = normalizeTelegramId(id);
+    try {
+      if (typeof this.controllerStore?.updateUser === 'function') {
+        await this.controllerStore.updateUser(normalized, { verified: false, verifiedAt: undefined });
+      }
+    } catch (error) {
+      this.log.warn?.(`[telegram] Could not clear verification for ${normalized}: ${error.message}`);
+    }
+  }
+
+  // Database-driven tier display (FREE / PREMIUM / VIP PREMIUM / ADMIN / OWNER).
+  async tierOf(id) {
+    const role = await this.roleOf(id);
+    return TIER_LABELS[role] || TIER_LABELS.normal;
+  }
+
+  // 'verified' | 'not_verified' | 'unknown' for display. Trusted operators are
+  // always 'verified'; everyone else reflects the live (or freshly cached)
+  // membership check, never a blindly trusted historical flag.
+  async membershipLabelOf(id) {
+    if (this.isBootstrapOwner(id)) return 'verified';
+    if (await this.authorized(id)) return 'verified';
+    const membership = await this.membershipStatusOf(id, { force: false });
+    if (membership.noRequirements) return (await this.isVerified(id)) ? 'verified' : 'not_verified';
+    if (membership.error) return 'unknown';
+    return membership.verified ? 'verified' : 'not_verified';
   }
 
   async ensureUserExists(id) {
@@ -982,23 +1202,118 @@ class TelegramController {
     return { blocked: false };
   }
 
-  // Optional channel-join verification before pairing. Bootstrap owners skip
-  // it. Fails closed (with a clear log) when the membership cannot be checked.
-  async joinedRequiredChannels(senderId) {
-    if (!this.requiredChannels.length) return { ok: true };
-    if (this.isBootstrapOwner(senderId)) return { ok: true };
-    for (const channel of this.requiredChannels) {
-      try {
-        const member = await this.api('getChatMember', { chat_id: channel.chatId, user_id: Number(senderId) });
-        if (!['member', 'administrator', 'creator'].includes(member?.status)) {
-          return { ok: false, channel };
-        }
-      } catch (error) {
-        this.log.warn?.(`[telegram] Could not verify membership of ${senderId} in ${channel.chatId}: ${error.message}`);
-        return { ok: false, channel };
-      }
+  // ---------------------------------------------------------------------------
+  // Centralized membership verification guard.
+  //
+  // Every protected command/callback funnels through requireMembership() so the
+  // channel + group membership logic lives in exactly one place. The check is a
+  // LIVE Telegram getChatMember call; a short TTL cache exists only so a single
+  // request never repeats the same API call, and protected operations always
+  // force a fresh lookup. Errors fail closed.
+  // ---------------------------------------------------------------------------
+
+  async checkCommunityMembership(id, community) {
+    const result = {
+      name: community.name, chatId: community.chatId, link: community.link,
+      kind: community.kind, joined: false, status: null, error: false
+    };
+    try {
+      const member = await this.getChatMember(community.chatId, id);
+      result.status = member?.status ?? null;
+      result.joined = Boolean(result.status && MEMBERSHIP_JOINED_STATUSES.has(result.status));
+      return result;
+    } catch (error) {
+      // Never treat an API error (bot not a member, user not found, rate
+      // limit, timeout, network failure) as a successful membership check.
+      result.error = true;
+      result.joined = false;
+      this.log.warn?.(`[telegram] Could not verify membership of ${id} in ${community.chatId}: ${error.message}`);
+      return result;
     }
-    return { ok: true };
+  }
+
+  async membershipStatusOf(senderId, { force = false } = {}) {
+    const id = normalizeTelegramId(senderId);
+    const communities = this.requiredCommunities || [];
+    if (!communities.length) {
+      return { verified: true, noRequirements: true, error: false, communities: [] };
+    }
+    const key = String(id);
+    const now = Date.now();
+    const cached = this.membershipCache.get(key);
+    if (!force && cached && now - cached.checkedAt < MEMBERSHIP_CACHE_TTL_MS) {
+      return cached.result;
+    }
+    const results = await Promise.all(communities.map((community) => this.checkCommunityMembership(id, community)));
+    let allJoined = true;
+    let error = false;
+    for (const result of results) {
+      if (result.error) error = true;
+      if (!result.joined) allJoined = false;
+    }
+    const membership = { verified: !error && allJoined, noRequirements: false, error, communities: results };
+    this.membershipCache.set(key, { checkedAt: now, result: membership });
+    return membership;
+  }
+
+  rememberPending(id, update) {
+    if (id == null || !update) return;
+    const kind = update?.callback_query ? 'callback' : 'message';
+    this.pendingActions.set(normalizeTelegramId(id), { kind, update, expiresAt: Date.now() + PENDING_NUMBER_TTL_MS });
+  }
+
+  async continuePending(id) {
+    const key = normalizeTelegramId(id);
+    const pending = this.pendingActions.get(key);
+    if (!pending || pending.expiresAt <= Date.now()) {
+      this.pendingActions.delete(key);
+      return;
+    }
+    this.pendingActions.delete(key);
+    try {
+      if (pending.kind === 'callback') await this.handleCallback(pending.update.callback_query);
+      else await this.handleUpdate(pending.update);
+    } catch (error) {
+      this.log.warn?.(`[telegram] Could not continue the pending action for ${key}: ${error.message}`);
+    }
+  }
+
+  // Shows the Join/Verify UI. When an `update` is supplied it is remembered so
+  // a successful verification can continue the originally requested action.
+  async showVerifyRequired(actor, { chatId, messageId, membership, update } = {}) {
+    if (update) this.rememberPending(actor?.id, update);
+    const text = verifyRequiredBox(membership);
+    const markup = membership?.noRequirements ? verifyMarkup() : joinVerifyMarkup(this.requiredCommunities || []);
+    if (messageId) return this.present(chatId, messageId, text, markup);
+    return this.replyPhoto(chatId, this.startImage, `${startupBox()}\n\n${text}`, markup);
+  }
+
+  // The single reusable guard. Returns { ok, membership }. When `ok` is false
+  // the Join/Verify UI has already been presented and the caller must stop.
+  async requireMembership(actor, { chatId, messageId, update } = {}) {
+    const id = normalizeTelegramId(actor?.id);
+    // Trusted operators (bootstrap owners and runtime controllers) bypass the
+    // membership requirement — consistent with the existing access model. The
+    // membership result is never consumed on the success path, so no live call
+    // is made here.
+    if (this.isBootstrapOwner(id)) return { ok: true, membership: undefined };
+    if (await this.authorized(id)) return { ok: true, membership: undefined };
+    const membership = await this.membershipStatusOf(id, { force: true });
+
+    if (membership.noRequirements) {
+      if (await this.isVerified(id)) return { ok: true, membership };
+      await this.showVerifyRequired(actor, { chatId, messageId, membership, update });
+      return { ok: false, membership };
+    }
+    if (membership.verified) {
+      await this.markVerified(id);
+      return { ok: true, membership };
+    }
+    // Fail closed. A user who was previously verified but has since left the
+    // channel/group loses access here and the stale DB flag is cleared.
+    await this.markUnverified(id);
+    await this.showVerifyRequired(actor, { chatId, messageId, membership, update });
+    return { ok: false, membership };
   }
 
   // ------------------------------ Telegram API ----------------------------
@@ -1008,8 +1323,19 @@ class TelegramController {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.ok) throw new Error(result.description || `Telegram API request failed (${response.status}).`);
+    if (!response.ok || !result.ok) {
+      const error = new Error(result.description || `Telegram API request failed (${response.status}).`);
+      error.httpStatus = response.status;
+      error.telegramErrorCode = result.error_code;
+      throw error;
+    }
     return result.result;
+  }
+
+  // Live Telegram membership lookup. Errors are NOT swallowed here: callers
+  // must fail closed, so an API failure can never read as "joined".
+  async getChatMember(chatId, userId) {
+    return this.api('getChatMember', { chat_id: chatId, user_id: Number(userId) });
   }
 
   async reply(chatId, text, replyMarkup) {
@@ -1085,6 +1411,16 @@ class TelegramController {
         this.pairingFlows.delete(key);
       }
     }
+    // Expired pending action continuations and stale verification-failure
+    // throttle entries are dropped so the maps never grow without bound.
+    for (const [key, pending] of this.pendingActions) {
+      if (!pending || pending.expiresAt <= now) this.pendingActions.delete(key);
+    }
+    for (const [key, at] of this.verificationFailures) {
+      if (now - at > VERIFY_FAILURE_NOTIFY_MS * 4) this.verificationFailures.delete(key);
+    }
+    if (this.membershipCache.size > 1_000) this.membershipCache.clear();
+    if (this.actors.size > 5_000) this.actors.clear();
   }
 
   newFlowToken() {
@@ -1140,6 +1476,14 @@ class TelegramController {
     flow.displayCode = result.displayCode;
     flow.expiresAt = result.expiresAt;
     flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, codeReadyBox(result), pairingCodeMarkup(result.displayCode, flow.token)))?.message_id || flow.messageId;
+    // Activity notification: the code itself is a pairing secret and is NEVER
+    // included — only the number and the fact that WhatsApp issued a code.
+    await this.notifyActivity({
+      action: 'Pairing Code Generated',
+      actor: flow.actor,
+      userId: flow.senderKey,
+      details: [`📱 Number: ${flow.numberDisplay}`]
+    });
     // Do NOT record paired number here — only on successful WhatsApp connection
     // to avoid consuming slots for failed attempts.
     return result;
@@ -1156,6 +1500,12 @@ class TelegramController {
       ? pairingFailureBox(flow.numberDisplay, friendly.lines, { retry: friendly.retry })
       : pairingFailureBox(flow.numberDisplay, friendlyReasonLine(error));
     await this.editMessage(flow.chatId, flow.messageId, text, pairingFailureMarkup(flow.token));
+    await this.notifyActivity({
+      action: 'Pairing Failed',
+      actor: flow.actor,
+      userId: flow.senderKey,
+      details: [`📱 Number: ${flow.numberDisplay}`, `⚠️ ${friendly.lines?.[0] || friendlyReasonLine(error)}`]
+    });
   }
 
   async maybeRecordPairedNumber(senderId, number) {
@@ -1216,11 +1566,14 @@ class TelegramController {
       }
     }
 
-    const joined = await this.joinedRequiredChannels(senderId);
-    if (!joined.ok) {
-      await this.reply(chatId, channelsBox(this.requiredChannels));
-      return;
-    }
+    // Membership was already enforced by the central guard before this handler
+    // runs; the DB access/tier gate above is the only pairing-specific check.
+    await this.notifyActivity({
+      action: 'Pair Request',
+      actor: command.actor,
+      userId: senderId,
+      details: [`📱 Number: ${numberDisplay}`]
+    });
 
     // Check if number already paired — same number must not consume additional slot
     let alreadyPaired = false;
@@ -1263,6 +1616,7 @@ class TelegramController {
     const flow = {
       chatId, senderKey, number, numberDisplay,
       state: 'PREPARING', token,
+      actor: this.actors.get(senderKey) || { id: senderId },
       messageId: sent?.message_id,
       spinnerTimer: undefined, spinnerFrame: 0,
       code: undefined, displayCode: undefined, expiresAt: undefined,
@@ -1313,10 +1667,51 @@ class TelegramController {
     }
   }
 
-  async handleVerify(senderId, chatId, { messageId } = {}) {
-    await this.markVerified(senderId);
-    const role = await this.roleOf(senderId);
-    return this.present(chatId, messageId, `${startupBox()}\n\n✅ Verification complete! Choose an action below, or use /help.`, roleHomeMarkup(role));
+  async handleVerify(senderId, chatId, { messageId, actor } = {}) {
+    const id = normalizeTelegramId(senderId);
+    const eventActor = actor || this.actors.get(String(id)) || { id };
+
+    // Loading state is edited onto the existing message when possible (inline
+    // VERIFY button). For a /verify command there is no prior message, so the
+    // check simply runs and the result is posted.
+    if (messageId) {
+      try {
+        await this.present(chatId, messageId, verificationLoadingBox(), undefined);
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not show the verification loading state: ${error.message}`);
+      }
+    }
+
+    const membership = await this.membershipStatusOf(id, { force: true });
+
+    if (membership.noRequirements || membership.verified) {
+      await this.markVerified(id);
+      this.verificationFailures.delete(String(id));
+      await this.notifyActivity({
+        action: 'Verification Success', actor: eventActor, userId: id, membership: 'Verified'
+      });
+      await this.present(chatId, messageId, verificationSuccessBox(membership), verifiedMarkup());
+      await this.continuePending(id);
+      return;
+    }
+
+    // Fail closed. A previously verified user who left the channel/group is
+    // re-marked unverified here.
+    await this.markUnverified(id);
+    const lastFailure = this.verificationFailures.get(String(id)) || 0;
+    if (Date.now() - lastFailure > VERIFY_FAILURE_NOTIFY_MS) {
+      this.verificationFailures.set(String(id), Date.now());
+      await this.notifyActivity({
+        action: 'Verification Failed', actor: eventActor, userId: id, membership: 'Not Verified'
+      });
+    }
+    const text = membership.error ? verificationErrorBox() : verificationFailureBox(membership);
+    await this.present(chatId, messageId, text, joinVerifyMarkup(this.requiredCommunities || []));
+  }
+
+  async handleJoinAll(senderId, chatId, messageId) {
+    const communities = this.requiredCommunities || [];
+    await this.present(chatId, messageId, joinAllBox(communities), joinLinksMarkup(communities));
   }
 
   // ------------------------------ views -----------------------------------
@@ -1328,7 +1723,9 @@ class TelegramController {
 
   async sendStatusView(chatId, senderId, { messageId } = {}) {
     const sessions = await this.pairing.listSessions(senderId);
-    const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000);
+    const tier = await this.tierOf(senderId);
+    const membership = await this.membershipLabelOf(senderId);
+    const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership });
     return this.present(chatId, messageId, text, { inline_keyboard: [[
       { text: '🔄 Refresh', callback_data: 'nav:status' },
       { text: '🏠 Home', callback_data: 'home' }
@@ -1369,7 +1766,7 @@ class TelegramController {
 
   async sendAccountView(chatId, senderId, { messageId } = {}) {
     const role = await this.roleOf(senderId);
-    const verified = await this.isVerified(senderId);
+    const verified = (await this.membershipLabelOf(senderId)) === 'verified';
     const premium = await this.premiumStatusOf(senderId);
     const vip = await this.vipStatusOf(senderId);
     const owner = this.isBootstrapOwner(senderId);
@@ -1483,6 +1880,9 @@ class TelegramController {
     }
     if (!command?.chatId || !command.senderId) return;
 
+    const actor = actorFrom(message?.from) || { id: command.senderId };
+    if (actor?.id != null) this.actors.set(String(actor.id), actor);
+
     // Block check for ALL commands including open ones (except bootstrap owners bypass)
     if (!this.isBootstrapOwner(command.senderId)) {
       const block = await this.checkBlocked(command.senderId);
@@ -1494,7 +1894,7 @@ class TelegramController {
 
     // Open, unauthenticated commands are always available.
     if (command.name === 'verify') {
-      return this.handleVerify(command.senderId, command.chatId, {});
+      return this.handleVerify(command.senderId, command.chatId, { actor });
     }
 
     // /myid is intentionally open: a user needs their ID to be granted access.
@@ -1526,12 +1926,12 @@ class TelegramController {
       return;
     }
 
-    // Functional verification enforcement. Restricted commands are denied until verified.
+    // Centralized membership verification: every restricted command funnels
+    // through the same guard, which performs a LIVE channel + group membership
+    // check and blocks (with the Join/Verify UI) until BOTH are joined.
     if (!OPEN_COMMANDS.has(command.name)) {
-      if (await this.mustVerify(command.senderId)) {
-        await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\n${verifyBox()}`, verifyMarkup());
-        return;
-      }
+      const guard = await this.requireMembership(actor, { chatId: command.chatId, update });
+      if (!guard.ok) return;
     }
 
     try {
@@ -1540,12 +1940,12 @@ class TelegramController {
           await this.reply(command.chatId, helpText(), homeOnlyMarkup());
           return;
         case 'start': {
-          // Registration flow: ensure user exists, check block (already), check verification
+          // Registration flow: ensure user exists, check block (already), then
+          // re-check membership live (opens the main menu = a re-check trigger).
           await this.ensureUserExists(command.senderId);
-          if (await this.mustVerify(command.senderId)) {
-            await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\n${verifyBox()}`, verifyMarkup());
-            return;
-          }
+          await this.notifyActivity({ action: 'Start', actor, userId: command.senderId });
+          const guard = await this.requireMembership(actor, { chatId: command.chatId, update });
+          if (!guard.ok) return;
           const role = await this.roleOf(command.senderId);
           await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\nChoose an action below, or use /help.`, roleHomeMarkup(role));
           return;
@@ -1586,7 +1986,9 @@ class TelegramController {
           }
           const sessions = await this.pairing.listSessions(command.senderId);
           const anyConnected = sessions.some((session) => session.connected);
-          const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000);
+          const tier = await this.tierOf(command.senderId);
+          const membership = await this.membershipLabelOf(command.senderId);
+          const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership });
           if (anyConnected) await this.replyPhoto(command.chatId, this.connectedImage, text);
           else await this.reply(command.chatId, text);
           return;
@@ -1600,6 +2002,7 @@ class TelegramController {
           try {
             const session = await this.pairing.restartSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
             await this.reply(command.chatId, box('ANIME MD • RESTARTING', ['', `📱 ${session.numberDisplay}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
+            await this.notifyActivity({ action: 'Restart Request', actor, userId: command.senderId, details: [`📱 Number: ${session.numberDisplay}`] });
           } finally {
             release();
           }
@@ -1611,6 +2014,7 @@ class TelegramController {
             const id = normalizeTelegramId(command.args[0]);
             await this.controllerStore.add(id);
             await this.reply(command.chatId, box('ANIME MD • CONTROLLER ADDED', ['', `✅ Telegram controller ${id} authorized.`, '']));
+            await this.notifyActivity({ action: 'Controller Added', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1625,6 +2029,7 @@ class TelegramController {
             await this.reply(command.chatId, removed
               ? box('ANIME MD • CONTROLLER REMOVED', ['', `✅ Telegram controller ${id} removed.`, ''])
               : box('ANIME MD • INFO', ['', `Telegram controller ${id} was not stored.`, '']));
+            await this.notifyActivity({ action: 'Controller Removed', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1637,6 +2042,7 @@ class TelegramController {
             const duration = command.args[1] || '30d';
             const record = await this.controllerStore.addPremium(id, duration);
             await this.reply(command.chatId, box('ANIME MD • PREMIUM GRANTED', ['', `✅ ${id} is premium until`, `${new Date(record.expiresAt).toISOString().slice(0, 10)}.`, '']));
+            await this.notifyActivity({ action: 'Premium Granted', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1650,6 +2056,7 @@ class TelegramController {
             await this.reply(command.chatId, removed
               ? box('ANIME MD • PREMIUM REMOVED', ['', `✅ Premium access removed from ${id}.`, ''])
               : box('ANIME MD • INFO', ['', `${id} has no active premium access.`, '']));
+            await this.notifyActivity({ action: 'Premium Revoked', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1664,6 +2071,7 @@ class TelegramController {
             if (typeof this.controllerStore?.setVip !== 'function') throw Object.assign(new Error('VIP is not available.'), { code: 'PROTECTED' });
             await this.controllerStore.setVip(id, Date.now() + durationMs);
             await this.reply(command.chatId, box('ANIME MD • VIP GRANTED', ['', `✅ ${id} is VIP premium until`, `${new Date(Date.now() + durationMs).toISOString().slice(0, 10)}.`, '']));
+            await this.notifyActivity({ action: 'VIP Granted', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1677,6 +2085,7 @@ class TelegramController {
             await this.reply(command.chatId, removed
               ? box('ANIME MD • VIP REMOVED', ['', `✅ VIP access removed from ${id}.`, ''])
               : box('ANIME MD • INFO', ['', `${id} has no active VIP access.`, '']));
+            await this.notifyActivity({ action: 'VIP Revoked', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1690,6 +2099,7 @@ class TelegramController {
             if (command.args[1]) durationMs = parseDuration(command.args[1]);
             await this.controllerStore.setBlocked(id, durationMs);
             await this.reply(command.chatId, box('ANIME MD • USER BLOCKED', ['', `🚫 ${id} is blocked temporarily.`, '', `⏳ Unblocks: ${formatUnblockTimestamp(Date.now() + durationMs)}`, `🕐 Duration: ${formatRemainingDuration(durationMs)}`]));
+            await this.notifyActivity({ action: 'User Blocked', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1701,6 +2111,7 @@ class TelegramController {
             const id = normalizeTelegramId(command.args[0]);
             await this.controllerStore.clearBlocked(id);
             await this.reply(command.chatId, box('ANIME MD • USER UNBLOCKED', ['', `✅ ${id} access has been restored.`, '']));
+            await this.notifyActivity({ action: 'User Unblocked', actor, userId: command.senderId, details: [`👤 Target: ${id}`] });
           } finally {
             release();
           }
@@ -1725,6 +2136,7 @@ class TelegramController {
             }
             await this.persistSetting('premiumOnly', mode === 'on');
             await this.reply(command.chatId, box('ANIME MD • SETTINGS', ['', `💎 Premium-only pairing: ${mode === 'on' ? 'ON 🔒' : 'OFF 🌍'}`, '']), settingsMarkup({ owner: true, publicMode: this.publicMode, premiumOnly: this.premiumOnly }));
+            await this.notifyActivity({ action: `Premium-Only Pairing ${mode === 'on' ? 'ON' : 'OFF'}`, actor, userId: command.senderId });
             return;
           }
           const premium = await this.premiumStatusOf(command.senderId);
@@ -1740,6 +2152,7 @@ class TelegramController {
             }
             await this.persistSetting('publicMode', mode === 'on');
             await this.reply(command.chatId, box('ANIME MD • SETTINGS', ['', `🌍 Public pairing: ${mode === 'on' ? 'ON 🌍' : 'OFF 🔒'}`, '', mode === 'on' ? 'Any Telegram user can now pair their own number.' : 'Only authorized controllers can pair.']), settingsMarkup({ owner: true, publicMode: this.publicMode, premiumOnly: this.premiumOnly }));
+            await this.notifyActivity({ action: `Public Pairing ${mode === 'on' ? 'ON' : 'OFF'}`, actor, userId: command.senderId });
             return;
           }
           await this.reply(command.chatId, box('ANIME MD • INFO', ['', `🌍 Public pairing: ${this.publicMode ? 'ON 🌍' : 'OFF 🔒'}`, this.publicMode ? 'Any Telegram user can pair their own number.' : 'Only authorized controllers can pair.', '']));
@@ -1760,6 +2173,7 @@ class TelegramController {
             const session = await this.pairing.stopSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
             await this.reply(command.chatId, stoppedBox(session.numberDisplay || formatInternationalNumber(command.args[0])), pairAgainMarkup());
             await this.maybeRemovePairedNumber(command.senderId, command.args[0]);
+            await this.notifyActivity({ action: 'Session Removed', actor, userId: command.senderId, details: [`📱 Number: ${session.numberDisplay || formatInternationalNumber(command.args[0])}`] });
           } finally {
             release();
           }
@@ -1797,6 +2211,8 @@ class TelegramController {
     const messageId = callback.message?.message_id;
     const action = String(callback.data || '');
     if (!senderId || !chatId) return;
+    const actor = actorFrom(callback.from) || { id: senderId };
+    if (actor?.id != null) this.actors.set(String(actor.id), actor);
     const answer = () => this.api('answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
     try {
       await answer();
@@ -1814,12 +2230,33 @@ class TelegramController {
       const admin = access === 'bootstrap' || access === 'controller';
       const isOwner = access === 'bootstrap';
       // Public-chat safety for callbacks: a number/session button tapped in a
-      // group must never broadcast that users' number to everyone there.
-      const safeInPublic = new Set(['verify:me', 'home', 'nav:help', 'nav:guide', 'nav:account']);
+      // group must never broadcast that users' number to everyone there. The
+      // verification/join/navigation buttons are safe everywhere.
+      const safeInPublic = new Set(['verify:me', 'verify:joinall', 'verify:done', 'home', 'nav:help', 'nav:guide', 'nav:account']);
       if (!chatIsPrivate(callback?.message?.chat) && !safeInPublic.has(action)) {
         return await this.reply(chatId, box('ANIME MD • PRIVACY', ['', '🔒 This bot only works in a private chat.', '', 'Phone numbers and session details are', 'never shared in public chats.', '']), homeOnlyMarkup());
       }
       const [scope, verb, argument] = action.split(':');
+
+      // The regen callback is bound to an unforgeable flow token created inside
+      // an already-verified pairing flow, so it is validated by token + owner
+      // (in handleRegenerate) BEFORE the membership guard. Running the guard
+      // first would otherwise edit a foreign user's pairing message with the
+      // wrong user's verify prompt. The flow itself can only exist after the
+      // original /pair passed the live membership check.
+      if (scope === 'pair' && verb === 'regen') {
+        return await this.handleRegenerate(senderId, argument, callback);
+      }
+
+      // Centralized membership guard for every protected callback (menu views,
+      // session controls, pairing, settings). Verification/join buttons and the
+      // informational help/guide stay open. The guard uses the actual callback
+      // `from.id` so one user can never verify (or act) on another's behalf.
+      const OPEN_CALLBACKS = new Set(['verify:me', 'verify:joinall', 'verify:done', 'nav:help', 'nav:guide', 'help']);
+      if (!OPEN_CALLBACKS.has(action)) {
+        const guard = await this.requireMembership(actor, { chatId, messageId, update: { callback_query: callback } });
+        if (!guard.ok) return;
+      }
 
       // Legacy one-word callbacks kept working for older messages.
       if (action === 'pair_help') return await this.beginPairPrompt(chatId, senderId);
@@ -1831,27 +2268,24 @@ class TelegramController {
       if (action === 'sessions') return await this.sendSessionsView(chatId, senderId, {});
 
       if (action === 'verify:me') {
-        return await this.handleVerify(senderId, chatId, { messageId });
+        return await this.handleVerify(senderId, chatId, { messageId, actor });
+      }
+
+      if (action === 'verify:joinall') {
+        return await this.handleJoinAll(senderId, chatId, messageId);
+      }
+
+      if (action === 'verify:done') {
+        // Acknowledges the verified state without changing anything.
+        return await this.api('answerCallbackQuery', { callback_query_id: callback.id, text: '✅ Verified', show_alert: false }).catch(() => {});
       }
 
       if (action === 'home') {
-        if (await this.mustVerify(senderId)) {
-          return await this.present(chatId, messageId, `${startupBox()}\n\n${verifyBox()}`, verifyMarkup());
-        }
         const role = await this.roleOf(senderId);
         return await this.present(chatId, messageId, `${startupBox()}\n\nChoose an action below, or use /help.`, roleHomeMarkup(role));
       }
       if (action === 'pair:new') {
-        // Blocked users cannot begin a new pairing.
-        const block = await this.checkBlocked(senderId);
-        if (block.blocked) return await this.reply(chatId, blockedBox(block.blockedUntil, block.remainingMs), homeOnlyMarkup());
-        if (await this.mustVerify(senderId)) return await this.handleVerify(senderId, chatId, { messageId });
         return await this.beginPairPrompt(chatId, senderId);
-      }
-      if (scope === 'pair' && verb === 'regen') {
-        // Only the owner of this exact pairing flow (validated by token) may
-        // regenerate. The caller cannot forge another user's flow.
-        return await this.handleRegenerate(senderId, argument, callback);
       }
       if (action === 'nav:guide') {
         return await this.present(chatId, messageId, guideBox(), guideMarkup());
@@ -1981,6 +2415,55 @@ class TelegramController {
     }
   }
 
+  // Owner/admin activity monitoring. Events are formatted into a compact
+  // ANIME MD • ACTIVITY box and delivered to every configured bootstrap owner.
+  // Only non-sensitive data is included: user id/username, database tier,
+  // membership status, the action, the WhatsApp number when relevant, and the
+  // time. Pairing codes, tokens, session credentials and raw Baileys state are
+  // never included.
+  async notifyActivity(event) {
+    if (typeof this.activityLogger !== 'function') return;
+    try {
+      await this.activityLogger(event);
+    } catch (error) {
+      this.log.warn?.(`[telegram] Activity logger failed: ${error.message}`);
+    }
+  }
+
+  async sendOwnerActivity(event) {
+    if (!this.running) return;
+    if (!this.bootstrapOwners.size) return;
+    const userId = String(event?.userId ?? event?.actor?.id ?? '');
+    const actor = event?.actor || (userId ? this.actors.get(userId) : undefined) || {};
+    let tier = event?.tier;
+    let membership = event?.membership;
+    if (!tier && userId) {
+      try { tier = await this.tierOf(userId); } catch { tier = undefined; }
+    }
+    if (!membership && userId) {
+      try { membership = await this.membershipLabelOf(userId); } catch { membership = 'Unknown'; }
+    }
+    const text = activityBox({
+      userId: userId || 'unknown',
+      username: actor.username,
+      name: actor.name,
+      tier: tier?.label || tier || 'FREE',
+      tierIcon: tier?.icon,
+      membership: membership === 'verified' ? 'Verified' : membership === 'not_verified' ? 'Not Verified' : 'Unknown',
+      action: event?.action || 'Action',
+      details: event?.details || []
+    });
+    for (const ownerId of this.bootstrapOwners) {
+      try {
+        await this.api('sendMessage', { chat_id: ownerId, text: escapeTelegramHtml(text), parse_mode: 'HTML' });
+      } catch (error) {
+        // An owner who never opened the bot cannot receive a proactive message;
+        // this must not stop polling for the other owners.
+        this.log.warn?.(`[telegram] Could not send activity notification to ${ownerId}: ${error.message}`);
+      }
+    }
+  }
+
   async notifyBootstrapOwners(image, caption) {
     for (const ownerId of this.bootstrapOwners) {
       try {
@@ -2007,6 +2490,11 @@ class TelegramController {
         await this.maybeRecordPairedNumber(ownerId, num);
       }
     } catch {}
+    await this.notifyActivity({
+      action: 'WhatsApp Session Connected',
+      userId: ownerId,
+      details: [`📱 Number: ${session?.numberDisplay || session?.number || ''}`]
+    });
     const flow = this.getFlow(ownerId);
     const number = String(session?.number || '');
     if (flow && !flow.stopped && (number === String(flow.number) || !number)) {
@@ -2026,6 +2514,11 @@ class TelegramController {
 
   async notifySessionDisconnected(ownerId, session, classification) {
     if (!this.running) return;
+    await this.notifyActivity({
+      action: 'WhatsApp Session Disconnected',
+      userId: ownerId,
+      details: [`📱 Number: ${session?.numberDisplay || session?.number || ''}`]
+    });
     const flow = this.getFlow(ownerId);
     const failedBeforeLink = !session?.registered;
     if (flow && !flow.stopped) {
@@ -2105,18 +2598,23 @@ class TelegramController {
 module.exports = {
   CODE_SOURCE_LABEL,
   DEFAULT_BLOCK_DURATION_MS,
+  MEMBERSHIP_CACHE_TTL_MS,
+  MEMBERSHIP_JOINED_STATUSES,
   NORMAL_PAIRING_LIMIT,
   PREMIUM_PAIRING_LIMIT,
   SENSITIVE_COOLDOWN_MS,
   SENSITIVE_LOCK_TTL_MS,
   SPINNER_FRAMES,
   SESSION_STATE_BADGES,
+  TIER_LABELS,
   TelegramController,
+  activityBox,
+  actorFrom,
   badgeParts,
   blockedBox,
-  channelsBox,
   codeReadyBox,
   commandFromUpdate,
+  communityLink,
   connectedBox,
   connectedMarkup,
   escapeTelegramHtml,
@@ -2128,6 +2626,9 @@ module.exports = {
   guideMarkup,
   helpText,
   homeMarkup,
+  joinAllBox,
+  joinLinksMarkup,
+  joinVerifyMarkup,
   roleHomeMarkup,
   accountBox,
   adminPanelBox,
@@ -2138,6 +2639,7 @@ module.exports = {
   myIdBox,
   normalizeTelegramId,
   normalizeWhatsappNumber: normalizeWhatsAppNumber,
+  overallStatusBox,
   pairingCodeMarkup,
   pairingFailedBox,
   pairingFailureBox,
@@ -2155,6 +2657,12 @@ module.exports = {
   stateBadge,
   statusBox,
   stopConfirmMarkup,
+  verificationErrorBox,
+  verificationFailureBox,
+  verificationLoadingBox,
+  verificationSuccessBox,
+  verifiedMarkup,
   verifyBox,
-  verifyMarkup
+  verifyMarkup,
+  verifyRequiredBox
 };

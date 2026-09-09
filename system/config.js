@@ -74,11 +74,25 @@ function loadConfig(source = userConfig) {
   const telegramRequiredChannels = (Array.isArray(telegram.requiredChannels) ? telegram.requiredChannels : [])
     .map((channel) => ({
       name: string(channel?.name, 'telegram.requiredChannels[].name', { required: false }) || 'Channel',
-      chatId: string(channel?.chatId, 'telegram.requiredChannels[].chatId')
+      chatId: string(channel?.chatId, 'telegram.requiredChannels[].chatId'),
+      link: string(channel?.link, 'telegram.requiredChannels[].link', { required: false }),
+      kind: channel?.kind === 'group' ? 'group' : channel?.kind === 'channel' ? 'channel' : undefined
     }))
     .filter((channel) => channel.chatId && !PLACEHOLDER.test(channel.chatId));
   if (telegramRequiredChannels.some((channel) => channel.chatId.startsWith('@') ? channel.chatId.length < 5 : !/^-100\d{4,}$/.test(channel.chatId))) {
     throw configurationError('telegram.requiredChannels entries must be a @username or a numeric -100 channel ID.');
+  }
+  if (telegramRequiredChannels.some((channel) => channel.kind !== undefined && channel.kind !== 'channel' && channel.kind !== 'group')) {
+    throw configurationError('telegram.requiredChannels[].kind must be "channel" or "group".');
+  }
+  for (const channel of telegramRequiredChannels) {
+    if (!channel.link) continue;
+    try {
+      const parsed = new URL(channel.link);
+      if (parsed.protocol !== 'https:') throw new Error();
+    } catch {
+      throw configurationError(`telegram.requiredChannels[].link ("${channel.link}") must be a valid HTTPS URL.`);
+    }
   }
   const baseDelay = integer(deployment.reconnectBaseDelayMs, 'deployment.reconnectBaseDelayMs', 3000, 1000, 300000);
   const maxDelay = integer(deployment.reconnectMaxDelayMs, 'deployment.reconnectMaxDelayMs', 60000, baseDelay, 900000);
