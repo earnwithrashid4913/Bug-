@@ -928,12 +928,24 @@ function membershipApi(statusByChat) {
     if (method === 'getChatMember') {
       const key = String(payload.chat_id);
       const entry = statusByChat.get(key);
+      // { error: { status, description } } reproduces a real Telegram API error.
+      if (entry && typeof entry === 'object' && entry.error) {
+        const httpStatus = Number(entry.error.status || 500);
+        return {
+          ok: false,
+          status: httpStatus,
+          json: async () => ({ ok: false, error_code: httpStatus, description: entry.error.description })
+        };
+      }
+      // Backward-compatible plain Error -> transient (no httpStatus).
       if (entry instanceof Error) {
         return { ok: false, json: async () => ({ ok: false, description: entry.message }) };
       }
-      return { ok: true, json: async () => ({ ok: true, result: { status: entry || 'left' } }) };
+      // String status or a ChatMember-like object ({ status, is_member }).
+      const member = typeof entry === 'string' ? { status: entry || 'left' } : (entry || { status: 'left' });
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: member }) };
     }
-    return { ok: true, json: async () => ({ ok: true, result: payload }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true, result: payload }) };
   };
   return { calls, fetchImpl };
 }
@@ -985,23 +997,39 @@ test('leaving a community after verification revokes access on the next live che
   assert.equal(await store.isVerified('11'), false, 'the stale verified flag is cleared');
 });
 
-test('a Telegram API failure during verification fails closed', async () => {
+test('a Telegram permission failure fails closed and tells the bot operator what is wrong', async () => {
   const statusByChat = new Map([
-    ['@fixaupdates', new Error('Forbidden: bot is not a member of the chat')],
-    ['@FixaDevGBGroup', new Error('Forbidden: bot is not a member of the chat')]
+    ['@fixaupdates', { error: { status: 403, description: 'Forbidden: bot is not a member of the chat' } }],
+    ['@FixaDevGBGroup', { error: { status: 403, description: 'Forbidden: bot is not a member of the chat' } }]
   ]);
-  const { fetchImpl } = membershipApi(statusByChat);
+  const { calls, fetchImpl } = membershipApi(statusByChat);
   const { controller, replies } = makeController({
     publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: memoryUserStore()
   });
 
+  // The verify result clearly names the bot/permission problem, not the user.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
-  assert.match(replies.at(-1).text, /Could not verify your membership/);
+  const verify = replies.at(-1).text;
+  assert.match(verify, /VERIFICATION/);
+  assert.match(verify, /Membership verification could not be completed/);
+  assert.match(verify, /The bot could not read membership status for:/);
+  assert.match(verify, /Fixa Updates/);
+  assert.match(verify, /The bot has the required Telegram permissions/);
+  assert.doesNotMatch(verify, /Please try again in a moment/);
+  // No misleading "could not verify" generic text either.
+  assert.doesNotMatch(verify, /Could not verify your membership/);
+  // Permission errors are NOT retried: the single /verify performs exactly one
+  // getChatMember call per configured community (2 communities -> 2 calls).
+  const verifyCalls = calls.filter((call) => call.method === 'getChatMember');
+  assert.equal(verifyCalls.length, 2, 'a permission error is not retried');
 
   // Protected commands refuse (fail closed) rather than granting on error.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   const blocked = replies.at(-1).caption || replies.at(-1).text;
-  assert.match(blocked, /Could not verify your membership/);
+  assert.match(blocked, /The bot could not read membership status for:/);
+  // The /pair membership guard also makes one call per community, never a retry.
+  const totalCalls = calls.filter((call) => call.method === 'getChatMember');
+  assert.equal(totalCalls.length, 4, 'every membership check is one call per community, never retried');
 });
 
 test('inline VERIFY shows loading, then success with ✅ VERIFIED and 🏠 MAIN MENU', async () => {
@@ -1136,4 +1164,163 @@ test('sendOwnerActivity formats a compact activity box for every bootstrap owner
   assert.match(text, /⚡ Action: Pair Request/);
   assert.match(text, /🕒 Time:/);
   assert.doesNotMatch(text, /token|CODE|creds/i);
+});
+
+// ---------------------------------------------------------------------------
+// Membership verification regression tests: status interpretation, required
+// ALL semantics, public @username lookups, fresh VERIFY, bounded retry, and a
+// normal (non-owner) user being able to verify.
+// ---------------------------------------------------------------------------
+
+test('valid Telegram member statuses are verified', async () => {
+  const cases = [
+    { label: 'creator', member: { status: 'creator' } },
+    { label: 'administrator', member: { status: 'administrator' } },
+    { label: 'member', member: { status: 'member' } },
+    { label: 'restricted + is_member:true', member: { status: 'restricted', is_member: true } }
+  ];
+  for (const { label, member } of cases) {
+    const statusByChat = new Map([['@animemd', member]]);
+    const { fetchImpl } = membershipApi(statusByChat);
+    const store = memoryUserStore();
+    const { controller, replies } = makeController({
+      publicMode: true,
+      requiredChannels: [{ name: 'ANIME MD Updates', chatId: '@animemd', link: 'https://t.me/animemd', kind: 'channel' }],
+      fetchImpl, controllerStore: store
+    });
+    await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+    assert.match(replies.at(-1).text, /Verification Successful/, `${label} should verify`);
+    assert.equal(await store.isVerified('11'), true, `${label} should be marked verified`);
+  }
+});
+
+test('not-a-member statuses are rejected', async () => {
+  const cases = [
+    { label: 'left', member: { status: 'left' } },
+    { label: 'kicked', member: { status: 'kicked' } },
+    { label: 'restricted + is_member:false', member: { status: 'restricted', is_member: false } }
+  ];
+  for (const { label, member } of cases) {
+    const statusByChat = new Map([['@animemd', member]]);
+    const { fetchImpl } = membershipApi(statusByChat);
+    const store = memoryUserStore();
+    const { controller, replies } = makeController({
+      publicMode: true,
+      requiredChannels: [{ name: 'ANIME MD Updates', chatId: '@animemd', kind: 'channel' }],
+      fetchImpl, controllerStore: store
+    });
+    await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+    assert.match(replies.at(-1).text, /Verification Failed/, `${label} should be rejected`);
+    assert.equal(await store.isVerified('11'), false, `${label} should not be verified`);
+  }
+});
+
+test('a not-a-member user is told exactly which required community is missing', async () => {
+  const statusByChat = new Map([['@fixaupdates', 'member'], ['@FixaDevGBGroup', 'left']]);
+  const { fetchImpl } = membershipApi(statusByChat);
+  const { controller, replies } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: memoryUserStore()
+  });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  const text = replies.at(-1).text;
+  assert.match(text, /You have not joined all required/);
+  assert.match(text, /Channel: ✅ Joined/);
+  assert.match(text, /Group: ❌ Not Joined/);
+  assert.match(text, /🔄 VERIFY again/);
+});
+
+test('@username community lookups pass the exact public username to getChatMember', async () => {
+  const statusByChat = new Map([['@fixaupdates', 'member'], ['@FixaDevGBGroup', 'member']]);
+  const { calls, fetchImpl } = membershipApi(statusByChat);
+  const { controller } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: memoryUserStore()
+  });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  const memberCalls = calls.filter((call) => call.method === 'getChatMember');
+  assert.equal(memberCalls.length, 2);
+  const chatIds = memberCalls.map((call) => call.payload.chat_id).sort();
+  assert.deepEqual(chatIds, ['@FixaDevGBGroup', '@fixaupdates']);
+});
+
+test('an explicit VERIFY forces a fresh check so a newly joined user is not blocked by stale state', async () => {
+  const statusByChat = new Map([['@fixaupdates', 'left'], ['@FixaDevGBGroup', 'left']]);
+  const { calls, fetchImpl } = membershipApi(statusByChat);
+  const store = memoryUserStore();
+  const { controller, replies } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: store
+  });
+  // First check: not a member, rejected.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification Failed/);
+  assert.equal(await store.isVerified('11'), false);
+  const before = calls.filter((call) => call.method === 'getChatMember').length;
+
+  // The user joins both communities, then presses VERIFY immediately.
+  statusByChat.set('@fixaupdates', 'member');
+  statusByChat.set('@FixaDevGBGroup', 'member');
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification Successful/);
+  assert.equal(await store.isVerified('11'), true);
+  const after = calls.filter((call) => call.method === 'getChatMember').length;
+  assert.ok(after > before, 'VERIFY re-ran a fresh membership lookup');
+});
+
+test('a transient Telegram failure is retried and verification succeeds once it recovers', async () => {
+  const getMemberChecks = { '@fixaupdates': 0, '@FixaDevGBGroup': 0 };
+  const fetchImpl = async (url, init) => {
+    const method = url.split('/').pop();
+    if (method !== 'getChatMember') return { ok: true, status: 200, json: async () => ({ ok: true, result: JSON.parse(init.body || '{}') }) };
+    const chatId = String(JSON.parse(init.body).chat_id);
+    getMemberChecks[chatId] = (getMemberChecks[chatId] || 0) + 1;
+    if (getMemberChecks[chatId] <= 2) {
+      return { ok: false, status: 429, json: async () => ({ ok: false, error_code: 429, description: 'Too many requests' }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, result: { status: 'member' } }) };
+  };
+  const { controller, replies } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: memoryUserStore()
+  });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification Successful/);
+  assert.ok(getMemberChecks['@fixaupdates'] > 2, 'the channel check was retried after a 429');
+  assert.ok(getMemberChecks['@FixaDevGBGroup'] > 2, 'the group check was retried after a 429');
+});
+
+test('a persistent transient failure is retried a bounded number of times then fails closed', async () => {
+  let memberCalls = 0;
+  const fetchImpl = async (url, init) => {
+    const method = url.split('/').pop();
+    if (method !== 'getChatMember') return { ok: true, status: 200, json: async () => ({ ok: true, result: JSON.parse(init.body || '{}') }) };
+    memberCalls += 1;
+    return { ok: false, status: 429, json: async () => ({ ok: false, error_code: 429, description: 'Too many requests' }) };
+  };
+  const { controller, replies } = makeController({
+    publicMode: true,
+    requiredChannels: [{ name: 'ANIME MD Updates', chatId: '@animemd', kind: 'channel' }],
+    fetchImpl, controllerStore: memoryUserStore()
+  });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  const text = replies.at(-1).text;
+  assert.match(text, /The bot could not verify membership right now/);
+  assert.match(text, /Please try again shortly/);
+  // The channel is retried exactly MEMBERSHIP_RETRY_ATTEMPTS times, never forever.
+  assert.equal(memberCalls, 3);
+});
+
+test('a completely normal user can verify and is not blocked by owner/admin-only logic', async () => {
+  const statusByChat = new Map([['@fixaupdates', 'member'], ['@FixaDevGBGroup', 'member']]);
+  const { fetchImpl } = membershipApi(statusByChat);
+  const store = memoryUserStore();
+  const { controller, replies } = makeController({
+    publicMode: true, requiredChannels: FIXA_COMMUNITIES, fetchImpl, controllerStore: store
+  });
+  // User 42 is not an owner, not a controller, not premium — a normal user.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/start' } });
+  const result = replies.at(-1);
+  const intro = result.caption || result.text;
+  assert.match(intro, /𝙂𝙊𝙅𝙊 𝙄𝙎 𝙃𝙀𝙍𝙀\./);
+  assert.equal(await store.isVerified('42'), true, 'a normal user who is a member is verified');
+  // The normal user can then use a protected command.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/sessions' } });
+  assert.match(replies.at(-1).text, /ANIME MD • SESSIONS/);
 });
