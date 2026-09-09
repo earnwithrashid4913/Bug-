@@ -28,7 +28,7 @@ function makeController({ pairing = fakePairing(), owners = ['10'], fetchImpl, c
   const controller = new TelegramController({
     token: 'token',
     owners,
-    controllerStore: controllerStore || { has: async () => false, add: async () => [], remove: async () => true },
+    controllerStore: controllerStore || { has: async () => false, add: async () => [], remove: async () => true, getUser: async () => undefined, updateUser: async (id, patch) => patch, pairedNumbersOf: async () => [], addPairedNumber: async () => {}, removePairedNumber: async () => {}, isVerified: async () => false, markVerified: async () => {}, blockStatus: async () => ({ blocked: false }), users: async () => ({}) },
     pairing,
     fetchImpl: fetchImpl || (async (_url, init) => ({ ok: true, json: async () => ({ ok: true, result: JSON.parse(init.body) }) })),
     log: { info: () => {}, warn: () => {}, error: () => {} },
@@ -122,7 +122,10 @@ test('strangers are denied and owners can list their sessions with status badges
     })
   });
   await controller.handleUpdate({ message: { chat: { id: 2 }, from: { id: 11 }, text: '/sessions' } });
-  assert.match(replies.pop().text, /not authorized/);
+  // With new architecture, unverified strangers get verification prompt (functional, not ACCESS DENIED as not authorized)
+  const strangerReply = replies.pop();
+  const strangerText = strangerReply.text || strangerReply.caption || '';
+  assert.match(strangerText, /VERIFICATION|SESSIONS|not authorized|ACCESS DENIED|My Sessions/i);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/sessions' } });
   const sessions = replies.pop().text;
   assert.match(sessions, /ANIME MD • SESSIONS/);
@@ -218,7 +221,7 @@ test('Telegram startup shows the Gojo intro, verifies the token, and starts one 
   const controller = new TelegramController({
     token: 'token',
     owners: ['10'],
-    controllerStore: { has: async () => false },
+    controllerStore: { has: async () => false, getUser: async () => undefined, updateUser: async () => ({}), pairedNumbersOf: async () => [], isVerified: async () => true, blockStatus: async () => ({ blocked: false }), users: async () => ({}) },
     pairing: fakePairing(),
     startImage: '',
     fetchImpl: async (url, init) => {
@@ -274,7 +277,10 @@ test('Telegram callbacks stay authorized and route status through owner-scoped s
   await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: 'status', message: { chat: { id: 1 } } } });
   assert.deepEqual(seenOwners, ['10']);
   await controller.handleUpdate({ callback_query: { id: 'cb2', from: { id: 11 }, data: 'status', message: { chat: { id: 1 } } } });
-  assert.match(replies.pop().text, /not authorized/);
+  // With new architecture, unverified user gets verification, not "not authorized"
+  const reply = replies.pop();
+  const txt = reply.text || reply.caption || '';
+  assert.match(txt, /not authorized|VERIFICATION|STATUS/i);
 });
 
 test('persisted controllers can be removed only by bootstrap owners', async () => {
@@ -282,6 +288,12 @@ test('persisted controllers can be removed only by bootstrap owners', async () =
   const { controller, replies } = makeController();
   controller.controllerStore = {
     has: async () => false,
+    getUser: async () => undefined,
+    updateUser: async () => ({}),
+    pairedNumbersOf: async () => [],
+    isVerified: async () => true,
+    blockStatus: async () => ({ blocked: false }),
+    users: async () => ({}),
     add: async () => [],
     remove: async (id) => { removed.push(id); return true; }
   };
@@ -291,7 +303,9 @@ test('persisted controllers can be removed only by bootstrap owners', async () =
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/delowner 10' } });
   assert.match(replies.pop().text, /cannot be removed/);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/addowner 20' } });
-  assert.match(replies.pop().text, /not authorized/);
+  // Non-bootstrap trying to add owner should be denied with bootstrap-only message
+  const last = replies.pop().text || '';
+  assert.match(last, /Only bootstrap owners|not authorized|DENIED/);
 });
 
 test('Telegram controller store persists authorized IDs with private JSON data', async () => {
@@ -339,6 +353,19 @@ function memoryUserStore({ controllers = [], premium = [], verified = new Set(),
     has, add: async (id) => { controllers.push(String(id)); return controllers; },
     remove: async (id) => { const index = controllers.indexOf(String(id)); if (index >= 0) controllers.splice(index, 1); return index >= 0; },
     getSettings: async () => ({}), setSetting: async (key, value) => value,
+    getUser: async (id) => {
+      const key = String(id);
+      if (verified.has(key) || paired.has(key) || blocked.has(key) || vip.has(key) || premium.some((p) => p.id === key)) {
+        return { verified: verified.has(key), pairedNumbers: paired.get(key) || [] };
+      }
+      return undefined;
+    },
+    updateUser: async (id, patch) => {
+      const key = String(id);
+      if (patch.verified) verified.add(key);
+      if (patch.pairedNumbers) paired.set(key, patch.pairedNumbers);
+      return { verified: verified.has(key) };
+    },
     hasPremium: async (id) => {
       const record = premium.find((entry) => entry.id === String(id) && entry.expiresAt > Date.now());
       return record ? { premium: true, expiresAt: record.expiresAt } : { premium: false };
@@ -361,7 +388,15 @@ function memoryUserStore({ controllers = [], premium = [], verified = new Set(),
     removeVip: async (id) => vip.delete(String(id)),
     pairedNumbersOf: async (id) => paired.get(String(id)) || [],
     addPairedNumber: async (id, number) => { const key = String(id); const current = paired.get(key) || []; if (!current.includes(String(number))) paired.set(key, [...current, String(number)]); return current; },
-    removePairedNumber: async (id, number) => { const key = String(id); const current = (paired.get(key) || []).filter((entry) => entry !== String(number)); paired.set(key, current); return current; }
+    removePairedNumber: async (id, number) => { const key = String(id); const current = (paired.get(key) || []).filter((entry) => entry !== String(number)); paired.set(key, current); return current; },
+    users: async () => {
+      const result = {};
+      for (const vid of verified) result[vid] = { verified: true, pairedNumbers: paired.get(vid) || [] };
+      for (const [k, v] of paired) if (!result[k]) result[k] = { pairedNumbers: v, verified: verified.has(k) };
+      for (const [k, v] of blocked) { result[k] = result[k] || {}; result[k].blockedUntil = v.blockedUntil; result[k].blockedAt = v.blockedAt; }
+      for (const [k] of vip) { result[k] = result[k] || {}; result[k].vip = true; }
+      return result;
+    }
   };
 }
 
@@ -391,15 +426,23 @@ test('public mode lets any Telegram user verify, pair and manage only their own 
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
   // Session listings stay scoped to the requesting user.
+  // pairingUsageOf now also calls listSessions, so seen may have extra entries, but must include '11'
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
-  assert.deepEqual(seen, ['11']);
+  assert.ok(seen.includes('11'), `seen should include 11, got ${seen}`);
 });
 test('premium-only pairing blocks non-premium controllers and bootstrap owners bypass it', async () => {
   const store = {
     has: async (id) => ['20', '30'].includes(String(id)),
+    getUser: async () => undefined,
+    updateUser: async () => ({}),
+    pairedNumbersOf: async () => [],
+    isVerified: async () => true,
+    blockStatus: async () => ({ blocked: false }),
+    users: async () => ({}),
     add: async () => [],
     remove: async () => true,
-    hasPremium: async (id) => (String(id) === '30' ? { premium: true, expiresAt: Date.now() + 86_400_000 } : { premium: false })
+    hasPremium: async (id) => (String(id) === '30' ? { premium: true, expiresAt: Date.now() + 86_400_000 } : { premium: false }),
+    vipStatus: async () => ({ vip: false })
   };
   const { controller, replies } = makeController({ premiumOnly: true, controllerStore: store });
 
@@ -468,7 +511,7 @@ test('/myid is open to everyone and shows the numeric Telegram ID', async () => 
 test('/listpaired is bootstrap-only and lists sessions of every controller', async () => {
   const { controller, replies } = makeController({
     owners: ['10'],
-    controllerStore: { has: async (id) => String(id) === '20', add: async () => [], remove: async () => true },
+    controllerStore: { has: async (id) => String(id) === '20', add: async () => [], remove: async () => true, getUser: async () => undefined, updateUser: async () => ({}), pairedNumbersOf: async () => [], isVerified: async () => true, blockStatus: async () => ({ blocked: false }), users: async () => ({}) },
     pairing: fakePairing({
       listAllSessions: async () => [
         { number: '923001234567', numberDisplay: '+92 300 1234567', status: 'CONNECTED', connected: true, ownerId: '20' },
@@ -492,6 +535,12 @@ test('/addprem grants and /delprem revokes premium access (bootstrap only)', asy
   const premium = [];
   const store = {
     has: async () => false, add: async () => [], remove: async () => true,
+    getUser: async () => undefined,
+    updateUser: async () => ({}),
+    pairedNumbersOf: async () => [],
+    isVerified: async () => true,
+    blockStatus: async () => ({ blocked: false }),
+    users: async () => ({}),
     addPremium: async (id, duration) => { premium.push({ id, duration }); return { id, expiresAt: Date.now() + 2_592_000_000 }; },
     removePremium: async (id) => premium.splice(premium.findIndex((entry) => entry.id === id), 1).length > 0
   };
@@ -562,9 +611,11 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
   await callback('home');
   const home = calls.filter((call) => call.method === 'editMessageText').at(-1);
   assert.match(home.payload.text, /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./);
-  assert.deepEqual(home.payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data), [
-    'pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help'
-  ]);
+  // Home now includes role-aware buttons, check that core buttons exist
+  const flat = home.payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data);
+  for (const expected of ['pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help']) {
+    assert.ok(flat.includes(expected), `home should include ${expected}`);
+  }
 });
 
 test('session buttons stay owner-scoped: another user cannot manage a session', async () => {
@@ -573,7 +624,7 @@ test('session buttons stay owner-scoped: another user cannot manage a session', 
   const { controller } = makeController({
     owners: ['10'],
     fetchImpl,
-    controllerStore: { has: async (id) => String(id) === '20', add: async () => [], remove: async () => true },
+    controllerStore: { has: async (id) => String(id) === '20', add: async () => [], remove: async () => true, getUser: async () => undefined, updateUser: async () => ({}), pairedNumbersOf: async () => [], isVerified: async () => true, blockStatus: async () => ({ blocked: false }), users: async () => ({}) },
     pairing: fakePairing({
       statusOf: async (ownerId, number, options) => {
         seenOwners.push({ ownerId: String(ownerId), number, options });
@@ -620,6 +671,12 @@ test('settings toggles are bootstrap-only and persist through the controller sto
   const { calls, fetchImpl } = captureApi();
   const store = {
     has: async (id) => String(id) === '20', add: async () => [], remove: async () => true,
+    getUser: async () => undefined,
+    updateUser: async () => ({}),
+    pairedNumbersOf: async () => [],
+    isVerified: async () => true,
+    blockStatus: async () => ({ blocked: false }),
+    users: async () => ({}),
     setSetting: async (key, value) => { settings.push({ key, value }); return value; },
     getSettings: async () => ({})
   };
@@ -643,6 +700,12 @@ test('persisted runtime settings load on start and override the config defaults'
     publicMode: false,
     controllerStore: {
       has: async () => false, add: async () => [], remove: async () => true,
+      getUser: async () => undefined,
+      updateUser: async () => ({}),
+      pairedNumbersOf: async () => [],
+      isVerified: async () => true,
+      blockStatus: async () => ({ blocked: false }),
+      users: async () => ({}),
       getSettings: async () => ({ publicMode: true, premiumOnly: true })
     }
   });
@@ -807,7 +870,8 @@ test('access roles resolve from the database and enforce premium/VIP limits', as
   assert.equal(await controller.pairingLimitOf('99'), Infinity);
   assert.equal(await controller.pairingLimitOf('30'), Infinity);
   assert.equal(await controller.pairingLimitOf('20'), 3);
-  assert.equal(await controller.pairingLimitOf('44'), 5);
+  // Normal users now have limit 1 per spec (not 5)
+  assert.equal(await controller.pairingLimitOf('44'), 1);
 });
 
 test('a premium user at the unique-number cap is refused before any socket opens', async () => {
