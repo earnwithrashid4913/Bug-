@@ -14,10 +14,16 @@
 //   public    — when public pairing is enabled, any Telegram user may pair
 //               and manage their OWN sessions. Never anyone else's.
 //
-// Interactive surface: a dashboard with inline buttons, a guided pairing flow,
-// per-session management, and a settings page. Every button has a real
-// handler; ownership is always re-resolved through the pairing manager.
+// The pairing lifecycle uses a SINGLE Telegram message. The PREPARING box is
+// sent once, then that same message is edited through LOADING → PAIRING CODE →
+// WAITING → SUCCESS, or FAILED. Only the /start intro is a separate message.
+// This avoids Telegram message spam and keeps the chat clean.
+//
+// Interactive surface: a dashboard with inline buttons, a guided single-message
+// pairing flow, per-session management, and a settings page. Every button has a
+// real handler; ownership is always re-resolved through the pairing manager.
 
+const crypto = require('node:crypto');
 const TELEGRAM_API = 'https://api.telegram.org';
 const POLL_TIMEOUT_SECONDS = 25;
 const SENSITIVE_COOLDOWN_MS = 20_000;
@@ -25,7 +31,19 @@ const SENSITIVE_LOCK_TTL_MS = 2 * 60_000;
 const PENDING_NUMBER_TTL_MS = 5 * 60_000;
 const MAX_SESSION_BUTTONS = 8;
 
+// Temporary block for a normal user is 24 hours. Never permanent, never
+// extended automatically: a fresh block is only set by the owner.
+const DEFAULT_BLOCK_DURATION_MS = 24 * 60 * 60 * 1000;
+// Premium users may pair up to this many unique numbers; VIP is unlimited.
+const PREMIUM_PAIRING_LIMIT = 3;
+
+// Lightweight Telegram loading animation frames. The single pairing message is
+// edited with these until the code is ready, the link succeeds, or it fails.
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER_INTERVAL_MS = 800;
+
 const { formatInternationalNumber, normalizeWhatsAppNumber } = require('./pairing-number');
+const { parseDuration } = require('./premium');
 
 // Telegram treats Markdown parsing errors as a failed API request. Keep all
 // controller output in HTML and escape untrusted values at the boundary.
@@ -61,21 +79,48 @@ function box(title, lines) {
 
 const CODE_SOURCE_LABEL = 'WhatsApp-generated';
 
+const _two = (value) => String(value).padStart(2, '0');
+const _MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatUnblockTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  return `${_two(date.getDate())} ${_MONTHS[date.getMonth()]} ${date.getFullYear()} • ${_two(date.getHours())}:${_two(date.getMinutes())}`;
+}
+
+function formatRemainingDuration(milliseconds) {
+  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${_two(hours)}h ${_two(minutes)}m`;
+}
+
 // The ANIME MD intro. Gojo-style, no server-dashboard jargon. It never claims
 // a WhatsApp connection: the connected notification is a separate, real event.
 function startupBox() {
   return [
-    '╰┈➤ ⚡ 𝘼𝙉𝙄𝙀 𝙈',
+    '╰┈➤ ⚡ 𝘼𝙉𝙄𝙈𝙀 𝙈𝘿',
     '',
-    '𝙂𝙊𝙊 𝙄 𝙃𝙀𝙍𝙀.',
-    '🟢 𝙎𝙔𝙎𝙀𝙈 𝘼𝘿𝙔',
+    '𝙂𝙊𝙅𝙊 𝙄𝙎 𝙃𝙀𝙍𝙀.',
+    '🟢 𝙎𝙔𝙎𝙏𝙀𝙈 𝙍𝙀𝘼𝘿𝙔',
     '',
-    "𝙒𝙝𝙖𝙩' 𝙣𝙚𝙭𝙩? 𝙔𝙤 𝙘𝙝𝙤𝙤𝙚. 👇"
+    "𝙒𝙝𝙖𝙩'𝙨 𝙣𝙚𝙭𝙩? 𝙔𝙤𝙪 𝙘𝙝𝙤𝙤𝙨𝙚. 👇"
   ].join('\n');
 }
 
 function pairingStartedBox(numberDisplay) {
   return box('ANIME MD • PAIRING', [
+    '',
+    `📱 Number: ${numberDisplay}`,
+    '⏳ Preparing WhatsApp pairing...',
+    '',
+    'Please wait.'
+  ]);
+}
+
+function pairingLoadingBox(numberDisplay, frame) {
+  // The single pairing message carries the loading animation in its title so
+  // it is edited (not re-sent) on every frame.
+  return box(`ANIME MD • PAIRING ${frame}`, [
     '',
     `📱 Number: ${numberDisplay}`,
     '⏳ Preparing WhatsApp pairing...',
@@ -104,6 +149,55 @@ function codeReadyBox({ displayCode, numberDisplay, expiresAt }, { ttlMinutes = 
   ]);
 }
 
+function pairingFailureBox(numberDisplay, reason = 'The WhatsApp connection timed out.', { retry = true } = {}) {
+  const lines = ['', `📱 ${numberDisplay}`];
+  if (Array.isArray(reason)) {
+    for (const line of reason) {
+      if (line) lines.push(`⚠️ ${line}`);
+    }
+    if (!reason.length) lines.push('⚠️ The WhatsApp connection timed out.');
+  } else {
+    lines.push(`⚠️ ${reason || 'The WhatsApp connection timed out.'}`);
+  }
+  lines.push('', '❌ Pairing could not be completed.', '');
+  if (retry) lines.push('Pair again anytime with /pair.');
+  return box('ANIME MD • PAIRING FAILED', lines);
+}
+
+function blockedBox(blockUntil, remainingMs) {
+  return box('ANIME MD • ACCESS BLOCKED', [
+    '',
+    '🚫 Your access is temporarily blocked.',
+    '',
+    `⏳ Unblocks: ${formatUnblockTimestamp(blockUntil)}`,
+    `🕐 Remaining: ${formatRemainingDuration(remainingMs)}`,
+    '',
+    'Please try again after the block expires.'
+  ]);
+}
+
+function verifyBox() {
+  return box('ANIME MD • VERIFICATION', [
+    '',
+    '🔐 Please verify your Telegram account',
+    'to unlock the bot.',
+    '',
+    'Tap the Verify button below to confirm.',
+    '',
+    'Aapki account verify karna zaroori hai.'
+  ]);
+}
+
+function limitBox(used, limit) {
+  return box('ANIME MD • PAIRING LIMIT', [
+    '',
+    `📱 You have paired ${used}/${limit} numbers.`,
+    '',
+    'Stop an unused session with /stop first,',
+    'or contact the owner for a higher limit.'
+  ]);
+}
+
 function guideBox() {
   return box('ANIME MD • PAIRING GUIDE', [
     '',
@@ -112,7 +206,7 @@ function guideBox() {
     '1. Tap 🔗 Pair WhatsApp, or send',
     '   /pair <your number>',
     '2. Wait — your pairing code',
-    '   arrives here as a message',
+    '   arrives in this same message',
     '3. Open WhatsApp → Settings →',
     '   Linked Devices',
     '4. Tap "Link a Device"',
@@ -192,11 +286,13 @@ function premiumRequiredBox() {
   ]);
 }
 
-function myIdBox({ id, premium, owner }) {
+function myIdBox({ id, premium, vip, owner, verified }) {
   return box('ANIME MD • MY ID', [
     '',
     `👤 Telegram ID: ${id}`,
+    `✅ Verified: ${verified ? 'Yes ✅' : 'No ❌'}`,
     `💎 Premium: ${premium ? 'Active ✅' : 'Inactive ❌'}`,
+    `👑 VIP: ${vip ? 'Active ✅' : 'Inactive ❌'}`,
     `👑 Owner: ${owner ? 'Yes ✅' : 'No ❌'}`,
     '',
     'Use this ID if the owner adds you as',
@@ -351,10 +447,21 @@ function friendlyPairingError(error) {
   return { lines: ['An unexpected error occurred while pairing.'], retry: true };
 }
 
+function friendlyReasonLine(error) {
+  if (error?.code === 'PAIRING_TIMEOUT') return 'The WhatsApp connection timed out.';
+  if (error?.code) {
+    const friendly = friendlyPairingError(error);
+    if (friendly.lines?.length) return friendly.lines[0];
+  }
+  return 'The WhatsApp connection timed out.';
+}
+
 function helpText() {
   return [
     '╭━━〔 ANIME MD • HELP 〕━╮',
     '┃',
+    '┃ /start — open the bot',
+    '┃ /verify — complete verification',
     '┃ /pair <number> — pair a WhatsApp number',
     '┃ /sessions — list your WhatsApp sessions',
     '┃ /status [number] — session status',
@@ -368,6 +475,10 @@ function helpText() {
     '┃ /delowner <telegram_id> — remove a controller',
     '┃ /addprem <id> [30d] — grant premium (owner)',
     '┃ /delprem <id> — revoke premium (owner)',
+    '┃ /addvip <id> [30d] — grant VIP (owner)',
+    '┃ /delvip <id> — revoke VIP (owner)',
+    '┃ /block <id> [24h] — block a user (owner)',
+    '┃ /unblock <id> — unblock a user (owner)',
     '┃ /listpaired — all sessions (owner)',
     '┃ /help — show this help',
     '┃',
@@ -399,6 +510,27 @@ function homeMarkup() {
 
 // Backward-compatible export name for the dashboard keyboard.
 const menuMarkup = homeMarkup;
+
+function verifyMarkup() {
+  return { inline_keyboard: [[{ text: '✅ Verify', callback_data: 'verify:me' }]] };
+}
+
+// The Copy Code button uses Telegram's native copy-text. It copies ONLY the
+// code — never the number, the instructions, or the surrounding text. A
+// regenerate (callback) and home (callback) button accompany it.
+function pairingCodeMarkup(code, flowToken) {
+  return { inline_keyboard: [
+    [{ text: '📋 Copy Code', copy_text: { text: code } }],
+    [{ text: '🔄 Generate New Code', callback_data: `pair:regen:${flowToken}` }, { text: '🏠 Home', callback_data: 'home' }]
+  ] };
+}
+
+function pairingFailureMarkup(flowToken) {
+  return { inline_keyboard: [
+    [{ text: '🔄 Generate New Code', callback_data: `pair:regen:${flowToken}` }],
+    [{ text: '🏠 Home', callback_data: 'home' }]
+  ] };
+}
 
 function guideMarkup() {
   return { inline_keyboard: [[
@@ -480,7 +612,16 @@ function settingsMarkup({ owner, publicMode, premiumOnly }) {
   ]] };
 }
 
-const BOOTSTRAP_COMMANDS = new Set(['addowner', 'delowner', 'addprem', 'delprem', 'listpaired']);
+const BOOTSTRAP_COMMANDS = new Set(['addowner', 'delowner', 'addprem', 'delprem', 'addvip', 'delvip', 'block', 'unblock', 'listpaired']);
+const OPEN_COMMANDS = new Set(['start', 'help', 'guide', 'myid', 'verify']);
+
+// Public-chat safety: number-revealing and management operations must never
+// leak a user's phone number (or the bot's internals) into a group/supergroup.
+// A chat without an explicit type (our unit-test fixtures) is treated as
+// private so the controller keeps behaving for direct messages.
+function chatIsPrivate(chat) {
+  return !chat?.type || chat.type === 'private';
+}
 
 class TelegramController {
   constructor({
@@ -512,6 +653,8 @@ class TelegramController {
     this.sensitiveRequests = new Map();
     this.sensitiveLocks = new Map();
     this.pendingPairNumbers = new Map();
+    // One active single-message pairing flow per Telegram user.
+    this.pairingFlows = new Map();
   }
 
   // ------------------------------ access ----------------------------------
@@ -557,6 +700,37 @@ class TelegramController {
     return 'none';
   }
 
+  // owner > admin > vip > premium > normal, driven entirely by the database.
+  async roleOf(id) {
+    const access = await this.accessOf(id);
+    if (access === 'bootstrap') return 'owner';
+    if (access === 'controller') return 'admin';
+    const vip = await this.vipStatusOf(id);
+    if (vip.vip) return 'vip';
+    const premium = await this.premiumStatusOf(id);
+    if (premium.premium) return 'premium';
+    return 'normal';
+  }
+
+  async pairingLimitOf(id) {
+    const role = await this.roleOf(id);
+    if (role === 'owner' || role === 'admin' || role === 'vip') return Infinity;
+    if (role === 'premium') return PREMIUM_PAIRING_LIMIT;
+    return this.sessionLimit;
+  }
+
+  async pairingUsageOf(id) {
+    if (typeof this.controllerStore?.pairedNumbersOf === 'function') {
+      try {
+        return (await this.controllerStore.pairedNumbersOf(id)).length;
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not read paired-number usage for ${id}: ${error.message}`);
+      }
+    }
+    const sessions = await this.pairing.listSessions(id);
+    return sessions.length;
+  }
+
   async premiumStatusOf(id) {
     const normalized = normalizeTelegramId(id);
     if (this.isBootstrapOwner(normalized)) return { premium: true, bootstrap: true, expiresAt: undefined };
@@ -569,6 +743,58 @@ class TelegramController {
       this.log.warn?.(`[telegram] Could not read premium status for ${normalized}: ${error.message}`);
       return { premium: false };
     }
+  }
+
+  async vipStatusOf(id) {
+    if (this.isBootstrapOwner(id)) return { vip: true };
+    if (typeof this.controllerStore?.vipStatus === 'function') {
+      try {
+        return await this.controllerStore.vipStatus(id);
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not read VIP status for ${id}: ${error.message}`);
+        return { vip: false };
+      }
+    }
+    return { vip: false };
+  }
+
+  async isVerified(id) {
+    if (this.isBootstrapOwner(id)) return true;
+    if (await this.authorized(id)) return true;
+    if (typeof this.controllerStore?.isVerified === 'function') {
+      try {
+        return await this.controllerStore.isVerified(id);
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not read verification for ${id}: ${error.message}`);
+        return false;
+      }
+    }
+    return false;
+  }
+
+  async mustVerify(id) {
+    const access = await this.accessOf(id);
+    if (access === 'none' || access === 'bootstrap' || access === 'controller') return false;
+    return !(await this.isVerified(id));
+  }
+
+  async markVerified(id) {
+    if (typeof this.controllerStore?.markVerified === 'function') {
+      await this.controllerStore.markVerified(id);
+    }
+  }
+
+  async checkBlocked(id) {
+    if (this.isBootstrapOwner(id)) return { blocked: false };
+    if (typeof this.controllerStore?.blockStatus === 'function') {
+      try {
+        return await this.controllerStore.blockStatus(id);
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not read block status for ${id}: ${error.message}`);
+        return { blocked: false };
+      }
+    }
+    return { blocked: false };
   }
 
   // Optional channel-join verification before pairing. Bootstrap owners skip
@@ -628,6 +854,24 @@ class TelegramController {
     return this.reply(chatId, text, replyMarkup);
   }
 
+  // Edits the single pairing message. Falls back to a new message when the id
+  // is missing or the message can no longer be edited (deleted / too old).
+  async editMessage(chatId, messageId, text, replyMarkup) {
+    if (messageId) {
+      try {
+        return await this.api('editMessageText', {
+          chat_id: chatId, message_id: messageId,
+          text: escapeTelegramHtml(text), parse_mode: 'HTML',
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+        });
+      } catch (error) {
+        if (/not modified/i.test(String(error?.message))) return undefined;
+        // fall through to sending a new message (too old, deleted, etc.)
+      }
+    }
+    return this.reply(chatId, text, replyMarkup);
+  }
+
   reserveSensitiveRequest(senderId, scope = 'global') {
     const key = `${String(senderId)}:${String(scope)}`;
     const now = Date.now();
@@ -649,6 +893,103 @@ class TelegramController {
     for (const [key, entry] of this.pendingPairNumbers) {
       if (!entry || entry.expiresAt <= now) this.pendingPairNumbers.delete(key);
     }
+    // Any pairing flow whose message can no longer be identified is dropped.
+    for (const [key, flow] of this.pairingFlows) {
+      if (flow?.expiresAt && flow.expiresAt <= now) {
+        this.stopSpinner(flow);
+        this.pairingFlows.delete(key);
+      }
+    }
+  }
+
+  newFlowToken() {
+    return crypto.randomBytes(12).toString('hex');
+  }
+
+  flowKey(senderId) {
+    return String(senderId);
+  }
+
+  getFlow(senderId) {
+    return this.pairingFlows.get(this.flowKey(senderId));
+  }
+
+  // ------------------------------ pairing flow ----------------------------
+
+  startSpinner(flow) {
+    this.stopSpinner(flow);
+    flow.spinnerFrame = 0;
+    const tick = async () => {
+      if (flow.stopped || this.pairingFlows.get(flow.senderKey) !== flow) return;
+      flow.spinnerFrame = (flow.spinnerFrame + 1) % SPINNER_FRAMES.length;
+      const frame = SPINNER_FRAMES[flow.spinnerFrame];
+      try {
+        const text = pairingLoadingBox(flow.numberDisplay, frame);
+        flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, text, undefined))?.message_id || flow.messageId;
+      } catch (error) {
+        // The spinner must never break the pairing flow.
+      }
+      if (!flow.stopped && this.pairingFlows.get(flow.senderKey) === flow) {
+        flow.spinnerTimer = setTimeout(tick, SPINNER_INTERVAL_MS);
+        flow.spinnerTimer.unref?.();
+      }
+    };
+    flow.spinnerTimer = setTimeout(tick, SPINNER_INTERVAL_MS);
+    flow.spinnerTimer.unref?.();
+  }
+
+  stopSpinner(flow) {
+    if (flow?.spinnerTimer) {
+      clearTimeout(flow.spinnerTimer);
+      flow.spinnerTimer = undefined;
+    }
+  }
+
+  async startPairingAttempt(senderId, number, input, flow) {
+    const limit = await this.pairingLimitOf(senderId);
+    const result = await this.pairing.requestPairing(senderId, input || number, { sessionLimit: limit });
+    if (flow.stopped) return result;
+    this.stopSpinner(flow);
+    flow.state = 'WAITING';
+    flow.code = result.code;
+    flow.displayCode = result.displayCode;
+    flow.expiresAt = result.expiresAt;
+    flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, codeReadyBox(result), pairingCodeMarkup(result.displayCode, flow.token)))?.message_id || flow.messageId;
+    await this.maybeRecordPairedNumber(senderId, number);
+    return result;
+  }
+
+  async failPairingAttempt(flow, error) {
+    if (flow.stopped) return;
+    this.stopSpinner(flow);
+    flow.state = 'FAILED';
+    const friendly = friendlyPairingError(error);
+    // Classified errors keep their informative, user-safe reason lines. A bare
+    // connection timeout still renders the exact ANIME MD FAILED box.
+    const text = error?.code && friendly.lines?.length
+      ? pairingFailureBox(flow.numberDisplay, friendly.lines, { retry: friendly.retry })
+      : pairingFailureBox(flow.numberDisplay, friendlyReasonLine(error));
+    await this.editMessage(flow.chatId, flow.messageId, text, pairingFailureMarkup(flow.token));
+  }
+
+  async maybeRecordPairedNumber(senderId, number) {
+    if (typeof this.controllerStore?.addPairedNumber === 'function') {
+      try {
+        await this.controllerStore.addPairedNumber(senderId, number);
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not record a paired number for ${senderId}: ${error.message}`);
+      }
+    }
+  }
+
+  async maybeRemovePairedNumber(senderId, number) {
+    if (typeof this.controllerStore?.removePairedNumber === 'function') {
+      try {
+        await this.controllerStore.removePairedNumber(senderId, number);
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not clear a paired number for ${senderId}: ${error.message}`);
+      }
+    }
   }
 
   // ------------------------------ pairing ---------------------------------
@@ -662,50 +1003,117 @@ class TelegramController {
     ].join('\n'), { force_reply: true, input_field_placeholder: '923001234567' });
   }
 
-  // The /pair flow: acknowledge first, then show the code only after the real
-  // WhatsApp pairing flow produced one, and never claim success early.
+  // The /pair flow uses a SINGLE Telegram message. The PREPARING box is sent
+  // once and the same message is edited through LOADING → CODE → WAITING, or
+  // FAILED. No second Telegram message is ever sent for the pairing lifecycle.
   async handlePairCommand(command) {
     const chatId = command.chatId;
-    // Join the arguments so spaced forms like "/pair 92 300 1234567" work;
-    // normalization handles +, dashes, dots, and parentheses on its own.
+    const senderId = command.senderId;
+    const senderKey = String(senderId);
     const input = command.args.join('');
-    let numberDisplay;
+    let number;
     try {
-      const number = normalizeWhatsAppNumber(input);
-      numberDisplay = formatInternationalNumber(number);
+      number = normalizeWhatsAppNumber(input);
     } catch (error) {
       const friendly = friendlyPairingError(error);
       await this.reply(chatId, pairingFailedBox(friendly.lines, { retry: friendly.retry }));
       return;
     }
+    const numberDisplay = formatInternationalNumber(number);
 
     if (this.premiumOnly) {
-      const premium = await this.premiumStatusOf(command.senderId);
+      const premium = await this.premiumStatusOf(senderId);
       if (!premium.premium) {
         await this.reply(chatId, premiumRequiredBox());
         return;
       }
     }
 
-    const joined = await this.joinedRequiredChannels(command.senderId);
+    const joined = await this.joinedRequiredChannels(senderId);
     if (!joined.ok) {
       await this.reply(chatId, channelsBox(this.requiredChannels));
       return;
     }
 
-    const release = this.reserveSensitiveRequest(command.senderId, 'pair');
-    await this.reply(chatId, pairingStartedBox(numberDisplay));
+    const limit = await this.pairingLimitOf(senderId);
+    const used = await this.pairingUsageOf(senderId);
+    if (Number.isFinite(limit) && used >= limit) {
+      const release = this.reserveSensitiveRequest(senderKey, 'pair');
+      try {
+        await this.reply(chatId, limitBox(used, limit));
+      } finally {
+        release();
+      }
+      return;
+    }
+
+    const release = this.reserveSensitiveRequest(senderKey, 'pair');
+    const token = this.newFlowToken();
+    let sent;
     try {
-      const result = await this.pairing.requestPairing(command.senderId, input);
-      await this.reply(chatId, codeReadyBox(result));
+      // The ONLY new Telegram message for the whole lifecycle.
+      sent = await this.reply(chatId, pairingStartedBox(numberDisplay));
     } catch (error) {
-      // Raw errors stay in the log; the user sees a friendly box.
-      this.log.error?.(`[telegram] Pairing failed for ${numberDisplay}: ${error?.message || error}`);
-      const friendly = friendlyPairingError(error);
-      await this.reply(chatId, pairingFailedBox(friendly.lines, { retry: friendly.retry }), friendly.retry ? retryMarkup() : undefined);
+      release();
+      this.log.error?.(`[telegram] Could not start the pairing view: ${error.message}`);
+      return;
+    }
+    const flow = {
+      chatId, senderKey, number, numberDisplay,
+      state: 'PREPARING', token,
+      messageId: sent?.message_id,
+      spinnerTimer: undefined, spinnerFrame: 0,
+      code: undefined, displayCode: undefined, expiresAt: undefined,
+      stopped: false
+    };
+    this.pairingFlows.set(senderKey, flow);
+    this.startSpinner(flow);
+
+    try {
+      await this.startPairingAttempt(senderId, number, number, flow);
+    } catch (error) {
+      await this.failPairingAttempt(flow, error);
     } finally {
       release();
     }
+  }
+
+  async handleRegenerate(senderId, token, callback) {
+    const flow = this.getFlow(senderId);
+    if (!flow || flow.token !== token || flow.stopped || flow.senderKey !== String(senderId)) {
+      throw Object.assign(new Error('This pairing code is no longer valid. Send /pair again.'), { code: 'EXPIRED' });
+    }
+    if (flow.state !== 'WAITING' && flow.state !== 'CODE' && flow.state !== 'FAILED') {
+      throw Object.assign(new Error('This pairing code is no longer valid. Send /pair again.'), { code: 'EXPIRED' });
+    }
+    const chatId = flow.chatId;
+    // Regeneration has its own rate-limit scope so a freshly generated code can
+    // be regenerated immediately, while still throttling spam.
+    const release = this.reserveSensitiveRequest(senderId, 'regen');
+    try {
+      this.stopSpinner(flow);
+      // Cancel the previous (possibly still-open) pairing attempt and its
+      // socket so a brand-new code is generated rather than returned.
+      if (typeof this.pairing.cancelPairing === 'function') {
+        await this.pairing.cancelPairing(senderId, flow.number, {});
+      }
+      flow.state = 'PREPARING';
+      flow.code = undefined;
+      flow.displayCode = undefined;
+      flow.expiresAt = undefined;
+      flow.messageId = (await this.editMessage(chatId, flow.messageId, pairingStartedBox(flow.numberDisplay), undefined))?.message_id || flow.messageId;
+      this.startSpinner(flow);
+      await this.startPairingAttempt(senderId, flow.number, flow.number, flow);
+    } catch (error) {
+      await this.failPairingAttempt(flow, error);
+    } finally {
+      release();
+    }
+  }
+
+  async handleVerify(senderId, chatId, { messageId } = {}) {
+    await this.markVerified(senderId);
+    return this.present(chatId, messageId, `${startupBox()}\n\n✅ Verification complete! Choose an action below, or use /help.`, homeMarkup());
   }
 
   // ------------------------------ views -----------------------------------
@@ -773,10 +1181,20 @@ class TelegramController {
     }
     if (!command?.chatId || !command.senderId) return;
 
+    // Open, unauthenticated commands are always available.
+    if (command.name === 'verify') {
+      return this.handleVerify(command.senderId, command.chatId, {});
+    }
+
     // /myid is intentionally open: a user needs their ID to be granted access.
     if (command.name === 'myid') {
       const premium = await this.premiumStatusOf(command.senderId);
-      return this.reply(command.chatId, myIdBox({ id: command.senderId, premium: premium.premium, owner: this.isBootstrapOwner(command.senderId) }), homeOnlyMarkup());
+      const vip = await this.vipStatusOf(command.senderId);
+      const verified = await this.isVerified(command.senderId);
+      return this.reply(command.chatId, myIdBox({
+        id: command.senderId, premium: premium.premium, vip: vip.vip,
+        owner: this.isBootstrapOwner(command.senderId), verified
+      }), homeOnlyMarkup());
     }
 
     const access = await this.accessOf(command.senderId);
@@ -789,10 +1207,37 @@ class TelegramController {
       return;
     }
 
+    // Public-chat safety: private numbers and session details are never shared
+    // in a group. Management/pairing commands are refused with a privacy-safe
+    // notice so nothing sensitive leaks to third parties in the group.
+    if (!chatIsPrivate(update?.message?.chat) && !OPEN_COMMANDS.has(command.name)) {
+      await this.reply(command.chatId, box('ANIME MD • PRIVACY', ['', '🔒 This bot only works in a private chat.', '', 'Phone numbers and session details are', 'never shared in public chats.', '']));
+      return;
+    }
+
+    // Functional verification + temporary-block enforcement. Restricted
+    // commands are denied (not merely flagged) until the user verifies, and a
+    // blocked user is denied with a dynamic unblock time.
+    if (!OPEN_COMMANDS.has(command.name)) {
+      const block = await this.checkBlocked(command.senderId);
+      if (block.blocked) {
+        await this.reply(command.chatId, blockedBox(block.blockedUntil, block.remainingMs), homeOnlyMarkup());
+        return;
+      }
+      if (await this.mustVerify(command.senderId)) {
+        await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\n${verifyBox()}`, verifyMarkup());
+        return;
+      }
+    }
+
     try {
       switch (command.name) {
         case 'help':
         case 'start':
+          if (await this.mustVerify(command.senderId)) {
+            await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\n${verifyBox()}`, verifyMarkup());
+            return;
+          }
           await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\nChoose an action below, or use /help.`, homeMarkup());
           return;
         case 'guide':
@@ -890,6 +1335,57 @@ class TelegramController {
           }
           return;
         }
+        case 'addvip': {
+          const release = this.reserveSensitiveRequest(command.senderId, 'addvip');
+          try {
+            const id = normalizeTelegramId(command.args[0]);
+            const duration = command.args[1] || '30d';
+            const durationMs = parseDuration(duration);
+            if (typeof this.controllerStore?.setVip !== 'function') throw Object.assign(new Error('VIP is not available.'), { code: 'PROTECTED' });
+            await this.controllerStore.setVip(id, Date.now() + durationMs);
+            await this.reply(command.chatId, box('ANIME MD • VIP GRANTED', ['', `✅ ${id} is VIP premium until`, `${new Date(Date.now() + durationMs).toISOString().slice(0, 10)}.`, '']));
+          } finally {
+            release();
+          }
+          return;
+        }
+        case 'delvip': {
+          const release = this.reserveSensitiveRequest(command.senderId, 'delvip');
+          try {
+            const id = normalizeTelegramId(command.args[0]);
+            const removed = typeof this.controllerStore?.removeVip === 'function' && await this.controllerStore.removeVip(id);
+            await this.reply(command.chatId, removed
+              ? box('ANIME MD • VIP REMOVED', ['', `✅ VIP access removed from ${id}.`, ''])
+              : box('ANIME MD • INFO', ['', `${id} has no active VIP access.`, '']));
+          } finally {
+            release();
+          }
+          return;
+        }
+        case 'block': {
+          const release = this.reserveSensitiveRequest(command.senderId, 'block');
+          try {
+            const id = normalizeTelegramId(command.args[0]);
+            let durationMs = DEFAULT_BLOCK_DURATION_MS;
+            if (command.args[1]) durationMs = parseDuration(command.args[1]);
+            await this.controllerStore.setBlocked(id, durationMs);
+            await this.reply(command.chatId, box('ANIME MD • USER BLOCKED', ['', `🚫 ${id} is blocked temporarily.`, '', `⏳ Unblocks: ${formatUnblockTimestamp(Date.now() + durationMs)}`, `🕐 Duration: ${formatRemainingDuration(durationMs)}`]));
+          } finally {
+            release();
+          }
+          return;
+        }
+        case 'unblock': {
+          const release = this.reserveSensitiveRequest(command.senderId, 'unblock');
+          try {
+            const id = normalizeTelegramId(command.args[0]);
+            await this.controllerStore.clearBlocked(id);
+            await this.reply(command.chatId, box('ANIME MD • USER UNBLOCKED', ['', `✅ ${id} access has been restored.`, '']));
+          } finally {
+            release();
+          }
+          return;
+        }
         case 'listpaired': {
           const sessions = typeof this.pairing.listAllSessions === 'function' ? await this.pairing.listAllSessions() : [];
           if (!sessions.length) {
@@ -943,13 +1439,14 @@ class TelegramController {
           try {
             const session = await this.pairing.stopSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
             await this.reply(command.chatId, stoppedBox(session.numberDisplay || formatInternationalNumber(command.args[0])), pairAgainMarkup());
+            await this.maybeRemovePairedNumber(command.senderId, command.args[0]);
           } finally {
             release();
           }
           return;
         }
         default:
-          await this.reply(command.chatId, `${box('ANIME MD • UNKNOWN COMMAND', ['', '❌ Unknown command.', ''])}\n\n${helpText()}`, homeOnlyMarkup());
+          await this.reply(command.chatId, `${box('ANIME MD • UNKNOWN COMMAND', ['', '❌ Unknown command.', ''])}\\n\\n${helpText()}`, homeOnlyMarkup());
       }
     } catch (error) {
       // Rate-limit style errors show a small "please wait" box first.
@@ -984,6 +1481,12 @@ class TelegramController {
       const access = await this.accessOf(senderId);
       if (access === 'none') throw Object.assign(new Error('You are not authorized to control this bot.'), { code: 'DENIED' });
       const admin = access === 'bootstrap';
+      // Public-chat safety for callbacks: a number/session button tapped in a
+      // group must never broadcast that users' number to everyone there.
+      const safeInPublic = new Set(['verify:me', 'home', 'nav:help', 'nav:guide']);
+      if (!chatIsPrivate(callback?.message?.chat) && !safeInPublic.has(action)) {
+        return await this.reply(chatId, box('ANIME MD • PRIVACY', ['', '🔒 This bot only works in a private chat.', '', 'Phone numbers and session details are', 'never shared in public chats.', '']), homeOnlyMarkup());
+      }
       const [scope, verb, argument] = action.split(':');
 
       // Legacy one-word callbacks kept working for older messages.
@@ -992,11 +1495,27 @@ class TelegramController {
       if (action === 'status') return await this.sendStatusView(chatId, senderId, {});
       if (action === 'sessions') return await this.sendSessionsView(chatId, senderId, {});
 
+      if (action === 'verify:me') {
+        return await this.handleVerify(senderId, chatId, { messageId });
+      }
+
       if (action === 'home') {
+        if (await this.mustVerify(senderId)) {
+          return await this.present(chatId, messageId, `${startupBox()}\n\n${verifyBox()}`, verifyMarkup());
+        }
         return await this.present(chatId, messageId, `${startupBox()}\n\nChoose an action below, or use /help.`, homeMarkup());
       }
       if (action === 'pair:new') {
+        // Blocked users cannot begin a new pairing.
+        const block = await this.checkBlocked(senderId);
+        if (block.blocked) return await this.reply(chatId, blockedBox(block.blockedUntil, block.remainingMs), homeOnlyMarkup());
+        if (await this.mustVerify(senderId)) return await this.handleVerify(senderId, chatId, { messageId });
         return await this.beginPairPrompt(chatId, senderId);
+      }
+      if (scope === 'pair' && verb === 'regen') {
+        // Only the owner of this exact pairing flow (validated by token) may
+        // regenerate. The caller cannot forge another user's flow.
+        return await this.handleRegenerate(senderId, argument, callback);
       }
       if (action === 'nav:guide') {
         return await this.present(chatId, messageId, guideBox(), guideMarkup());
@@ -1047,6 +1566,7 @@ class TelegramController {
           const release = this.reserveSensitiveRequest(senderId, 'stop');
           try {
             const session = await this.pairing.stopSession(senderId, number, { admin });
+            await this.maybeRemovePairedNumber(senderId, number);
             return await this.present(chatId, messageId, stoppedBox(session.numberDisplay), pairAgainMarkup());
           } finally {
             release();
@@ -1099,9 +1619,21 @@ class TelegramController {
   }
 
   // Called by the pairing manager when an owner's WhatsApp session actually
-  // reaches connection open. It is never called earlier.
+  // reaches connection open. It is never called earlier. If an active
+  // single-message pairing flow exists, that same message is edited to the
+  // CONNECTED state instead of posting a new Telegram message.
   async notifySessionConnected(ownerId, session) {
     if (!this.running) return;
+    const flow = this.getFlow(ownerId);
+    const number = String(session?.number || '');
+    if (flow && !flow.stopped && (number === String(flow.number) || !number)) {
+      this.stopSpinner(flow);
+      flow.state = 'SUCCESS';
+      flow.stopped = true;
+      this.pairingFlows.delete(flow.senderKey);
+      await this.editMessage(flow.chatId, flow.messageId, connectedBox(session?.numberDisplay || flow.numberDisplay), connectedMarkup());
+      return;
+    }
     try {
       await this.replyPhoto(ownerId, this.connectedImage, connectedBox(session?.numberDisplay || session?.number || ''), connectedMarkup());
     } catch (error) {
@@ -1111,10 +1643,20 @@ class TelegramController {
 
   async notifySessionDisconnected(ownerId, session, classification) {
     if (!this.running) return;
+    const flow = this.getFlow(ownerId);
+    const failedBeforeLink = !session?.registered;
+    if (flow && !flow.stopped) {
+      this.stopSpinner(flow);
+      flow.state = 'FAILED';
+      flow.stopped = true;
+      this.pairingFlows.delete(flow.senderKey);
+      const reasonLine = classification?.userMessage || 'The WhatsApp connection timed out.';
+      await this.editMessage(flow.chatId, flow.messageId, pairingFailureBox(flow.numberDisplay, reasonLine), pairingFailureMarkup(flow.token));
+      return;
+    }
     // A session that never finished pairing reads as a failed pairing, not
     // as an ended session; the reason line comes straight from the
     // disconnect classification, so failures are never generic.
-    const failedBeforeLink = !session?.registered;
     const title = failedBeforeLink ? 'ANIME MD • PAIRING FAILED' : 'ANIME MD • SESSION ENDED';
     const lines = [
       '',
@@ -1168,32 +1710,50 @@ class TelegramController {
     return true;
   }
 
-  stop() { this.running = false; }
+  stop() {
+    this.running = false;
+    // Stop every active spinner so no orphaned timer keeps editing a message
+    // after the controller is shut down.
+    for (const flow of this.pairingFlows.values()) this.stopSpinner(flow);
+    this.pairingFlows.clear();
+  }
 }
 
 module.exports = {
   CODE_SOURCE_LABEL,
+  DEFAULT_BLOCK_DURATION_MS,
+  PREMIUM_PAIRING_LIMIT,
   SENSITIVE_COOLDOWN_MS,
   SENSITIVE_LOCK_TTL_MS,
+  SPINNER_FRAMES,
   SESSION_STATE_BADGES,
   TelegramController,
   badgeParts,
+  blockedBox,
   channelsBox,
   codeReadyBox,
   commandFromUpdate,
   connectedBox,
   connectedMarkup,
   escapeTelegramHtml,
+  formatRemainingDuration,
+  formatUnblockTimestamp,
   friendlyPairingError,
+  friendlyReasonLine,
   guideBox,
   guideMarkup,
   helpText,
   homeMarkup,
+  limitBox,
   menuMarkup,
   myIdBox,
   normalizeTelegramId,
   normalizeWhatsappNumber: normalizeWhatsAppNumber,
+  pairingCodeMarkup,
   pairingFailedBox,
+  pairingFailureBox,
+  pairingFailureMarkup,
+  pairingLoadingBox,
   pairingStartedBox,
   premiumBox,
   premiumRequiredBox,
@@ -1205,5 +1765,7 @@ module.exports = {
   startupBox,
   stateBadge,
   statusBox,
-  stopConfirmMarkup
+  stopConfirmMarkup,
+  verifyBox,
+  verifyMarkup
 };

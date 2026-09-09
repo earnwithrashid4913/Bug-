@@ -67,10 +67,10 @@ test('the Telegram controller wiring starts, greets with the Gojo intro, and ser
 
   // The startup greeting reaches the configured bootstrap owner first
   // (as a photo caption because a start image is configured).
-  await waitFor((entry) => /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./.test(entry.payload.text || entry.payload.caption || ''), 'the anime md intro');
-  const greeting = sent.find((entry) => /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./.test(entry.payload.text || entry.payload.caption || ''));
+  await waitFor((entry) => /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./.test(entry.payload.text || entry.payload.caption || ''), 'the anime md intro');
+  const greeting = sent.find((entry) => /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./.test(entry.payload.text || entry.payload.caption || ''));
   const greetingText = greeting.payload.text || greeting.payload.caption;
-  assert.match(greetingText, /🟢\ 𝙎𝙔𝙎𝙀𝙈\ 𝘼𝘿𝙔/);
+  assert.match(greetingText, /🟢\ 𝙎𝙔𝙎𝙏𝙀𝙈\ 𝙍𝙀𝘼𝘿𝙔/);
   assert.doesNotMatch(greetingText, /WhatsApp Connected/);
 
   // /sessions through the real manager: no sessions yet.
