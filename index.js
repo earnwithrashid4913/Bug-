@@ -194,7 +194,8 @@ function startTelegramController() {
     owners: config.telegramOwnerIds,
     controllerStore: new TelegramControllerStore(config.telegramControllerDbPath),
     pairing: {
-      requestPairing: (ownerId, number) => telegramPairingManager.requestPairing(ownerId, number),
+      requestPairing: (ownerId, number, options) => telegramPairingManager.requestPairing(ownerId, number, options),
+      cancelPairing: (ownerId, number, options) => telegramPairingManager.cancelPairing(ownerId, number, options),
       getStatus: (ownerId) => telegramPairingManager.snapshot(ownerId),
       statusOf: (ownerId, number, options) => telegramPairingManager.statusOf(ownerId, number, options),
       listSessions: (ownerId) => telegramPairingManager.listSessions(ownerId),

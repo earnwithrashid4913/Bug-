@@ -679,9 +679,17 @@ class TelegramPairingManager {
     session.expiryTimer.unref();
   }
 
-  async requestPairing(ownerId, rawNumber) {
+  async requestPairing(ownerId, rawNumber, options = {}) {
     this.ensureActive();
     const owner = normalizeTelegramId(ownerId);
+    // Per-role session limit supplied by the centralized Telegram access
+    // layer. Infinity means unlimited (owner/admin/VIP); a finite value caps
+    // how many sessions this controller may hold. When omitted the global
+    // DEFAULT_LIMITS.maxSessionsPerController applies.
+    const requestedLimit = options?.sessionLimit;
+    const effectiveLimit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.floor(requestedLimit))
+      : this.limits.maxSessionsPerController;
 
     // VALIDATING → NORMALIZING: format only; WhatsApp availability is only
     // determined by the real pairing flow further below.
@@ -717,8 +725,8 @@ class TelegramPairingManager {
       await this.cleanupSession(existing, { deleteCreds: !existing.registered });
     }
 
-    if (this.listSessions(owner).length >= this.limits.maxSessionsPerController) {
-      throw pairingError(`This controller already holds the maximum of ${this.limits.maxSessionsPerController} sessions. Stop an unused one with /stop first.`, 'LIMIT', 409);
+    if (Number.isFinite(effectiveLimit) && this.listSessions(owner).length >= effectiveLimit) {
+      throw pairingError(`This controller already holds the maximum of ${effectiveLimit} sessions. Stop an unused one with /stop first.`, 'LIMIT', 409);
     }
 
     const now = Date.now();
@@ -956,6 +964,31 @@ class TelegramPairingManager {
     const session = this.getSession(owner, number) || (admin ? this.findSessionByNumber(number) : undefined);
     if (!session) throw pairingError('No session found for that number on this controller.', 'NOT_FOUND', 404);
     return { ...this.sessionSnapshot(session), ownerId: session.ownerId };
+  }
+
+  // Cancels a still-pending (NOT connected / NOT registered) pairing attempt for
+  // a controller+number, closing its socket and discarding the in-progress
+  // session so the next request generates a brand-new code. Registered
+  // (already linked) sessions and connected sessions are never touched, so no
+  // valid credentials are deleted by a regeneration request.
+  async cancelPairing(ownerId, rawNumber, { admin = false } = {}) {
+    this.ensureActive();
+    const owner = normalizeTelegramId(ownerId);
+    const number = normalizeWhatsAppNumber(rawNumber);
+    let session = this.getSession(owner, number);
+    if (!session && admin) session = this.findSessionByNumber(number);
+    if (!session) return { cancelled: false, number, numberDisplay: formatInternationalNumber(number) };
+    if (session.registered || session.status === STATUS.CONNECTED) {
+      return { cancelled: false, number, numberDisplay: session.numberDisplay };
+    }
+    if (session.request) {
+      // Reject the in-flight request so its error path does not race this
+      // cleanup, then clean up the unpaired session.
+      const request = session.request;
+      session.request = undefined;
+    }
+    await this.cleanupSession(session, { deleteCreds: true });
+    return { cancelled: true, number, numberDisplay: session.numberDisplay };
   }
 
   async cleanupSession(session, { deleteCreds = false } = {}) {

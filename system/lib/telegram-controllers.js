@@ -5,11 +5,12 @@ const path = require('node:path');
 const { parseDuration } = require('./premium');
 const { normalizeTelegramId } = require('./telegram-controller');
 
-// Persistent Telegram data: authorized controllers, premium users, and the
-// runtime pairing settings toggled from the Telegram settings page. Everything
-// is stored in one private JSON file (mode 0600, atomic rename) and every
-// access runs through a serialized transaction queue so concurrent updates
-// can never interleave.
+// Persistent Telegram data: authorized controllers, premium users, per-user
+// records (verification, temporary blocking, VIP status, paired-number usage),
+// and the runtime pairing settings toggled from the Telegram settings page.
+// Everything is stored in one private JSON file (mode 0600, atomic rename) and
+// every access runs through a serialized transaction queue so concurrent
+// updates can never interleave.
 
 const SETTINGS_KEYS = Object.freeze(['publicMode', 'premiumOnly']);
 
@@ -19,6 +20,27 @@ function normalizePremiumRecords(records) {
     .filter((record) => record && Number.isSafeInteger(record.expiresAt))
     .map((record) => ({ id: String(record.id ?? '').trim(), expiresAt: record.expiresAt }))
     .filter((record) => /^\d{1,20}$/.test(record.id));
+}
+
+function normalizeUserRecords(users) {
+  const result = {};
+  if (!users || typeof users !== 'object' || Array.isArray(users)) return result;
+  for (const [id, record] of Object.entries(users)) {
+    if (!/^\d{1,20}$/.test(id)) continue;
+    if (!record || typeof record !== 'object') continue;
+    result[id] = {
+      verified: Boolean(record.verified),
+      verifiedAt: Number.isSafeInteger(record.verifiedAt) ? record.verifiedAt : undefined,
+      blockedAt: Number.isSafeInteger(record.blockedAt) ? record.blockedAt : undefined,
+      blockedUntil: Number.isSafeInteger(record.blockedUntil) ? record.blockedUntil : undefined,
+      vip: Boolean(record.vip),
+      vipExpiresAt: Number.isSafeInteger(record.vipExpiresAt) ? record.vipExpiresAt : undefined,
+      pairedNumbers: Array.isArray(record.pairedNumbers)
+        ? [...new Set(record.pairedNumbers.map((entry) => String(entry)).filter((entry) => /^\d{7,15}$/.test(entry)))]
+        : []
+    };
+  }
+  return result;
 }
 
 class TelegramControllerStore {
@@ -35,7 +57,10 @@ class TelegramControllerStore {
       const controllers = Array.isArray(value?.controllers) ? value.controllers.filter((id) => /^\d{1,20}$/.test(String(id))) : [];
       const premium = normalizePremiumRecords(value?.premium);
       const settings = value?.settings && typeof value.settings === 'object' ? value.settings : {};
-      return { controllers, premium, settings };
+      const users = normalizeUserRecords(value?.users);
+      const result = { controllers, premium, settings };
+      if (Object.keys(users).length) result.users = users;
+      return result;
     } catch (error) {
       if (error.code === 'ENOENT') return { controllers: [], premium: [], settings: {} };
       throw new Error(`Unable to read Telegram controllers: ${error.message}`);
@@ -54,8 +79,10 @@ class TelegramControllerStore {
   }
 
   async write(controllers) {
-    const { premium, settings } = await this.readAll();
-    await this.writeAll({ controllers, premium, settings });
+    const { premium, settings, users } = await this.readAll();
+    const data = { controllers, premium, settings };
+    if (users && Object.keys(users).length) data.users = users;
+    await this.writeAll(data);
   }
 
   async has(id) { const normalized = normalizeTelegramId(id); return this.transaction(async () => (await this.readAll()).controllers.includes(normalized)); }
@@ -138,6 +165,122 @@ class TelegramControllerStore {
       const record = active.find((entry) => entry.id === normalized);
       return record ? { premium: true, expiresAt: record.expiresAt } : { premium: false };
     });
+  }
+
+  // ------------------------------ users ----------------------------------
+  // One private record per Telegram user: verification, temporary blocking,
+  // VIP status and the unique set of paired numbers. The store is the source
+  // of truth for these fields; no ID is ever hardcoded in source.
+
+  async users() {
+    return this.transaction(async () => (await this.readAll()).users || {});
+  }
+
+  async updateUser(id, patch) {
+    const normalized = normalizeTelegramId(id);
+    return this.transaction(async () => {
+      const data = await this.readAll();
+      const allUsers = data.users || {};
+      const current = allUsers[normalized] || {};
+      const record = {
+        ...current,
+        ...patch,
+        pairedNumbers: Array.isArray(patch?.pairedNumbers) ? patch.pairedNumbers : (Array.isArray(current.pairedNumbers) ? current.pairedNumbers : [])
+      };
+      if (record.blockedUntil !== undefined && record.blockedUntil <= Date.now()) {
+        record.blockedAt = undefined;
+        record.blockedUntil = undefined;
+      }
+      allUsers[normalized] = record;
+      data.users = allUsers;
+      await this.writeAll(data);
+      return record;
+    });
+  }
+
+  async getUser(id) {
+    const normalized = normalizeTelegramId(id);
+    return this.transaction(async () => ((await this.readAll()).users || {})[normalized] || undefined);
+  }
+
+  async isVerified(id) {
+    const record = await this.getUser(id);
+    return Boolean(record?.verified);
+  }
+
+  async markVerified(id) {
+    return this.updateUser(id, { verified: true, verifiedAt: Date.now() });
+  }
+
+  // Reads the current block state and auto-restores access once a block has
+  // expired (blockedUntil <= now). No manual administrative action is needed.
+  async blockStatus(id) {
+    const record = await this.getUser(id);
+    if (!record) return { blocked: false };
+    if (record.blockedUntil !== undefined && record.blockedUntil <= Date.now()) {
+      await this.updateUser(id, { blockedAt: undefined, blockedUntil: undefined });
+      return { blocked: false };
+    }
+    if (record.blockedUntil === undefined) return { blocked: false };
+    return {
+      blocked: true,
+      blockedAt: record.blockedAt,
+      blockedUntil: record.blockedUntil,
+      remainingMs: Math.max(0, record.blockedUntil - Date.now())
+    };
+  }
+
+  async setBlocked(id, durationMs) {
+    const now = Date.now();
+    return this.updateUser(id, { blockedAt: now, blockedUntil: now + durationMs });
+  }
+
+  async clearBlocked(id) {
+    return this.updateUser(id, { blockedAt: undefined, blockedUntil: undefined });
+  }
+
+  async setVip(id, expiresAt) {
+    return this.updateUser(id, { vip: true, vipExpiresAt: expiresAt });
+  }
+
+  async removeVip(id) {
+    return this.updateUser(id, { vip: false, vipExpiresAt: undefined });
+  }
+
+  async vipStatus(id) {
+    const record = await this.getUser(id);
+    if (!record?.vip) return { vip: false };
+    if (record.vipExpiresAt === undefined || record.vipExpiresAt > Date.now()) return { vip: true, expiresAt: record.vipExpiresAt };
+    await this.updateUser(id, { vip: false, vipExpiresAt: undefined });
+    return { vip: false };
+  }
+
+  async pairedNumbersOf(id) {
+    const record = await this.getUser(id);
+    return Array.isArray(record?.pairedNumbers) ? [...record.pairedNumbers] : [];
+  }
+
+  async addPairedNumber(id, number) {
+    const normalized = normalizeTelegramId(id);
+    const canonical = String(number ?? '').replace(/\D/g, '');
+    if (!/^\d{7,15}$/.test(canonical)) return this.getUser(id);
+    const record = await this.getUser(normalized);
+    const current = Array.isArray(record?.pairedNumbers) ? record.pairedNumbers : [];
+    if (current.includes(canonical)) return record;
+    return this.updateUser(normalized, { pairedNumbers: [...current, canonical] });
+  }
+
+  async removePairedNumber(id, number) {
+    const normalized = normalizeTelegramId(id);
+    const canonical = String(number ?? '').replace(/\D/g, '');
+    const record = await this.getUser(normalized);
+    const current = Array.isArray(record?.pairedNumbers) ? record.pairedNumbers : [];
+    if (!current.includes(canonical)) return record;
+    return this.updateUser(normalized, { pairedNumbers: current.filter((entry) => entry !== canonical) });
+  }
+
+  async clearPairedNumbers(id) {
+    return this.updateUser(id, { pairedNumbers: [] });
   }
 }
 module.exports = { SETTINGS_KEYS, TelegramControllerStore };

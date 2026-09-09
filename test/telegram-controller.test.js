@@ -181,7 +181,7 @@ test('/stop confirms the removal and /help documents every command', async () =>
   });
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/stop 923001234567' } });
   assert.match(replies.pop().text, /SESSION REMOVED/);
-  for (const command of ['/pair <number>', '/sessions', '/status [number]', '/stop <number>', '/restart <number>', '/addowner <telegram_id>', '/delowner <telegram_id>', '/help', '/guide', '/myid', '/premium', '/settings', '/delpair', '/listsessions', '/listpaired', '/addprem', '/delprem']) {
+  for (const command of ['/start', '/verify', '/pair <number>', '/sessions', '/status [number]', '/stop <number>', '/restart <number>', '/addowner <telegram_id>', '/delowner <telegram_id>', '/addprem', '/delprem', '/addvip', '/delvip', '/block', '/unblock', '/help', '/guide', '/myid', '/premium', '/settings', '/delpair', '/listsessions', '/listpaired']) {
     assert.ok(helpText().includes(command), `help mentions ${command}`);
   }
 });
@@ -237,8 +237,8 @@ test('Telegram startup shows the Gojo intro, verifies the token, and starts one 
   assert.deepEqual(methods.slice(0, 2), ['getMe', 'deleteWebhook']);
   assert.equal(await controller.start(), false, 'a second listener is never started');
     const intro = captions[0];
-  assert.match(intro, /𝙂𝙊𝙊 𝙄 𝙃𝙀𝙍𝙀./);
-  assert.match(intro, /🟢 𝙎𝙔𝙎𝙀𝙈 𝘼𝘿𝙔/);
+  assert.match(intro, /𝙂𝙊𝙅𝙊 𝙄𝙎 𝙃𝙀𝙍𝙀./);
+  assert.match(intro, /🟢 𝙎𝙔𝙎𝙏𝙀𝙈 𝙍𝙀𝘼𝘿𝙔/);
   assert.match(intro, /👇/);
   // No server-dashboard jargon in the intro.
   assert.doesNotMatch(intro, /Telegram Controller/);
@@ -253,10 +253,10 @@ test('Telegram startup shows the Gojo intro, verifies the token, and starts one 
 
 test('the startup box never claims a WhatsApp connection by itself', () => {
   const text = startupBox();
-  assert.match(text, /╰┈➤\ ⚡\ 𝘼𝙉𝙄𝙀\ 𝙈/);
-  assert.match(text, /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./);
-  assert.match(text, /🟢\ 𝙎𝙔𝙎𝙀𝙈\ 𝘼𝘿𝙔/);
-  assert.match(text, /𝙒𝙝𝙖𝙩'\ 𝙣𝙚𝙭𝙩\?\ 𝙔𝙤\ 𝙘𝙝𝙤𝙤𝙚\.\ 👇/);
+  assert.match(text, /╰┈➤\ ⚡\ 𝘼𝙉𝙄𝙈𝙀\ 𝙈𝘿/);
+  assert.match(text, /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./);
+  assert.match(text, /🟢\ 𝙎𝙔𝙎𝙏𝙀𝙈\ 𝙍𝙀𝘼𝘿𝙔/);
+  assert.match(text, /𝙒𝙝𝙖𝙩'𝙨\ 𝙣𝙚𝙭𝙩\?\ 𝙔𝙤𝙪\ 𝙘𝙝𝙤𝙤𝙨𝙚\.\ 👇/);
   assert.doesNotMatch(text, /WhatsApp Connected/);
   assert.doesNotMatch(text, /Session is active/);
 });
@@ -330,10 +330,47 @@ function captureApi({ chatMemberStatus = 'member' } = {}) {
   return { calls, fetchImpl };
 }
 
-test('public mode lets any Telegram user pair and manage only their own sessions', async () => {
+// A controller store that records verification, blocking, VIP and paired-number
+// usage in memory, mirroring the real TelegramControllerStore so the access
+// layer can be tested without touching disk.
+function memoryUserStore({ controllers = [], premium = [], verified = new Set(), vip = new Map(), blocked = new Map(), paired = new Map() } = {}) {
+  const has = async (id) => controllers.includes(String(id));
+  return {
+    has, add: async (id) => { controllers.push(String(id)); return controllers; },
+    remove: async (id) => { const index = controllers.indexOf(String(id)); if (index >= 0) controllers.splice(index, 1); return index >= 0; },
+    getSettings: async () => ({}), setSetting: async (key, value) => value,
+    hasPremium: async (id) => {
+      const record = premium.find((entry) => entry.id === String(id) && entry.expiresAt > Date.now());
+      return record ? { premium: true, expiresAt: record.expiresAt } : { premium: false };
+    },
+    addPremium: async (id) => { const record = { id: String(id), expiresAt: Date.now() + 2_592_000_000 }; premium.push(record); return record; },
+    removePremium: async (id) => { const index = premium.findIndex((entry) => entry.id === String(id)); if (index >= 0) premium.splice(index, 1); return index >= 0; },
+    listPremium: async () => [...premium],
+    isVerified: async (id) => verified.has(String(id)),
+    markVerified: async (id) => verified.add(String(id)),
+    blockStatus: async (id) => {
+      const entry = blocked.get(String(id));
+      if (!entry) return { blocked: false };
+      if (entry.blockedUntil <= Date.now()) { blocked.delete(String(id)); return { blocked: false }; }
+      return { blocked: true, blockedAt: entry.blockedAt, blockedUntil: entry.blockedUntil, remainingMs: entry.blockedUntil - Date.now() };
+    },
+    setBlocked: async (id, durationMs) => { const now = Date.now(); blocked.set(String(id), { blockedAt: now, blockedUntil: now + durationMs }); return true; },
+    clearBlocked: async (id) => blocked.delete(String(id)),
+    vipStatus: async (id) => vip.has(String(id)) ? { vip: true } : { vip: false },
+    setVip: async (id) => { vip.set(String(id), true); return true; },
+    removeVip: async (id) => vip.delete(String(id)),
+    pairedNumbersOf: async (id) => paired.get(String(id)) || [],
+    addPairedNumber: async (id, number) => { const key = String(id); const current = paired.get(key) || []; if (!current.includes(String(number))) paired.set(key, [...current, String(number)]); return current; },
+    removePairedNumber: async (id, number) => { const key = String(id); const current = (paired.get(key) || []).filter((entry) => entry !== String(number)); paired.set(key, current); return current; }
+  };
+}
+
+test('public mode lets any Telegram user verify, pair and manage only their own sessions', async () => {
   const seen = [];
+  const store = memoryUserStore();
   const { controller, replies } = makeController({
     publicMode: true,
+    controllerStore: store,
     pairing: fakePairing({
       listSessions: async (ownerId) => { seen.push(String(ownerId)); return []; },
       requestPairing: async (ownerId, number) => ({
@@ -342,17 +379,21 @@ test('public mode lets any Telegram user pair and manage only their own sessions
       })
     })
   });
-  // A stranger receives the dashboard instead of an access-denied box.
+  // A stranger receives the intro plus a verify prompt (no access-denied box).
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/start' } });
-  assert.match(replies.at(-1).caption || replies.at(-1).text, /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./);
-  // A stranger can pair their own number through the real flow.
+  assert.match(replies.at(-1).caption || replies.at(-1).text, /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./);
+  // Restricted commands require self-verification before they run.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
+  assert.match((replies.at(-1).caption || replies.at(-1).text) || '', /VERIFICATION/);
+  // The user verifies and is not asked again.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification complete/);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
   // Session listings stay scoped to the requesting user.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
   assert.deepEqual(seen, ['11']);
 });
-
 test('premium-only pairing blocks non-premium controllers and bootstrap owners bypass it', async () => {
   const store = {
     has: async (id) => ['20', '30'].includes(String(id)),
@@ -383,10 +424,13 @@ test('required channels gate pairing until joined; bootstrap owners skip the che
   const { calls, fetchImpl } = captureApi({ chatMemberStatus: 'left' });
   const { controller, replies } = makeController({
     publicMode: true, requiredChannels, fetchImpl,
+    controllerStore: memoryUserStore(),
     pairing: fakePairing({ requestPairing: async (_ownerId, number) => ({ code: 'KJ4MNP2X', displayCode: 'KJ4M-NP2X', brand: 'WhatsApp-generated', number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 }) })
   });
 
-  // A public user who has not joined is blocked with the channel list.
+  // A public user verifies, then is blocked with the channel list until joined.
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification complete/);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   const blocked = replies.at(-1).text;
   assert.match(blocked, /JOIN REQUIRED/);
@@ -403,8 +447,11 @@ test('required channels pass members through to the real pairing flow', async ()
   const { controller, replies } = makeController({
     publicMode: true,
     requiredChannels: [{ name: 'ANIME MD Updates', chatId: '@animemd' }],
+    controllerStore: memoryUserStore(),
     fetchImpl
   });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification complete/);
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
 });
@@ -514,7 +561,7 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
   // The home view is the dashboard with its navigation buttons.
   await callback('home');
   const home = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(home.payload.text, /𝙂𝙊𝙊\ 𝙄\ 𝙃𝙀𝙍𝙀\./);
+  assert.match(home.payload.text, /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./);
   assert.deepEqual(home.payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data), [
     'pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help'
   ]);
@@ -615,4 +662,175 @@ test('an invalid or unknown callback shows a friendly fallback, never a raw erro
   const invalid = calls.filter((call) => call.method === 'editMessageText').at(-1);
   assert.match(invalid.payload.text, /PAIRING FAILED/);
   assert.match(invalid.payload.text, /number format is invalid/);
+});
+
+// ---------------------------------------------------------------------------
+// New feature tests: single-message pairing, copy-code button, regeneration,
+// access roles, verification enforcement, and temporary blocking.
+// ---------------------------------------------------------------------------
+
+// A Telegram API stub that returns real message IDs for sendMessage/sendPhoto
+// and records edits, so the single-message pairing lifecycle can be asserted.
+function flowApi() {
+  const calls = [];
+  let messageId = 5000;
+  const fetchImpl = async (url, init) => {
+    const method = url.split('/').pop();
+    const payload = JSON.parse(init.body || '{}');
+    let result = payload;
+    if (method === 'getMe') result = { username: 'AnimeMdBot' };
+    if (method === 'answerCallbackQuery') result = true;
+    if (method === 'sendMessage' || method === 'sendPhoto') { messageId += 1; result = { message_id: messageId }; }
+    if (method === 'editMessageText') result = { message_id: payload.message_id };
+    calls.push({ method, payload, result });
+    return { ok: true, json: async () => ({ ok: true, result }) };
+  };
+  return { calls, fetchImpl };
+}
+
+function flowPairing(overrides = {}) {
+  let counter = 0;
+  return {
+    requestPairing: async (_ownerId, number) => {
+      counter += 1;
+      return { code: `CODE${counter}`, displayCode: `CODE-${counter}`, brand: 'WhatsApp-generated', number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 };
+    },
+    cancelPairing: async () => ({ cancelled: true }),
+    listSessions: async () => [],
+    statusOf: async () => ({}),
+    stopSession: async () => ({}),
+    restartSession: async () => ({}),
+    listAllSessions: async () => [],
+    ...overrides
+  };
+}
+
+function flowController({ calls, fetchImpl, pairing = flowPairing(), store } = {}) {
+  const controller = new TelegramController({
+    token: 'token', owners: ['10'],
+    controllerStore: store || memoryUserStore(),
+    pairing,
+    fetchImpl,
+    log: { info: () => {}, warn: () => {}, error: () => {} }
+  });
+  return { calls, fetchImpl, controller };
+}
+
+test('the pairing lifecycle edits ONE message and never sends a second code message', async () => {
+  const { calls, fetchImpl } = flowApi();
+  const { controller } = flowController({ calls, fetchImpl });
+  controller.running = true;
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 92355817646' } });
+  const sends = calls.filter((call) => call.method === 'sendMessage');
+  const edits = calls.filter((call) => call.method === 'editMessageText');
+  assert.equal(sends.length, 1, 'only the PREPARING message is sent as a new message');
+  assert.equal(edits.length, 1, 'the code box arrives as an edit of the same message');
+  const prep = sends[0].payload;
+  const code = edits[0].payload;
+  assert.equal(sends[0].result.message_id, code.message_id, 'the code is edited onto the same message id');
+  assert.match(prep.text, /Preparing WhatsApp pairing/);
+  assert.match(code.text, /ANIME MD • PAIRING CODE/);
+  assert.match(code.text, /🔐 CODE: CODE-1/);
+});
+
+test('the Copy Code button uses native copy_text with only the code', async () => {
+  const { calls, fetchImpl } = flowApi();
+  const { controller } = flowController({ calls, fetchImpl });
+  controller.running = true;
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 92355817646' } });
+  const codeEdit = calls.filter((call) => call.method === 'editMessageText').at(-1);
+  const buttons = codeEdit.payload.reply_markup.inline_keyboard.flat();
+  const copy = buttons.find((button) => button.text === '📋 Copy Code');
+  assert.ok(copy, 'the copy button is present');
+  assert.deepEqual(copy.copy_text, { text: 'CODE-1' }, 'copy_text carries ONLY the raw code');
+  assert.equal(copy.callback_data, undefined, 'the copy button is not a fake callback');
+  assert.equal(copy.copy_text.text.includes('|'), false, 'the copied text is not the whole message');
+});
+
+test('the Generate New Code button regenerates on the same message and is owner-scoped', async () => {
+  const { calls, fetchImpl } = flowApi();
+  const { controller } = flowController({ calls, fetchImpl });
+  controller.running = true;
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 92355817646' } });
+  const first = calls.filter((call) => call.method === 'editMessageText').at(-1);
+  const token = first.payload.reply_markup.inline_keyboard[1][0].callback_data.split(':')[2];
+  const messageId = first.payload.message_id;
+  // The owner who initiated the flow can regenerate.
+  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: `pair:regen:${token}`, message: { chat: { id: 1 }, message_id: messageId } } });
+  const lastEdit = calls.filter((call) => call.method === 'editMessageText').at(-1);
+  assert.match(lastEdit.payload.text, /PAIRING CODE/);
+  assert.equal(lastEdit.payload.message_id, messageId, 'the regenerated code edits the same message');
+  // A stale forged token from another user is rejected and never edits.
+  const before = calls.filter((call) => call.method === 'editMessageText').length;
+  await controller.handleUpdate({ callback_query: { id: 'cb2', from: { id: 11 }, data: `pair:regen:${token}`, message: { chat: { id: 1 }, message_id: messageId } } });
+  assert.equal(calls.filter((call) => call.method === 'editMessageText').length, before, 'a forged callback does not regenerate');
+});
+
+test('verification is enforced functionally and persists across attempts', async () => {
+  const store = memoryUserStore();
+  const { controller, replies } = makeController({ publicMode: true, controllerStore: store, pairing: flowPairing() });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
+  assert.match((replies.at(-1).caption || replies.at(-1).text) || '', /VERIFICATION/);
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/verify' } });
+  assert.match(replies.at(-1).text, /Verification complete/);
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/sessions' } });
+  assert.match(replies.at(-1).text, /ANIME MD • SESSIONS/);
+});
+
+test('a blocked user is denied with a dynamic unblock time and access auto-restores', async () => {
+  const store = memoryUserStore();
+  await store.markVerified('11');
+  await store.setBlocked('11', 3_600_000);
+  const { controller, replies } = makeController({ publicMode: true, controllerStore: store, pairing: flowPairing() });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 92355817646' } });
+  const blocked = replies.at(-1).text;
+  assert.match(blocked, /ACCESS BLOCKED/);
+  assert.match(blocked, /Unblocks:/);
+  assert.match(blocked, /Remaining:/);
+  assert.match(blocked, /Please try again after the block expires/);
+  assert.doesNotMatch(blocked, /92355817646/, 'the public notice never leaks the phone number');
+  // After the block expires the user is automatically restored (no admin action).
+  await store.clearBlocked('11');
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 92355817646' } });
+  assert.match(replies.at(-1).text, /PAIRING CODE|Preparing WhatsApp pairing/);
+});
+
+test('access roles resolve from the database and enforce premium/VIP limits', async () => {
+  const store = memoryUserStore({ controllers: ['99'], premium: [{ id: '20', expiresAt: Date.now() + 86_400_000 }], vip: new Map([['30', true]]) });
+  const { controller } = makeController({ controllerStore: store, owners: ['10'], pairing: flowPairing() });
+  assert.equal(await controller.roleOf('10'), 'owner');
+  assert.equal(await controller.roleOf('99'), 'admin');
+  assert.equal(await controller.roleOf('30'), 'vip');
+  assert.equal(await controller.roleOf('20'), 'premium');
+  assert.equal(await controller.roleOf('44'), 'normal');
+  assert.equal(await controller.pairingLimitOf('10'), Infinity);
+  assert.equal(await controller.pairingLimitOf('99'), Infinity);
+  assert.equal(await controller.pairingLimitOf('30'), Infinity);
+  assert.equal(await controller.pairingLimitOf('20'), 3);
+  assert.equal(await controller.pairingLimitOf('44'), 5);
+});
+
+test('a premium user at the unique-number cap is refused before any socket opens', async () => {
+  const store = memoryUserStore({ verified: new Set(['20']), premium: [{ id: '20', expiresAt: Date.now() + 86_400_000 }], paired: new Map([['20', ['923001234567', '12025550123', '971501234567']]]) });
+  const { controller, replies } = makeController({ publicMode: true, controllerStore: store, pairing: flowPairing() });
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 20 }, text: '/pair 92355987654' } });
+  assert.match(replies.at(-1).text, /PAIRING LIMIT/);
+  assert.match(replies.at(-1).text, /3\/3 numbers/);
+});
+
+test('public chats never reveal a phone number or session detail', async () => {
+  const { calls, fetchImpl } = flowApi();
+  const { controller } = flowController({ calls, fetchImpl });
+  controller.running = true;
+  // A public group user tries to pair; the bot refuses with a privacy notice
+  // and NEVER sends the PREPARING box with the number.
+  await controller.handleUpdate({ message: { chat: { id: -1001, type: 'supergroup' }, from: { id: 10 }, text: '/pair 92355817646' } });
+  const texts = calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload.text);
+  assert.equal(texts.length, 1);
+  assert.match(texts[0], /this bot only works in a private chat/i);
+  assert.doesNotMatch(texts[0], /92355817646/, 'the phone number is never broadcast to a public chat');
+  // Private chats still pair normally.
+  await controller.handleUpdate({ message: { chat: { id: 1, type: 'private' }, from: { id: 10 }, text: '/pair 92355817646' } });
+  const pairSends = calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload.text);
+  assert.ok(pairSends.some((text) => /Preparing WhatsApp pairing/.test(text)), 'the private chat still pairs');
 });
