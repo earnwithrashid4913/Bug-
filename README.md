@@ -57,6 +57,20 @@ deleted), and owner settings toggles. Every button has a real handler, and
 session ownership is re-resolved server-side on every callback: a user can
 never manage another user's session.
 
+### Verification
+
+When `telegram.requiredChannels` is non-empty, every protected command and
+callback runs through one centralized membership guard. The guard checks the
+requesting user's membership in every required community with a live Telegram
+`getChatMember` call (a short TTL cache only avoids duplicate calls within a
+single request), and fails closed on any Telegram API error. A user who was
+previously verified but later leaves a community loses access on the next
+check. The **🔄 VERIFY** button re-checks live and only reports success once
+both communities are confirmed; the **📢 JOIN CHANNEL** / **👥 JOIN GROUP**
+buttons open the exact configured links, and **🚀 JOIN ALL** lists every
+destination. Joining is never assumed — the user must return and press
+**🔄 VERIFY**.
+
 ### Multi-user access
 
 - By default only the controllers configured in `telegram.ownerIds` (plus
@@ -66,8 +80,13 @@ never manage another user's session.
 - `telegram.premiumOnly: true` restricts pairing to premium Telegram users.
   Bootstrap owners grant premium with `/addprem <id> [30d]` and revoke it
   with `/delprem <id>`.
-- `telegram.requiredChannels` (empty by default) lists channels a user must
-  join before pairing. Bootstrap owners skip this check.
+- `telegram.requiredChannels` lists the communities a user must join before
+  pairing or using protected commands. Each entry supports `name`, `chatId`
+  (the `@username` or numeric `-100` id checked live via `getChatMember`),
+  `link` (the exact public join URL used by the JOIN buttons) and `kind`
+  (`channel` or `group`, which drives the button label). Verification requires
+  ALL listed communities — joining just one is never enough. Bootstrap owners
+  skip this check.
 - `/listpaired` (bootstrap owners only) lists every session on the bot, and
   bootstrap owners may restart or stop any session through the same
   owner-scoped operations with an admin override.

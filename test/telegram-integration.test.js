@@ -48,7 +48,8 @@ globalThis.fetch = async (url, init) => {
       message(2, 10, '/status'),
       message(3, 10, '/pair 123'),
       message(4, 10, '/restart 923001234567'),
-      message(5, 11, '/sessions')
+      message(5, 11, '/sessions'),
+      message(6, 10, '/start')
     ]);
   }
   return respond(payload);
@@ -93,6 +94,16 @@ test('the Telegram controller wiring starts, greets with the Gojo intro, and ser
   // Unauthorized senders now get verification prompt (functional, not ACCESS DENIED as not authorized)
   // With new architecture, normal users can register via /start, so /sessions for unverified user shows VERIFICATION
   await waitFor((entry) => /not authorized|VERIFICATION|ACCESS BLOCKED/.test(entry.payload.text || entry.payload.caption || ''), 'authorization');
+
+  // The wired activityLogger delivers a compact ANIME MD • ACTIVITY box to the
+  // bootstrap owner for the /start event, with non-sensitive fields only.
+  await waitFor((entry) => /ANIME MD • ACTIVITY/.test(entry.payload.text || ''), 'owner activity box');
+  const activity = sent.find((entry) => /ANIME MD • ACTIVITY/.test(entry.payload.text || ''));
+  const activityText = activity.payload.text;
+  assert.match(activityText, /⚡ Action: Start/);
+  assert.match(activityText, /🆔 ID: 10/);
+  assert.match(activityText, /👑 Tier: OWNER/);
+  assert.match(activityText, /🔐 Membership: Verified/);
 });
 
 test('cleanup removes the temporary integration directory', async () => {

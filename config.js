@@ -75,10 +75,16 @@ module.exports = {
     // true restricts pairing to premium Telegram users (granted with
     // /addprem by a bootstrap owner). OPTIONAL. Ignored for bootstrap owners.
     premiumOnly: false,
-    // Optional channels a user must join before they may pair. OPTIONAL.
-    // Example: [{ name: 'ANIME MD Updates', chatId: '@YourChannel' }].
+    // Communities a user must join BEFORE they can pair or use protected
+    // commands. VERIFICATION REQUIRES ALL OF THEM — joining just one is not
+    // enough. `kind` ("channel" or "group") controls the JOIN button label,
+    // `link` is the exact public invite the button opens, and `chatId` is the
+    // @username (or numeric -100 id) checked live via Telegram getChatMember.
     // Leave empty to disable the join check. Bootstrap owners skip it.
-    requiredChannels: [],
+    requiredChannels: [
+      { name: 'Fixa Updates', chatId: '@fixaupdates', link: 'https://t.me/fixaupdates', kind: 'channel' },
+      { name: 'Fixa Dev GB Group', chatId: '@FixaDevGBGroup', link: 'https://t.me/FixaDevGBGroup', kind: 'group' }
+    ],
     // Optional HTTPS images shown by Telegram.
     startImage: 'https://files.catbox.moe/cvdoo3.png',
     connectedImage: 'https://files.catbox.moe/uuuqdm.png'
