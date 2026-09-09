@@ -257,7 +257,7 @@ test('sticker command provides usage text when no image is supplied', async () =
   });
 
   assert.equal(sent.length, 1);
-  assert.match(sent[0].payload.text, /Reply to an image/);
+  assert.match(sent[0].payload.text, /REPLY TO AN IMAGE/);
 });
 
 test('profile picture command uses the current Baileys profile picture API', async () => {
@@ -281,8 +281,12 @@ test('profile picture command uses the current Baileys profile picture API', asy
     message: { conversation: '!getpp' }
   });
 
-  assert.equal(sent.length, 1);
+  // The image is delivered through the current profilePictureUrl API, followed
+  // by the context-button card that every command reply now carries.
+  assert.equal(sent.length, 2);
   assert.equal(sent[0].payload.image.url, 'https://example.invalid/profile.jpg');
+  assert.match(sent[0].payload.caption, /PROFILE PICTURE/);
+  assert.match(sent[1].payload.text, /15551234568/);
 });
 
 test('group management help is available only to a group admin', async () => {
@@ -313,7 +317,7 @@ test('group management help is available only to a group admin', async () => {
   });
 
   assert.equal(sent.length, 1);
-  assert.match(sent[0].payload.text, /Safe group management/);
+  assert.match(sent[0].payload.text, /GROUP MANAGEMENT/);
 });
 
 test('premium duration parser validates supported units', () => {

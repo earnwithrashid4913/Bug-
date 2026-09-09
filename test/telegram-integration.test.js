@@ -22,7 +22,6 @@ userConfig.database.dataDir = path.join(tempRoot, 'data');
 userConfig.telegram.enabled = true;
 userConfig.telegram.botToken = 'integration-token';
 userConfig.telegram.ownerIds = ['10'];
-userConfig.telegram.pairingCode = 'GOATMODS';
 
 const index = require('../index');
 

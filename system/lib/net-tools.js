@@ -97,6 +97,14 @@ async function downloadRemoteFile(url) {
   const response = await fetchWithTimeout(url);
   if (!response.ok) throw new Error(`Download failed (${response.status}).`);
   const buffer = await readLimitedBuffer(response);
+  // A zero-byte or truncated body would otherwise be sent to WhatsApp as an
+  // unopenable file. Fail here so the user gets a message instead of a
+  // corrupt attachment.
+  if (buffer.length === 0) throw new Error('The download service returned an empty file.');
+  const declared = Number(response.headers.get('content-length') || 0);
+  if (declared > 0 && buffer.length < declared) {
+    throw new Error('The download was incomplete. Please try again.');
+  }
   const type = response.headers.get('content-type') || 'application/octet-stream';
   return { buffer, type };
 }
@@ -127,6 +135,9 @@ async function spotifySearch(query, limit = 5) {
     title: track.name,
     artist: track.artists?.map((artist) => artist.name).join(', '),
     album: track.album?.name,
+    // The handler reads album.images[0].url for the link preview thumbnail, so
+    // the album has to keep its image list instead of only its name.
+    images: Array.isArray(track.album?.images) ? track.album.images : [],
     duration: track.duration_ms,
     url: track.external_urls?.spotify,
     preview: track.preview_url

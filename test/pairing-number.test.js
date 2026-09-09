@@ -57,19 +57,22 @@ test('numbers display in a readable international form', () => {
 });
 
 test('pairing codes display as two groups of four', () => {
-  assert.equal(formatPairingCodeDisplay('GOATMODS'), 'GOAT-MODS');
+  assert.equal(formatPairingCodeDisplay('KJ4MNP2X'), 'KJ4M-NP2X');
   assert.equal(formatPairingCodeDisplay('ABCDEFGH'), 'ABCD-EFGH');
   assert.equal(formatPairingCodeDisplay('ABC'), 'ABC');
   assert.equal(formatPairingCodeDisplay(undefined), undefined);
   assert.equal(formatPairingCodeDisplay(''), '');
 });
 
-test('the custom pairing code setting is normalized from config.js', () => {
+test('config.js exposes no custom pairing code: codes always come from WhatsApp', () => {
   const source = structuredClone(require('../config'));
   source.telegram.botToken = 'test-token';
   source.telegram.ownerIds = ['12345'];
-  source.telegram.pairingCode = 'goat-mods';
-  assert.equal(loadConfig(source).telegramPairingCode, 'GOATMODS');
-  source.telegram.pairingCode = '';
-  assert.equal(loadConfig(source).telegramPairingCode, '');
+  const loaded = loadConfig(source);
+  assert.equal('telegramPairingCode' in loaded, false, 'no custom-code setting reaches the runtime');
+  assert.equal(source.telegram.pairingCode, undefined, 'config.js ships no custom pairing code');
+  // A legacy private config.js that still carries the old key must be ignored
+  // rather than forwarded to Baileys.
+  source.telegram.pairingCode = 'GOATMODS';
+  assert.equal('telegramPairingCode' in loadConfig(source), false);
 });
