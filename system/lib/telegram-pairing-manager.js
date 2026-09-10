@@ -34,7 +34,9 @@ const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const {
   default: makeWASocket,
+  Browsers,
   DisconnectReason,
+  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState
 } = require('@whiskeysockets/baileys');
@@ -77,6 +79,16 @@ const DEFAULT_LIMITS = Object.freeze({
   ownerCooldownMs: 10_000,       // minimum spacing between new pairing flows
   pairingReadyTimeoutMs: 45_000, // wait for the WhatsApp handshake
   pairingCodeTtlMs: 5 * 60_000,  // pairing code lifetime before cleanup
+  // Lifetime of each pair-device ref on the unregistered pairing socket. WhatsApp
+  // hands out a small batch of refs; when the last one expires Baileys closes
+  // the socket with 408 ("QR refs attempts ended"). The default 20s per ref
+  // kills the socket after ~2 minutes — well inside the 5-minute code TTL —
+  // which is exactly when a code that was still displayed in Telegram started
+  // failing on the phone with "Couldn't link device". 60s per ref keeps the
+  // SAME socket alive for the full TTL.
+  pairingQrRefTimeoutMs: 60_000,
+  versionFetchTimeoutMs: 6_000,  // fetchLatestBaileysVersion() budget
+  versionCacheMs: 60 * 60_000,   // reuse a fetched WA Web version for an hour
   reconnectBaseDelayMs: 2_000,
   reconnectMaxDelayMs: 30_000,
   staleSweepIntervalMs: 10 * 60_000,
@@ -279,8 +291,13 @@ class TelegramPairingManager {
     this.baileys = {
       makeWASocket: baileys.makeWASocket || makeWASocket,
       useMultiFileAuthState: baileys.useMultiFileAuthState || useMultiFileAuthState,
-      makeCacheableSignalKeyStore: baileys.makeCacheableSignalKeyStore || makeCacheableSignalKeyStore
+      makeCacheableSignalKeyStore: baileys.makeCacheableSignalKeyStore || makeCacheableSignalKeyStore,
+      // Optional so the fake Baileys used by the tests falls back to the
+      // bundled default; production always resolves the live version.
+      fetchLatestBaileysVersion: baileys.fetchLatestBaileysVersion || fetchLatestBaileysVersion
     };
+    // { version, fetchedAt } of the last successful fetchLatestBaileysVersion().
+    this.versionCache = undefined;
     this.limits = { ...DEFAULT_LIMITS, ...limits };
 
     // Pairing codes are always WhatsApp-generated. This label is display-only
@@ -478,17 +495,58 @@ class TelegramPairingManager {
 
   // ------------------------------ sockets ---------------------------------
 
+  // Resolves the WhatsApp Web version the socket should announce. A stale
+  // version is one of the classic reasons a pairing code is issued but the
+  // phone then refuses the link, so the live version is fetched (with a hard
+  // time budget and an hourly cache); offline the bundled default is used.
+  async resolveWaVersion() {
+    const now = Date.now();
+    if (this.versionCache && now - this.versionCache.fetchedAt < this.limits.versionCacheMs) {
+      return this.versionCache.version;
+    }
+    if (typeof this.baileys.fetchLatestBaileysVersion !== 'function') return undefined;
+    let timer;
+    try {
+      const result = await Promise.race([
+        this.baileys.fetchLatestBaileysVersion(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('version fetch timed out')), this.limits.versionFetchTimeoutMs);
+        })
+      ]);
+      const version = Array.isArray(result?.version) && result.version.length === 3 ? result.version : undefined;
+      if (version) this.versionCache = { version, fetchedAt: now };
+      return version;
+    } catch (error) {
+      this.log.warn?.(`[telegram-pairing] Could not fetch the latest WhatsApp Web version (${error.message}); using the bundled default.`);
+      return this.versionCache?.version;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async openSocket(session, { state, saveCreds }) {
     const logger = pino({ level: 'silent' });
+    const version = await this.resolveWaVersion();
     // Each socket owns its retry cache; sharing one across sessions would
     // leak retry state between controllers.
     const socket = this.baileys.makeWASocket({
+      ...(version ? { version } : {}),
       auth: { creds: state.creds, keys: this.baileys.makeCacheableSignalKeyStore(state.keys, logger) },
       logger,
-      browser: ['ANIME MD', 'Chrome', '1.0.0'],
+      // A stock Baileys browser descriptor. The OS name is sent to WhatsApp in
+      // the companion registration payload and shown under Linked Devices; a
+      // made-up OS ("ANIME MD") is a known trigger for the phone rejecting the
+      // pairing-code link after the code was displayed.
+      browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      msgRetryCounterCache: new MemoryCache({ maxEntries: 1_000 })
+      generateHighQualityLinkPreview: true,
+      connectTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 60_000,
+      keepAliveIntervalMs: 30_000,
+      qrTimeout: this.limits.pairingQrRefTimeoutMs,
+      msgRetryCounterCache: new MemoryCache({ maxEntries: 1_000 }),
+      userDevicesCache: new MemoryCache({ stdTtlMs: 5 * 60_000, maxEntries: 500 })
     });
     this.reserveSocketSlot(session);
     session.socket = socket;
@@ -499,7 +557,13 @@ class TelegramPairingManager {
       // live credentials registered and emits them before the server forces a
       // restart (515). Latch that immediately so the restart is never mistaken
       // for a failed pairing.
-      if (updatedCreds?.registered === true) session.registered = true;
+      if (updatedCreds?.registered === true && !session.registered) {
+        session.registered = true;
+        this.log.info?.(`[telegram-pairing] ${session.numberDisplay} completed the WhatsApp link; waiting for the authenticated connection.`);
+      }
+      // saveCreds() persists the in-memory `state.creds` object that this
+      // socket was created with, so credentials can never be written into
+      // another session's directory.
       void saveCreds().catch(() => this.log.error?.(`[telegram-pairing] Could not save WhatsApp credentials for ${session.numberDisplay}.`));
     });
     socket.ev.on('connection.update', (update) => {
@@ -612,14 +676,25 @@ class TelegramPairingManager {
 
     session.socket = undefined;
     this.releaseSocketReservation(session);
-    const linked = session.registered || Boolean(update.receivedPendingNotifications && classification.type === 'RESTART_REQUIRED');
+    // "Linked" is decided by the real credential state only: the in-memory
+    // creds are marked registered by Baileys when the phone accepts the code
+    // (latched in the creds.update handler above), and a 515 restart right
+    // after that is the normal post-link sequence — never a failure.
+    const linked = session.registered
+      || session.authState?.state?.creds?.registered === true
+      || Boolean(update.receivedPendingNotifications && classification.type === 'RESTART_REQUIRED');
+    if (linked && !session.registered) session.registered = true;
 
-    this.log.warn?.(`[telegram-pairing] ${session.numberDisplay} disconnected (${classification.type}).`);
+    const statusCode = update.lastDisconnect?.error?.output?.statusCode;
+    this.log.warn?.(`[telegram-pairing] ${session.numberDisplay} disconnected (${classification.type}${statusCode ? `, status ${statusCode}` : ''}, linked=${linked}).`);
 
     if (classification.terminal) {
       session.setStatus(classification.type === 'LOGGED_OUT' ? STATUS.LOGGED_OUT : STATUS.FAILED);
       const snapshot = this.sessionSnapshot(session);
-      void this.cleanupSession(session, { deleteCreds: true })
+      // Credentials are removed only for reasons that make them permanently
+      // unusable (logged out / bad auth / replaced); the classification table
+      // is the single source of truth for that decision.
+      void this.cleanupSession(session, { deleteCreds: classification.deleteCreds === true })
         .then(() => {
           try {
             this.onDisconnected?.(session.ownerId, snapshot, classification);
@@ -790,6 +865,17 @@ class TelegramPairingManager {
     session.setStatus(STATUS.LOCKING);
     this.sessions.set(key, session);
 
+    // Optional live progress hook for the Telegram layer (single edited
+    // message): PREPARING → GENERATING_CODE. Never used to signal success.
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : undefined;
+    const report = (stage) => {
+      try {
+        onProgress?.(stage, this.sessionSnapshot(session));
+      } catch (error) {
+        this.log.warn?.(`[telegram-pairing] Progress callback failed for ${session.numberDisplay}: ${error.message}`);
+      }
+    };
+
     session.request = (async () => {
       try {
         // The per-number ownership invariant also covers credentials stored
@@ -837,6 +923,7 @@ class TelegramPairingManager {
         }
 
         session.setStatus(STATUS.INITIALIZING);
+        report('PREPARING');
         session.ready = new Promise((resolve, reject) => {
           session.readyResolve = resolve;
           session.readyReject = reject;
@@ -847,6 +934,8 @@ class TelegramPairingManager {
         if (session.status === STATUS.INITIALIZING) session.setStatus(STATUS.CONNECTING);
 
         await waitForPairingReady(session.ready, session.socket, this.limits.pairingReadyTimeoutMs);
+        await waitForPairingReady(session.ready, this.limits.pairingReadyTimeoutMs);
+        report('GENERATING_CODE');
 
         if (session.stopped || !session.socket) {
           throw pairingError('The WhatsApp pairing socket closed before a pairing code could be generated.', 'CONNECTION_CLOSED', 502);
@@ -874,6 +963,7 @@ class TelegramPairingManager {
         session.setStatus(STATUS.CODE_GENERATED);
         session.setStatus(STATUS.WAITING_FOR_LINK);
         this.armExpiryTimer(session);
+        this.log.info?.(`[telegram-pairing] WhatsApp issued a pairing code for ${session.numberDisplay}; the socket stays open waiting for the link.`);
 
         const result = {
           code,
