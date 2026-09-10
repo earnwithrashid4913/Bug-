@@ -585,7 +585,7 @@ class TelegramPairingManager {
       this.releasePairingSlot(session);
       const snapshot = this.sessionSnapshot(session);
       try {
-        this.onConnected?.(session.ownerId, snapshot);
+        this.onConnected?.(session.ownerId, snapshot, session.socket);
       } catch (error) {
         this.log.error?.(`[telegram-pairing] onConnected callback failed for ${session.numberDisplay}: ${error.message}`);
       }

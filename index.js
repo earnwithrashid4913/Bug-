@@ -68,6 +68,9 @@ let resetting = false;
 let telegramController;
 let telegramPairingManager;
 let connectionCardSent = false;
+// One connected-account welcome per paired session during this process. A
+// reconnect must restore command handling without spamming the self chat.
+const pairedSelfWelcomeSent = new Set();
 
 // Live mirror of the primary WhatsApp socket state. Telegram pairing sessions
 // expose their own owner-scoped status through TelegramPairingManager.
@@ -230,10 +233,21 @@ function startTelegramController() {
     // session credentials.
     activityLogger: (event) => telegramController?.sendOwnerActivity(event)
   });
-  telegramPairingManager.onConnected = async (ownerId, session) => {
+  telegramPairingManager.onConnected = async (ownerId, session, socket) => {
     // This notification is scoped to the Telegram owner whose isolated
     // WhatsApp socket authenticated. It is never broadcast to other owners.
     await telegramController?.notifySessionConnected(ownerId, session);
+
+    // The paired account, not the Telegram owner or a configured developer,
+    // receives the WhatsApp-side welcome. `socket.user.id` is Baileys' own
+    // authenticated JID for this isolated session.
+    const sessionKey = `${ownerId}:${session?.number || ''}`;
+    if (!socket || pairedSelfWelcomeSent.has(sessionKey)) return;
+    pairedSelfWelcomeSent.add(sessionKey);
+    await sendConnectionSuccess(socket).catch((error) => {
+      pairedSelfWelcomeSent.delete(sessionKey);
+      console.warn(`[connection] Could not send paired self-chat welcome: ${error.message}`);
+    });
   };
   telegramPairingManager.onDisconnected = async (ownerId, session, classification) => {
     // Only permanent endings (logged out, replaced, bad session) reach the
@@ -266,10 +280,16 @@ async function sendConnectionSuccess(socket) {
   const target = normalizeSelfJid(socket.user?.id);
   if (!target) throw new Error('Connected socket did not expose a user JID.');
 
-  await socket.sendMessage(target, {
-    image: { url: config.connectionSuccessImage },
-    caption: '*ANIME MD*'
-  });
+  try {
+    await socket.sendMessage(target, {
+      image: { url: config.connectionSuccessImage },
+      caption: '*ANIME MD*'
+    });
+  } catch (error) {
+    // A remote welcome image must never prevent the text welcome/menu from
+    // reaching the connected account's own chat.
+    console.warn(`[connection] Welcome image could not be sent: ${error.message}`);
+  }
 
   const text = [
     '*ANIME MD*',
