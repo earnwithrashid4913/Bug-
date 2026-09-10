@@ -94,10 +94,17 @@ async function resolveJid(socket, jid) {
 async function getMessageContext(socket, rawMessage) {
   const chatId = rawMessage?.key?.remoteJid;
   const isGroup = Boolean(chatId?.endsWith('@g.us'));
-  const sender = await resolveJid(
-    socket,
-    rawMessage?.key?.fromMe ? socket.user?.id : rawMessage?.key?.participant || rawMessage?.participant || chatId
-  );
+  // In a private self-chat, WhatsApp can report the remote JID as the phone
+  // number while `socket.user.id` is a LID. The remote JID is the authenticated
+  // account's own chat in that case, so use it for ownership/command checks.
+  // Group messages still use the socket's own JID when fromMe is true.
+  const fromMe = Boolean(rawMessage?.key?.fromMe);
+  const senderJid = fromMe && !isGroup
+    ? chatId
+    : fromMe
+      ? socket.user?.id
+      : rawMessage?.key?.participant || rawMessage?.participant || chatId;
+  const sender = await resolveJid(socket, senderJid);
 
   return {
     raw: rawMessage,
