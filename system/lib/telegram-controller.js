@@ -77,7 +77,7 @@ const PREMIUM_PAIRING_LIMIT = 3;
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 800;
 
-const { formatInternationalNumber, normalizeWhatsAppNumber } = require('./pairing-number');
+const { formatInternationalNumber, maskInternationalNumber, normalizeWhatsAppNumber } = require('./pairing-number');
 const { parseDuration } = require('./premium');
 
 // Telegram treats Markdown parsing errors as a failed API request. Keep all
@@ -361,7 +361,11 @@ function guideBox() {
     '   intezar karein',
     '',
     'Number format: country code +',
-    'number, without + (923001234567).'
+    'number, without + (923001234567).',
+    '',
+    'Works from private chats, groups',
+    'and supergroups. In a group the',
+    'code is sent to your private chat.'
   ]);
 }
 
@@ -552,7 +556,7 @@ function premiumBox({ id, expiresAt, active }) {
   return box('ANIME MD • PREMIUM', lines);
 }
 
-function accountBox({ id, role, verified, premium, vip, owner, pairedNumbers = [], limit, used, blockStatus }) {
+function accountBox({ id, role, verified, premium, vip, owner, pairedNumbers = [], limit, used, blockStatus, publicChat = false }) {
   const roleLabel = role ? role.toUpperCase() : 'NORMAL';
   const lines = [
     '',
@@ -569,7 +573,7 @@ function accountBox({ id, role, verified, premium, vip, owner, pairedNumbers = [
     lines.push('', '📱 Numbers:');
     for (const num of pairedNumbers.slice(0, 5)) {
       try {
-        lines.push(` • ${formatInternationalNumber(num)}`);
+        lines.push(` • ${publicChat ? maskInternationalNumber(num) : formatInternationalNumber(num)}`);
       } catch {
         lines.push(` • ${num}`);
       }
@@ -677,7 +681,17 @@ function badgeParts(status) {
   return space === -1 ? { icon: badge, label: '' } : { icon: badge.slice(0, space), label: badge.slice(space + 1) };
 }
 
-function sessionsBox(sessions) {
+// Public chats render session numbers masked (see maskInternationalNumber).
+function displayNumber(session, publicChat = false) {
+  if (!publicChat) return session.numberDisplay;
+  try {
+    return maskInternationalNumber(session.number);
+  } catch {
+    return session.numberDisplay;
+  }
+}
+
+function sessionsBox(sessions, publicChat = false) {
   if (!sessions.length) {
     return box('ANIME MD • SESSIONS', [
       '',
@@ -688,7 +702,7 @@ function sessionsBox(sessions) {
   }
   const lines = sessions.map((session) => {
     const { icon, label } = badgeParts(session.status);
-    return `${icon} ${session.numberDisplay} — ${label || session.status}`;
+    return `${icon} ${displayNumber(session, publicChat)} — ${label || session.status}`;
   });
   return box('ANIME MD • SESSIONS', [
     '',
@@ -700,11 +714,11 @@ function sessionsBox(sessions) {
   ]);
 }
 
-function statusBox(session, { ownerId } = {}) {
+function statusBox(session, { ownerId, publicChat = false } = {}) {
   const { icon, label } = badgeParts(session.status);
   const lines = [
     '',
-    `📱 Number: ${session.numberDisplay}`,
+    `📱 Number: ${displayNumber(session, publicChat)}`,
     `${icon} Status: ${label || session.status}`,
     `🔗 Paired: ${session.registered ? 'yes' : 'no'}`,
     `🔄 Reconnects: ${session.reconnects}`
@@ -714,7 +728,7 @@ function statusBox(session, { ownerId } = {}) {
   return box('ANIME MD • SESSION STATUS', lines);
 }
 
-function overallStatusBox(sessions, controllerUptimeSeconds, user = {}) {
+function overallStatusBox(sessions, controllerUptimeSeconds, user = {}, publicChat = false) {
   const tier = user.tier || TIER_LABELS.normal;
   const membership = user.membership === 'verified'
     ? 'Verified'
@@ -731,7 +745,7 @@ function overallStatusBox(sessions, controllerUptimeSeconds, user = {}) {
   if (sessions.length) {
     lines.push('', ...sessions.map((session) => {
       const { icon, label } = badgeParts(session.status);
-      return `${icon} ${session.numberDisplay} — ${label || session.status}`;
+      return `${icon} ${displayNumber(session, publicChat)} — ${label || session.status}`;
     }));
   } else {
     lines.push('', 'No WhatsApp sessions yet.', 'Telegram online ≠ WhatsApp connected.', 'Use /pair <number> to pair.');
@@ -952,6 +966,76 @@ function pairingFailureMarkup(flowToken) {
   ] };
 }
 
+// Shown in the PUBLIC chat after the code was delivered privately: progress
+// continues here, but the code itself never appears in a group or supergroup.
+function codeDeliveredBox(numberDisplay) {
+  return box('ANIME MD • PAIRING', [
+    '',
+    '✅ Pairing Code Sent',
+    '',
+    `📱 ${numberDisplay}`,
+    '',
+    '🔐 The pairing code was delivered to',
+    'your private chat with this bot.',
+    '',
+    'WhatsApp → Linked Devices →',
+    'Link a Device →',
+    'Link with phone number'
+  ]);
+}
+
+// Shown in the PUBLIC chat when the private delivery of the code failed (the
+// user never opened a private chat with the bot). The pairing is cancelled —
+// the code must not fall back to being shown in the public chat.
+function codeUnavailableBox() {
+  return box('ANIME MD • PAIRING', [
+    '',
+    '⚠️ Code could not be delivered.',
+    '',
+    'Pairing codes are only sent in your',
+    'private chat with this bot — never',
+    'in a group.',
+    '',
+    'Open the bot privately (press',
+    'Start), then send /pair <number> again.'
+  ]);
+}
+
+// Shown when a pairing is already in progress for the same number: the repeat
+// request is acknowledged without opening a second flow or code.
+function pairingInProgressBox(numberDisplay) {
+  return box('ANIME MD • PAIRING', [
+    '',
+    `📱 ${numberDisplay}`,
+    '⏳ Pairing is already in progress.',
+    '',
+    'One request produces exactly one code.',
+    'Watch this chat for the current status.'
+  ]);
+}
+
+// Shown when the pairing code expired without a link.
+function pairingExpiredBox(numberDisplay) {
+  return box('ANIME MD • CODE EXPIRED', [
+    '',
+    '⌛ The pairing code has expired.',
+    '',
+    `📱 ${numberDisplay}`,
+    '',
+    'Press the button below to start a',
+    'fresh pairing.'
+  ]);
+}
+
+// Public-chat buttons for the pairing message: deliberately NO copy button —
+// copy_text would carry the pairing code into the public message payload.
+function publicPairingMarkup(flowToken) {
+  return { inline_keyboard: [[
+    { text: '🔄 Generate New Code', callback_data: `pair:regen:${flowToken}` },
+    { text: '🏠 Home', callback_data: 'home' }
+  ]] };
+}
+
 function guideMarkup() {
   return { inline_keyboard: [[
     { text: '🔗 Pair WhatsApp', callback_data: 'pair:new' }
@@ -960,9 +1044,11 @@ function guideMarkup() {
   ]] };
 }
 
-function sessionsMarkup(sessions) {
+function sessionsMarkup(sessions, publicChat = false) {
+  // Button labels are visible in the chat, so they follow the same
+  // public-chat masking rule as the box text.
   const rows = sessions.slice(0, MAX_SESSION_BUTTONS).map((session) => [{
-    text: `📱 ${session.numberDisplay}`,
+    text: `📱 ${displayNumber(session, publicChat)}`,
     callback_data: `ses:menu:${session.number}`
   }]);
   rows.push([
@@ -1054,10 +1140,14 @@ function settingsMarkup({ owner, publicMode, premiumOnly }) {
 const BOOTSTRAP_COMMANDS = new Set(['addowner', 'delowner', 'addprem', 'delprem', 'addvip', 'delvip', 'block', 'unblock', 'listpaired']);
 const OPEN_COMMANDS = new Set(['start', 'help', 'guide', 'myid', 'verify', 'myaccount', 'account']);
 
-// Public-chat safety: number-revealing and management operations must never
-// leak a user's phone number (or the bot's internals) into a group/supergroup.
-// A chat without an explicit type (our unit-test fixtures) is treated as
-// private so the controller keeps behaving for direct messages.
+// Chat-type classification. Pairing and every other command WORK in private
+// chats, groups and supergroups alike — the chat type is never a reason to
+// reject a request. It only decides how sensitive data is presented: in a
+// public chat the pairing code is delivered through the user's private chat
+// and phone numbers are masked, while credentials, tokens, session files and
+// database secrets never leave the server regardless of chat type.
+// A chat without an explicit type (unit-test fixtures) is treated as private
+// so the controller keeps behaving for direct messages.
 function chatIsPrivate(chat) {
   return !chat?.type || chat.type === 'private';
 }
@@ -1593,45 +1683,116 @@ class TelegramController {
 
   // ------------------------------ pairing flow ----------------------------
 
+  // Every edit of one pairing message is serialized through a per-flow FIFO
+  // chain. Combined with the spinner generation (below) this guarantees a
+  // loading frame can never land AFTER a state transition (code delivered /
+  // connected / failed): a transition is queued behind any frame that is
+  // already in flight, and once the spinner is stopped no further frame is
+  // ever enqueued. This is what keeps the pairing-code message stable — the
+  // old self-rescheduling loop let an in-flight frame overwrite the code box
+  // (and even reschedule itself after being "stopped"), which is exactly how
+  // the code "appeared and then disappeared".
+  queueFlowEdit(flow, editFn) {
+    const previous = flow.editChain || Promise.resolve();
+    const run = previous.then(editFn);
+    flow.editChain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  spinnerIsCurrent(flow, generation) {
+    return !flow.stopped
+      && flow.spinnerGeneration === generation
+      && this.pairingFlows.get(flow.senderKey) === flow;
+  }
+
   startSpinner(flow) {
     this.stopSpinner(flow);
+    const generation = (flow.spinnerGeneration = (flow.spinnerGeneration || 0) + 1);
     flow.spinnerFrame = 0;
     const tick = async () => {
-      if (flow.stopped || this.pairingFlows.get(flow.senderKey) !== flow) return;
+      if (!this.spinnerIsCurrent(flow, generation)) return;
       flow.spinnerFrame = (flow.spinnerFrame + 1) % SPINNER_FRAMES.length;
       const frame = SPINNER_FRAMES[flow.spinnerFrame];
       try {
-        const text = pairingLoadingBox(flow.numberDisplay, frame);
-        flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, text, undefined))?.message_id || flow.messageId;
-      } catch (error) {
+        await this.queueFlowEdit(flow, async () => {
+          // Re-checked inside the queue slot: if the flow moved on to the
+          // code/connected/failed state while this frame was waiting its
+          // turn, the frame is dropped instead of overwriting the new state.
+          if (!this.spinnerIsCurrent(flow, generation)) return;
+          const text = pairingLoadingBox(flow.publicDisplay, frame);
+          flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, text, undefined))?.message_id || flow.messageId;
+        });
+      } catch {
         // The spinner must never break the pairing flow.
       }
-      if (!flow.stopped && this.pairingFlows.get(flow.senderKey) === flow) {
-        flow.spinnerTimer = setTimeout(tick, SPINNER_INTERVAL_MS);
-        flow.spinnerTimer.unref?.();
-      }
+      if (!this.spinnerIsCurrent(flow, generation)) return;
+      flow.spinnerTimer = setTimeout(tick, SPINNER_INTERVAL_MS);
+      flow.spinnerTimer.unref?.();
     };
     flow.spinnerTimer = setTimeout(tick, SPINNER_INTERVAL_MS);
     flow.spinnerTimer.unref?.();
   }
 
   stopSpinner(flow) {
-    if (flow?.spinnerTimer) {
+    if (!flow) return;
+    // Invalidate every pending, in-flight and queued frame first, then drop
+    // the pending timer. An in-flight edit may still complete on the server,
+    // but it was queued before any transition, so the transition (queued
+    // later) is always the final edit.
+    flow.spinnerGeneration = (flow.spinnerGeneration || 0) + 1;
+    if (flow.spinnerTimer) {
       clearTimeout(flow.spinnerTimer);
       flow.spinnerTimer = undefined;
     }
   }
 
-  async startPairingAttempt(senderId, number, input, flow) {
+  async startPairingAttempt(senderId, number, input, flow, { regenerate = false } = {}) {
     const limit = await this.pairingLimitOf(senderId);
-    const result = await this.pairing.requestPairing(senderId, input || number, { sessionLimit: limit });
+    const request = { sessionLimit: limit };
+    if (regenerate) request.regenerate = true;
+    const result = await this.pairing.requestPairing(senderId, input || number, request);
     if (flow.stopped) return result;
     this.stopSpinner(flow);
     flow.state = 'WAITING';
     flow.code = result.code;
     flow.displayCode = result.displayCode;
     flow.expiresAt = result.expiresAt;
-    flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, codeReadyBox(result), pairingCodeMarkup(result.displayCode, flow.token)))?.message_id || flow.messageId;
+    const codeText = codeReadyBox(result);
+    const codeMarkup = pairingCodeMarkup(result.displayCode, flow.token);
+    if (flow.public) {
+      // Secure handoff: the public message carries progress only. The pairing
+      // code is a session secret and is delivered exclusively through the
+      // user's private chat with the bot — it never appears in a group or
+      // supergroup, not even in a button payload.
+      await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, codeDeliveredBox(flow.publicDisplay), publicPairingMarkup(flow.token))).catch((error) => {
+        this.log.warn?.(`[telegram] Could not update the public pairing message: ${error.message}`);
+      });
+      try {
+        const sent = flow.codeMessageId
+          ? await this.editMessage(flow.codeChatId, flow.codeMessageId, codeText, codeMarkup)
+          : await this.reply(flow.codeChatId, codeText, codeMarkup);
+        flow.codeMessageId = sent?.message_id || flow.codeMessageId;
+      } catch (error) {
+        // The bot cannot message this user privately yet (they never opened a
+        // private chat with the bot). Showing the code in the public chat is
+        // not an option, so the pairing is cancelled — no orphaned session —
+        // and the user is told exactly how to proceed.
+        this.log.warn?.(`[telegram] Could not deliver the pairing code to ${flow.codeChatId} privately: ${error.message}`);
+        await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, codeUnavailableBox(), retryMarkup())).catch(() => {});
+        try {
+          if (typeof this.pairing.cancelPairing === 'function') await this.pairing.cancelPairing(senderId, flow.number, {});
+        } catch (cancelError) {
+          this.log.warn?.(`[telegram] Could not cancel the undeliverable pairing: ${cancelError.message}`);
+        }
+        flow.state = 'FAILED';
+        flow.stopped = true;
+        this.pairingFlows.delete(flow.senderKey);
+        return result;
+      }
+    } else {
+      const edited = await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, codeText, codeMarkup));
+      flow.messageId = edited?.message_id || flow.messageId;
+    }
     // Activity notification: the code itself is a pairing secret and is NEVER
     // included — only the number and the fact that WhatsApp issued a code.
     await this.notifyActivity({
@@ -1652,10 +1813,26 @@ class TelegramController {
     const friendly = friendlyPairingError(error);
     // Classified errors keep their informative, user-safe reason lines. A bare
     // connection timeout still renders the exact ANIME MD FAILED box.
-    const text = error?.code && friendly.lines?.length
-      ? pairingFailureBox(flow.numberDisplay, friendly.lines, { retry: friendly.retry })
-      : pairingFailureBox(flow.numberDisplay, friendlyReasonLine(error));
-    await this.editMessage(flow.chatId, flow.messageId, text, pairingFailureMarkup(flow.token));
+    const lines = error?.code && friendly.lines?.length ? friendly.lines : [friendlyReasonLine(error)];
+    if (flow.public) {
+      // Public chat: masked number, no code involved. The private code
+      // message (when one was delivered) gets the full, actionable version.
+      await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, pairingFailureBox(flow.publicDisplay, lines, { retry: friendly.retry }), pairingFailureMarkup(flow.token))).catch((editError) => {
+        this.log.warn?.(`[telegram] Could not update the public pairing failure: ${editError.message}`);
+      });
+      if (flow.codeMessageId) {
+        await this.queueFlowEdit(flow, () => this.editMessage(flow.codeChatId, flow.codeMessageId, pairingFailureBox(flow.numberDisplay, lines, { retry: friendly.retry }), pairingFailureMarkup(flow.token))).catch((editError) => {
+          this.log.warn?.(`[telegram] Could not update the private pairing failure: ${editError.message}`);
+        });
+      }
+    } else {
+      const text = error?.code && friendly.lines?.length
+        ? pairingFailureBox(flow.numberDisplay, friendly.lines, { retry: friendly.retry })
+        : pairingFailureBox(flow.numberDisplay, friendlyReasonLine(error));
+      await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, text, pairingFailureMarkup(flow.token))).catch((editError) => {
+        this.log.warn?.(`[telegram] Could not update the pairing failure: ${editError.message}`);
+      });
+    }
     await this.notifyActivity({
       action: 'Pairing Failed',
       actor: flow.actor,
@@ -1695,13 +1872,16 @@ class TelegramController {
     ].join('\n'), { force_reply: true, input_field_placeholder: '923001234567' });
   }
 
-  // The /pair flow uses a SINGLE Telegram message. The PREPARING box is sent
-  // once and the same message is edited through LOADING → CODE → WAITING, or
-  // FAILED. No second Telegram message is ever sent for the pairing lifecycle.
+  // The /pair flow works from private chats, groups and supergroups and uses
+  // a SINGLE message per flow. The PREPARING box is sent once and the same
+  // message is edited through LOADING → CODE/SENT-PRIVATELY → WAITING, or
+  // FAILED. In a public chat the code itself is delivered to the initiator's
+  // private chat; the public message never contains it.
   async handlePairCommand(command) {
     const chatId = command.chatId;
     const senderId = command.senderId;
     const senderKey = String(senderId);
+    const publicChat = !chatIsPrivate(command.chat);
     const input = command.args.join('');
     let number;
     try {
@@ -1712,6 +1892,8 @@ class TelegramController {
       return;
     }
     const numberDisplay = formatInternationalNumber(number);
+    // Public chats only ever see the masked form of the number.
+    const publicDisplay = publicChat ? maskInternationalNumber(number) : numberDisplay;
 
     if (this.premiumOnly) {
       const premium = await this.premiumStatusOf(senderId);
@@ -1759,32 +1941,50 @@ class TelegramController {
     }
 
     const release = this.reserveSensitiveRequest(senderKey, 'pair');
-    const token = this.newFlowToken();
-    let sent;
     try {
-      // The ONLY new Telegram message for the whole lifecycle.
-      sent = await this.reply(chatId, pairingStartedBox(numberDisplay));
-    } catch (error) {
-      release();
-      this.log.error?.(`[telegram] Could not start the pairing view: ${error.message}`);
-      return;
-    }
-    const flow = {
-      chatId, senderKey, number, numberDisplay,
-      state: 'PREPARING', token,
-      actor: this.actors.get(senderKey) || { id: senderId },
-      messageId: sent?.message_id,
-      spinnerTimer: undefined, spinnerFrame: 0,
-      code: undefined, displayCode: undefined, expiresAt: undefined,
-      stopped: false
-    };
-    this.pairingFlows.set(senderKey, flow);
-    this.startSpinner(flow);
+      // One request = one pairing flow: while an active flow (preparing or
+      // waiting for the link) exists for the SAME number, a repeated /pair is
+      // acknowledged without opening a second message, socket or code. (The
+      // pairing manager independently shares the in-flight request, so even a
+      // request that slips past this check can never produce a second code.)
+      const activeFlow = this.getFlow(senderId);
+      if (activeFlow && !activeFlow.stopped && activeFlow.number === number
+        && (activeFlow.state === 'PREPARING' || activeFlow.state === 'WAITING')) {
+        await this.reply(chatId, pairingInProgressBox(publicDisplay));
+        return;
+      }
 
-    try {
-      await this.startPairingAttempt(senderId, number, number, flow);
-    } catch (error) {
-      await this.failPairingAttempt(flow, error);
+      const token = this.newFlowToken();
+      let sent;
+      try {
+        // The ONLY new Telegram message for the whole lifecycle.
+        sent = await this.reply(chatId, pairingStartedBox(publicDisplay));
+      } catch (error) {
+        this.log.error?.(`[telegram] Could not start the pairing view: ${error.message}`);
+        return;
+      }
+      const flow = {
+        chatId, senderKey, number, numberDisplay, publicDisplay,
+        public: publicChat,
+        // The private chat the code is delivered to (the initiator themself).
+        codeChatId: publicChat ? senderId : undefined,
+        codeMessageId: undefined,
+        state: 'PREPARING', token,
+        actor: this.actors.get(senderKey) || { id: senderId },
+        messageId: sent?.message_id,
+        spinnerTimer: undefined, spinnerFrame: 0, spinnerGeneration: 0,
+        editChain: undefined,
+        code: undefined, displayCode: undefined, expiresAt: undefined,
+        stopped: false
+      };
+      this.pairingFlows.set(senderKey, flow);
+      this.startSpinner(flow);
+
+      try {
+        await this.startPairingAttempt(senderId, number, number, flow);
+      } catch (error) {
+        await this.failPairingAttempt(flow, error);
+      }
     } finally {
       release();
     }
@@ -1813,9 +2013,11 @@ class TelegramController {
       flow.code = undefined;
       flow.displayCode = undefined;
       flow.expiresAt = undefined;
-      flow.messageId = (await this.editMessage(chatId, flow.messageId, pairingStartedBox(flow.numberDisplay), undefined))?.message_id || flow.messageId;
+      // flow.codeMessageId is kept on purpose: a regenerated code edits the
+      // same private message instead of stacking a second code message.
+      flow.messageId = (await this.queueFlowEdit(flow, () => this.editMessage(chatId, flow.messageId, pairingStartedBox(flow.publicDisplay), undefined)))?.message_id || flow.messageId;
       this.startSpinner(flow);
-      await this.startPairingAttempt(senderId, flow.number, flow.number, flow);
+      await this.startPairingAttempt(senderId, flow.number, flow.number, flow, { regenerate: true });
     } catch (error) {
       await this.failPairingAttempt(flow, error);
     } finally {
@@ -1875,26 +2077,26 @@ class TelegramController {
 
   // ------------------------------ views -----------------------------------
 
-  async sendSessionsView(chatId, senderId, { messageId, admin = false } = {}) {
+  async sendSessionsView(chatId, senderId, { messageId, admin = false, publicChat = false } = {}) {
     const sessions = await this.pairing.listSessions(senderId);
-    return this.present(chatId, messageId, sessionsBox(sessions), sessionsMarkup(sessions));
+    return this.present(chatId, messageId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat));
   }
 
-  async sendStatusView(chatId, senderId, { messageId } = {}) {
+  async sendStatusView(chatId, senderId, { messageId, publicChat = false } = {}) {
     const sessions = await this.pairing.listSessions(senderId);
     const tier = await this.tierOf(senderId);
     const membership = await this.membershipLabelOf(senderId);
-    const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership });
+    const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership }, publicChat);
     return this.present(chatId, messageId, text, { inline_keyboard: [[
       { text: '🔄 Refresh', callback_data: 'nav:status' },
       { text: '🏠 Home', callback_data: 'home' }
     ]] });
   }
 
-  async sendSessionMenuView(chatId, senderId, number, { messageId, admin = false } = {}) {
+  async sendSessionMenuView(chatId, senderId, number, { messageId, admin = false, publicChat = false } = {}) {
     const session = await this.pairing.statusOf(senderId, number, { admin });
     const foreign = admin && String(session.ownerId) !== String(senderId);
-    return this.present(chatId, messageId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined }), sessionMenuMarkup(session.number));
+    return this.present(chatId, messageId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(session.number));
   }
 
   async sendSettingsView(chatId, senderId, { messageId, admin = false } = {}) {
@@ -1923,7 +2125,7 @@ class TelegramController {
     return this.present(chatId, messageId, text, settingsMarkup({ owner: false }));
   }
 
-  async sendAccountView(chatId, senderId, { messageId } = {}) {
+  async sendAccountView(chatId, senderId, { messageId, publicChat = false } = {}) {
     const role = await this.roleOf(senderId);
     const verified = (await this.membershipLabelOf(senderId)) === 'verified';
     const premium = await this.premiumStatusOf(senderId);
@@ -1937,7 +2139,8 @@ class TelegramController {
     const blockStatus = await this.checkBlocked(senderId);
     const text = accountBox({
       id: senderId, role, verified, premium, vip, owner,
-      pairedNumbers, limit, used, blockStatus: blockStatus.blocked ? blockStatus : undefined
+      pairedNumbers, limit, used, publicChat,
+      blockStatus: blockStatus.blocked ? blockStatus : undefined
     });
     return this.present(chatId, messageId, text, accountMarkup());
   }
@@ -2039,6 +2242,10 @@ class TelegramController {
     }
     if (!command?.chatId || !command.senderId) return;
 
+    // Chat type drives presentation (masked numbers, private code delivery),
+    // never acceptance.
+    command.chat = message?.chat;
+
     const actor = actorFrom(message?.from) || { id: command.senderId };
     if (actor?.id != null) this.actors.set(String(actor.id), actor);
 
@@ -2077,13 +2284,10 @@ class TelegramController {
       return;
     }
 
-    // Public-chat safety: private numbers and session details are never shared
-    // in a group. Management/pairing commands are refused with a privacy-safe
-    // notice so nothing sensitive leaks to third parties in the group.
-    if (!chatIsPrivate(update?.message?.chat) && !OPEN_COMMANDS.has(command.name)) {
-      await this.reply(command.chatId, box('ANIME MD • PRIVACY', ['', '🔒 This bot only works in a private chat.', '', 'Phone numbers and session details are', 'never shared in public chats.', '']));
-      return;
-    }
+    // Group/supergroup support: pairing and every other command are accepted
+    // in any chat type. Sensitive data is protected by presentation, not by
+    // rejecting the chat — the pairing code is only ever delivered through
+    // the initiator's private chat, and numbers are masked in public chats.
 
     // Centralized membership verification: every restricted command funnels
     // through the same guard, which performs a LIVE channel + group membership
@@ -2092,6 +2296,10 @@ class TelegramController {
       const guard = await this.requireMembership(actor, { chatId: command.chatId, update });
       if (!guard.ok) return;
     }
+
+    // Public-chat presentation only: numbers rendered into a group/supergroup
+    // are masked; the pairing code itself is delivered in the private chat.
+    const publicChat = !chatIsPrivate(command.chat);
 
     try {
       switch (command.name) {
@@ -2114,7 +2322,7 @@ class TelegramController {
           return;
         case 'myaccount':
         case 'account': {
-          await this.sendAccountView(command.chatId, command.senderId, {});
+          await this.sendAccountView(command.chatId, command.senderId, { publicChat });
           return;
         }
         case 'admin':
@@ -2133,21 +2341,21 @@ class TelegramController {
         case 'sessions':
         case 'listsessions': {
           const sessions = await this.pairing.listSessions(command.senderId);
-          await this.reply(command.chatId, sessionsBox(sessions), sessionsMarkup(sessions));
+          await this.reply(command.chatId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat));
           return;
         }
         case 'status': {
           if (command.args[0]) {
             const session = await this.pairing.statusOf(command.senderId, command.args[0], { admin: access === 'bootstrap' });
             const foreign = access === 'bootstrap' && String(session.ownerId) !== String(command.senderId);
-            await this.reply(command.chatId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined }), sessionMenuMarkup(session.number));
+            await this.reply(command.chatId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(session.number));
             return;
           }
           const sessions = await this.pairing.listSessions(command.senderId);
           const anyConnected = sessions.some((session) => session.connected);
           const tier = await this.tierOf(command.senderId);
           const membership = await this.membershipLabelOf(command.senderId);
-          const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership });
+          const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership }, publicChat);
           if (anyConnected) await this.replyPhoto(command.chatId, this.connectedImage, text);
           else await this.reply(command.chatId, text);
           return;
@@ -2160,7 +2368,7 @@ class TelegramController {
           const release = this.reserveSensitiveRequest(command.senderId, 'restart');
           try {
             const session = await this.pairing.restartSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
-            await this.reply(command.chatId, box('ANIME MD • RESTARTING', ['', `📱 ${session.numberDisplay}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
+            await this.reply(command.chatId, box('ANIME MD • RESTARTING', ['', `📱 ${displayNumber(session, publicChat)}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
             await this.notifyActivity({ action: 'Restart Request', actor, userId: command.senderId, details: [`📱 Number: ${session.numberDisplay}`] });
           } finally {
             release();
@@ -2282,7 +2490,7 @@ class TelegramController {
             await this.reply(command.chatId, box('ANIME MD • ALL SESSIONS', ['', '📭 No paired sessions on this bot.', '']));
             return;
           }
-          const lines = sessions.map((session) => `${badgeParts(session.status).icon} ${session.numberDisplay} — ${badgeParts(session.status).label || session.status} (user ${session.ownerId ?? '?'})`);
+          const lines = sessions.map((session) => `${badgeParts(session.status).icon} ${displayNumber(session, publicChat)} — ${badgeParts(session.status).label || session.status} (user ${session.ownerId ?? '?'})`);
           await this.reply(command.chatId, box('ANIME MD • ALL SESSIONS', ['', ...lines, '', `Total: ${sessions.length} session${sessions.length === 1 ? '' : 's'}`]), homeOnlyMarkup());
           return;
         }
@@ -2330,7 +2538,10 @@ class TelegramController {
           const release = this.reserveSensitiveRequest(command.senderId, 'stop');
           try {
             const session = await this.pairing.stopSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
-            await this.reply(command.chatId, stoppedBox(session.numberDisplay || formatInternationalNumber(command.args[0])), pairAgainMarkup());
+            const removedDisplay = publicChat
+              ? (session.number ? maskInternationalNumber(session.number) : session.numberDisplay || formatInternationalNumber(command.args[0]))
+              : (session.numberDisplay || formatInternationalNumber(command.args[0]));
+            await this.reply(command.chatId, stoppedBox(removedDisplay), pairAgainMarkup());
             await this.maybeRemovePairedNumber(command.senderId, command.args[0]);
             await this.notifyActivity({ action: 'Session Removed', actor, userId: command.senderId, details: [`📱 Number: ${session.numberDisplay || formatInternationalNumber(command.args[0])}`] });
           } finally {
@@ -2388,13 +2599,9 @@ class TelegramController {
       if (access === 'none') throw Object.assign(new Error('You are not authorized to control this bot.'), { code: 'DENIED' });
       const admin = access === 'bootstrap' || access === 'controller';
       const isOwner = access === 'bootstrap';
-      // Public-chat safety for callbacks: a number/session button tapped in a
-      // group must never broadcast that users' number to everyone there. The
-      // verification/join/navigation buttons are safe everywhere.
-      const safeInPublic = new Set(['verify:me', 'verify:joinall', 'verify:done', 'home', 'nav:help', 'nav:guide', 'nav:account']);
-      if (!chatIsPrivate(callback?.message?.chat) && !safeInPublic.has(action)) {
-        return await this.reply(chatId, box('ANIME MD • PRIVACY', ['', '🔒 This bot only works in a private chat.', '', 'Phone numbers and session details are', 'never shared in public chats.', '']), homeOnlyMarkup());
-      }
+      // Chat type drives presentation only (masked numbers in public chats,
+      // private delivery of the pairing code) — it never rejects a callback.
+      const publicChat = !chatIsPrivate(callback?.message?.chat);
       const [scope, verb, argument] = action.split(':');
 
       // The regen callback is bound to an unforgeable flow token created inside
@@ -2423,8 +2630,8 @@ class TelegramController {
         const role = await this.roleOf(senderId);
         return await this.present(chatId, messageId, helpText(), roleHomeMarkup(role));
       }
-      if (action === 'status') return await this.sendStatusView(chatId, senderId, {});
-      if (action === 'sessions') return await this.sendSessionsView(chatId, senderId, {});
+      if (action === 'status') return await this.sendStatusView(chatId, senderId, { publicChat });
+      if (action === 'sessions') return await this.sendSessionsView(chatId, senderId, { publicChat });
 
       if (action === 'verify:me') {
         return await this.handleVerify(senderId, chatId, { messageId, actor });
@@ -2453,16 +2660,16 @@ class TelegramController {
         return await this.present(chatId, messageId, helpText(), homeOnlyMarkup());
       }
       if (action === 'nav:status') {
-        return await this.sendStatusView(chatId, senderId, { messageId });
+        return await this.sendStatusView(chatId, senderId, { messageId, publicChat });
       }
       if (action === 'nav:sessions') {
-        return await this.sendSessionsView(chatId, senderId, { messageId, admin: isOwner });
+        return await this.sendSessionsView(chatId, senderId, { messageId, admin: isOwner, publicChat });
       }
       if (action === 'nav:settings') {
         return await this.sendSettingsView(chatId, senderId, { messageId, admin: isOwner });
       }
       if (action === 'nav:account') {
-        return await this.sendAccountView(chatId, senderId, { messageId });
+        return await this.sendAccountView(chatId, senderId, { messageId, publicChat });
       }
       if (action === 'nav:admin') {
         return await this.sendAdminPanelView(chatId, senderId, { messageId });
@@ -2505,13 +2712,13 @@ class TelegramController {
         // pairing manager, never trusted from the callback data.
         const number = normalizeWhatsAppNumber(argument);
         if (verb === 'menu') {
-          return await this.sendSessionMenuView(chatId, senderId, number, { messageId, admin: isOwner });
+          return await this.sendSessionMenuView(chatId, senderId, number, { messageId, admin: isOwner, publicChat });
         }
         if (verb === 'restart') {
           const release = this.reserveSensitiveRequest(senderId, 'restart');
           try {
             const session = await this.pairing.restartSession(senderId, number, { admin: isOwner });
-            return await this.present(chatId, messageId, box('ANIME MD • RESTARTING', ['', `📱 ${session.numberDisplay}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
+            return await this.present(chatId, messageId, box('ANIME MD • RESTARTING', ['', `📱 ${displayNumber(session, publicChat)}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
           } finally {
             release();
           }
@@ -2520,7 +2727,7 @@ class TelegramController {
           const session = await this.pairing.statusOf(senderId, number, { admin: isOwner });
           return await this.present(chatId, messageId, box('ANIME MD • REMOVE SESSION', [
             '',
-            `📱 ${session.numberDisplay}`,
+            `📱 ${displayNumber(session, publicChat)}`,
             '',
             'This stops the session and deletes its',
             'stored credentials. The WhatsApp bot',
@@ -2534,7 +2741,7 @@ class TelegramController {
           try {
             const session = await this.pairing.stopSession(senderId, number, { admin: isOwner });
             await this.maybeRemovePairedNumber(senderId, number);
-            return await this.present(chatId, messageId, stoppedBox(session.numberDisplay), pairAgainMarkup());
+            return await this.present(chatId, messageId, stoppedBox(displayNumber(session, publicChat)), pairAgainMarkup());
           } finally {
             release();
           }
@@ -2639,7 +2846,10 @@ class TelegramController {
   // Called by the pairing manager when an owner's WhatsApp session actually
   // reaches connection open. It is never called earlier. If an active
   // single-message pairing flow exists, that same message is edited to the
-  // CONNECTED state instead of posting a new Telegram message.
+  // CONNECTED state instead of posting a new Telegram message. For flows
+  // started in a public chat the public message shows the masked number; the
+  // full confirmation is delivered to the private code message (or a new
+  // private message) — never to the group.
   async notifySessionConnected(ownerId, session) {
     if (!this.running) return;
     // Record successful pairing only on actual connection, not on code generation
@@ -2661,7 +2871,25 @@ class TelegramController {
       flow.state = 'SUCCESS';
       flow.stopped = true;
       this.pairingFlows.delete(flow.senderKey);
-      await this.editMessage(flow.chatId, flow.messageId, connectedBox(session?.numberDisplay || flow.numberDisplay), connectedMarkup());
+      const successText = connectedBox(session?.numberDisplay || flow.numberDisplay);
+      if (flow.public) {
+        await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, connectedBox(flow.publicDisplay), connectedMarkup())).catch((error) => {
+          this.log.warn?.(`[telegram] Could not update the public connected state: ${error.message}`);
+        });
+        if (flow.codeMessageId) {
+          await this.queueFlowEdit(flow, () => this.editMessage(flow.codeChatId, flow.codeMessageId, successText, connectedMarkup())).catch((error) => {
+            this.log.warn?.(`[telegram] Could not update the private code message on connect: ${error.message}`);
+          });
+        } else {
+          try {
+            await this.reply(flow.codeChatId, successText, connectedMarkup());
+          } catch (error) {
+            this.log.warn?.(`[telegram] Could not deliver the connected notification to ${ownerId}: ${error.message}`);
+          }
+        }
+        return;
+      }
+      await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, successText, connectedMarkup()));
       return;
     }
     try {
@@ -2686,7 +2914,18 @@ class TelegramController {
       flow.stopped = true;
       this.pairingFlows.delete(flow.senderKey);
       const reasonLine = classification?.userMessage || 'The WhatsApp connection timed out.';
-      await this.editMessage(flow.chatId, flow.messageId, pairingFailureBox(flow.numberDisplay, reasonLine), pairingFailureMarkup(flow.token));
+      if (flow.public) {
+        await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, pairingFailureBox(flow.publicDisplay, reasonLine), pairingFailureMarkup(flow.token))).catch((error) => {
+          this.log.warn?.(`[telegram] Could not update the public failure state: ${error.message}`);
+        });
+        if (flow.codeMessageId) {
+          await this.queueFlowEdit(flow, () => this.editMessage(flow.codeChatId, flow.codeMessageId, pairingFailureBox(flow.numberDisplay, reasonLine), pairingFailureMarkup(flow.token))).catch((error) => {
+            this.log.warn?.(`[telegram] Could not update the private failure state: ${error.message}`);
+          });
+        }
+        return;
+      }
+      await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, pairingFailureBox(flow.numberDisplay, reasonLine), pairingFailureMarkup(flow.token)));
       return;
     }
     // A session that never finished pairing reads as a failed pairing, not
@@ -2704,6 +2943,29 @@ class TelegramController {
       await this.reply(ownerId, box(title, lines), pairAgainMarkup());
     } catch (error) {
       this.log.warn?.(`[telegram] Could not deliver the disconnect notification to ${ownerId}: ${error.message}`);
+    }
+  }
+
+  // Called by the pairing manager when a pairing code expired without a link
+  // (its socket and unregistered credentials are already cleaned up). Updates
+  // the pairing message so a stale "code ready" box is never left behind.
+  async notifyCodeExpired(ownerId, session) {
+    if (!this.running) return;
+    const flow = this.getFlow(ownerId);
+    const number = String(session?.number || '');
+    if (!flow || flow.stopped || (number && number !== String(flow.number))) return;
+    if (flow.state !== 'WAITING') return;
+    this.stopSpinner(flow);
+    flow.state = 'EXPIRED';
+    flow.stopped = true;
+    this.pairingFlows.delete(flow.senderKey);
+    await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, pairingExpiredBox(flow.publicDisplay), retryMarkup())).catch((error) => {
+      this.log.warn?.(`[telegram] Could not update the expired pairing state: ${error.message}`);
+    });
+    if (flow.public && flow.codeMessageId) {
+      await this.queueFlowEdit(flow, () => this.editMessage(flow.codeChatId, flow.codeMessageId, pairingExpiredBox(flow.numberDisplay), retryMarkup())).catch((error) => {
+        this.log.warn?.(`[telegram] Could not update the private expired code state: ${error.message}`);
+      });
     }
   }
 
@@ -2776,8 +3038,11 @@ module.exports = {
   actorFrom,
   badgeParts,
   blockedBox,
+  chatIsPrivate,
   classifyMemberError,
+  codeDeliveredBox,
   codeReadyBox,
+  codeUnavailableBox,
   commandFromUpdate,
   communityLink,
   connectedBox,
@@ -2806,15 +3071,19 @@ module.exports = {
   limitBox,
   menuMarkup,
   myIdBox,
+  displayNumber,
   normalizeTelegramId,
   normalizeWhatsappNumber: normalizeWhatsAppNumber,
   overallStatusBox,
   pairingCodeMarkup,
+  pairingExpiredBox,
   pairingFailedBox,
   pairingFailureBox,
   pairingFailureMarkup,
+  pairingInProgressBox,
   pairingLoadingBox,
   pairingStartedBox,
+  publicPairingMarkup,
   premiumBox,
   premiumRequiredBox,
   sessionsBox,
