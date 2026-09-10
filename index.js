@@ -201,7 +201,8 @@ function startTelegramController() {
       listSessions: (ownerId) => telegramPairingManager.listSessions(ownerId),
       listAllSessions: () => telegramPairingManager.listAllSessions(),
       stopSession: (ownerId, number, options) => telegramPairingManager.stopSession(ownerId, number, options),
-      restartSession: (ownerId, number, options) => telegramPairingManager.restartSession(ownerId, number, options)
+      restartSession: (ownerId, number, options) => telegramPairingManager.restartSession(ownerId, number, options),
+      queuedPairingCount: () => telegramPairingManager.queuedPairingCount()
     },
     startImage: config.telegramStartImage,
     connectedImage: config.telegramConnectedImage,

@@ -338,6 +338,12 @@ class TelegramPairingManager {
     return this.socketReservations;
   }
 
+  // Real number of pairing requests currently waiting for a slot. Reported
+  // verbatim on the Telegram system-status screen — never faked.
+  queuedPairingCount() {
+    return this.pairingQueue.length;
+  }
+
   pairingFlowCount() {
     let count = 0;
     for (const session of this.sessions.values()) {

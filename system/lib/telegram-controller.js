@@ -369,12 +369,15 @@ function guideBox() {
   ]);
 }
 
-function connectedBox(numberDisplay) {
-  return box('ANIME MD • CONNECTED', [
+function connectedBox(numberDisplay, username) {
+  const lines = [
     '',
     '✅ WhatsApp Connected',
     '',
-    `📱 ${numberDisplay}`,
+    `📱 ${numberDisplay}`
+  ];
+  if (username) lines.push(`👤 @${username}`);
+  lines.push(
     '',
     '🟢 Session: ACTIVE',
     '',
@@ -382,7 +385,8 @@ function connectedBox(numberDisplay) {
     '',
     'Roman Urdu: Aapka WhatsApp connect',
     'ho gaya hai — session active hai.'
-  ]);
+  );
+  return box('ANIME MD • CONNECTED', lines);
 }
 
 function pairingFailedBox(reasonLines, { retry = true } = {}) {
@@ -552,6 +556,7 @@ function premiumBox({ id, expiresAt, active }) {
   if (active && Number.isFinite(expiresAt)) {
     lines.push(`⏳ Expires: ${new Date(expiresAt).toISOString().slice(0, 10)}`);
   }
+  lines.push('', '📱 Pairing limits: FREE 1 • PREMIUM 3 • VIP ∞');
   if (!active) lines.push('', 'Premium lene ke liye owner se rabta karein.');
   return box('ANIME MD • PREMIUM', lines);
 }
@@ -637,12 +642,18 @@ function pairingUsageBox({ users = [] }) {
   return box('ANIME MD • PAIRING USAGE', lines);
 }
 
-function systemStatusBox({ uptime, sessions, publicMode, premiumOnly, version = '1.0.0' }) {
+function systemStatusBox({ uptime, sessions, queued = 0, publicMode, premiumOnly, version = '1.0.0' }) {
   return box('ANIME MD • SYSTEM STATUS', [
     '',
+    '🤖 Telegram Bot: 🟢 ONLINE',
+    '📡 Controller: 🟢 ONLINE',
+    '🔐 Pairing Service: 🟢 READY',
+    '',
+    `📊 Active Sessions: ${sessions}`,
+    `🔄 Queued Pairings: ${queued}`,
+    '',
+    `⏱ Uptime: ${formatUptime(uptime)}`,
     `🤖 Bot Version: ${version}`,
-    `⏱ Uptime: ${Math.floor(uptime / 60)}m`,
-    `📱 Sessions: ${sessions}`,
     `🌍 Public Mode: ${publicMode ? 'ON' : 'OFF'}`,
     `💎 Premium Only: ${premiumOnly ? 'ON' : 'OFF'}`,
     '',
@@ -865,27 +876,133 @@ function homeMarkup() {
   ]] };
 }
 
-// Role-aware home markup
+// Standard ACCESS DENIED box. The required role is always named explicitly so
+// the user knows exactly what is missing. Owner denials keep the canonical
+// bootstrap-owner wording (config.js source of truth).
+function accessDeniedBox(requiredRole = 'ADMIN') {
+  const role = String(requiredRole || 'ADMIN').toUpperCase();
+  if (role === 'OWNER') {
+    return box('ANIME MD • ACCESS DENIED', [
+      '',
+      '❌ This command requires OWNER access.',
+      'Only bootstrap owners (telegram.ownerIds in config.js) can use this command.',
+      ''
+    ]);
+  }
+  return box('ANIME MD • ACCESS DENIED', [
+    '',
+    `❌ This command requires ${role} access.`,
+    'Only admins and owners can use this command.',
+    ''
+  ]);
+}
+
+// Uptime formatter: seconds → minutes → hours → days, always human-readable.
+function formatUptime(totalSeconds = 0) {
+  const total = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (total < 60) return `${total} second${total === 1 ? '' : 's'}`;
+  if (total < 3600) {
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes} minute${minutes === 1 ? '' : 's'} ${seconds} second${seconds === 1 ? '' : 's'}`;
+  }
+  if (total < 86400) {
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return `${days}d ${hours}h ${minutes}m`;
+}
+
+// Role-filtered help: normal/premium/vip users only ever see user commands.
+// Management commands are shown only to the roles that may run them.
+function helpTextForRole(role = 'normal') {
+  const lines = [
+    '╭━━〔 ANIME MD • HELP 〕━╮',
+    '┃',
+    '┃ 📱 PAIRING',
+    '┃ /pair <number> — pair a WhatsApp number',
+    '┃ /sessions — list your WhatsApp sessions',
+    '┃ /status [number] — session status',
+    '┃ /stop <number> — remove an unpaired session',
+    '┃ /restart <number> — restart a paired session',
+    '┃',
+    '┃ 👤 ACCOUNT',
+    '┃ /myaccount — your profile and tier',
+    '┃ /myid — show your Telegram ID',
+    '┃ /premium — premium status',
+    '┃ /settings — your settings and limits',
+    '┃',
+    '┃ 📖 GUIDES',
+    '┃ /guide — pairing guide',
+    '┃ /help — show this help',
+    '┃',
+    '┃ Aliases: /delpair = /stop,',
+    '┃ /listsessions = /sessions'
+  ];
+  if (role === 'admin' || role === 'owner') {
+    lines.push(
+      '┃',
+      '┃ 🛡 ADMIN',
+      '┃ /admin — admin panel',
+      '┃ /addprem <id> [30d] — grant premium',
+      '┃ /delprem <id> — revoke premium',
+      '┃ /addvip <id> [30d] — grant VIP',
+      '┃ /delvip <id> — revoke VIP',
+      '┃ /block <id> [24h] — block a user',
+      '┃ /unblock <id> — unblock a user'
+    );
+  }
+  if (role === 'owner') {
+    lines.push(
+      '┃',
+      '┃ 👑 OWNER',
+      '┃ /addowner <telegram_id> — authorize a controller',
+      '┃ /delowner <telegram_id> — remove a controller',
+      '┃ /listpaired — all sessions'
+    );
+  }
+  lines.push(
+    '┃',
+    '┃ Number format: country code + number,',
+    '┃ no + required (example: 923001234567).',
+    '╰' + '━'.repeat(23) + '╯'
+  );
+  return lines.join('\n');
+}
+
+// Role-aware home markup. Every dashboard callback kept working:
+// pair:new, nav:account, nav:sessions, nav:status, nav:help, nav:guide,
+// nav:settings, nav:premium, nav:admin (admin/owner), nav:owner (owner only).
 function roleHomeMarkup(role) {
-  const isPrivileged = role === 'owner' || role === 'admin';
   const rows = [
     [
       { text: '📱 Pair WhatsApp', callback_data: 'pair:new' },
-      { text: '📊 My Account', callback_data: 'nav:account' }
+      { text: '📊 My Sessions', callback_data: 'nav:sessions' }
     ],
     [
-      { text: '📱 My Sessions', callback_data: 'nav:sessions' },
-      { text: '📊 Status', callback_data: 'nav:status' }
+      { text: '👤 My Account', callback_data: 'nav:account' },
+      { text: '⭐ Premium', callback_data: 'nav:premium' }
+    ],
+    [
+      { text: '📊 Status', callback_data: 'nav:status' },
+      { text: '📖 Guide', callback_data: 'nav:guide' }
     ],
     [
       { text: '📖 Commands', callback_data: 'nav:help' },
-      { text: 'ℹ️ Guide', callback_data: 'nav:guide' }
-    ],
-    [
       { text: '⚙️ Settings', callback_data: 'nav:settings' }
     ]
   ];
-  if (isPrivileged) {
+  if (role === 'owner') {
+    rows.push([
+      { text: '🛡 Admin Panel', callback_data: 'nav:admin' },
+      { text: '👑 Owner Panel', callback_data: 'nav:owner' }
+    ]);
+  } else if (role === 'admin') {
     rows.push([{ text: '🛡 Admin Panel', callback_data: 'nav:admin' }]);
   }
   // Always add home for consistency in callback edits
@@ -1077,8 +1194,10 @@ function stopConfirmMarkup(number) {
 
 function connectedMarkup() {
   return { inline_keyboard: [[
-    { text: '📱 My Sessions', callback_data: 'nav:sessions' },
-    { text: '📊 Status', callback_data: 'nav:status' }
+    { text: '➕ Pair Another', callback_data: 'pair:new' },
+    { text: '📊 My Sessions', callback_data: 'nav:sessions' }
+  ], [
+    { text: '🏠 Menu', callback_data: 'home' }
   ]] };
 }
 
@@ -1118,11 +1237,37 @@ function accountMarkup() {
 
 function adminPanelMarkup() {
   return { inline_keyboard: [
-    [{ text: '👤 Users', callback_data: 'admin:users' }, { text: '⭐ Premium', callback_data: 'admin:premium' }],
-    [{ text: '👑 VIP', callback_data: 'admin:vip' }, { text: '🚫 Block', callback_data: 'admin:block' }],
-    [{ text: '🔎 Lookup', callback_data: 'admin:lookup' }, { text: '📊 Usage', callback_data: 'admin:usage' }],
-    [{ text: '🛡 Access', callback_data: 'admin:access' }, { text: '⚙️ System', callback_data: 'admin:system' }],
+    [{ text: '👤 Users', callback_data: 'admin:users' }, { text: '📱 Sessions', callback_data: 'admin:sessions' }],
+    [{ text: '⭐ Premium', callback_data: 'admin:premium' }, { text: '👑 VIP', callback_data: 'admin:vip' }],
+    [{ text: '🚫 Block', callback_data: 'admin:block' }, { text: '📊 Usage', callback_data: 'admin:usage' }],
+    [{ text: '🔎 Lookup', callback_data: 'admin:lookup' }, { text: '🛡 Access', callback_data: 'admin:access' }],
+    [{ text: '⚙️ System', callback_data: 'admin:system' }],
     [{ text: '🏠 Home', callback_data: 'home' }]
+  ] };
+}
+
+function ownerPanelBox({ controllers = 0, premiumUsers = 0, totalUsers = 0, blockedUsers = 0, sessions = 0 }) {
+  return box('ANIME MD • OWNER PANEL', [
+    '',
+    '👑 Owner Control Center',
+    '',
+    `👤 Total Users: ${totalUsers}`,
+    `🤖 Controllers: ${controllers}`,
+    `💎 Premium Users: ${premiumUsers}`,
+    `🚫 Blocked: ${blockedUsers}`,
+    `📱 Active Sessions: ${sessions}`,
+    '',
+    'Select a section below:'
+  ]);
+}
+
+function ownerPanelMarkup() {
+  return { inline_keyboard: [
+    [{ text: '👥 Users', callback_data: 'owner:users' }, { text: '👑 Owners', callback_data: 'owner:owners' }],
+    [{ text: '🛡️ Admins', callback_data: 'owner:admins' }, { text: '⭐ Premium', callback_data: 'owner:premium' }],
+    [{ text: '💎 VIP Premium', callback_data: 'owner:vip' }, { text: '📱 Sessions', callback_data: 'owner:sessions' }],
+    [{ text: '🚫 Blocks', callback_data: 'owner:blocks' }, { text: '📊 System', callback_data: 'owner:system' }],
+    [{ text: '⚙️ Config', callback_data: 'owner:config' }, { text: '🏠 Home', callback_data: 'home' }]
   ] };
 }
 
@@ -1137,7 +1282,10 @@ function settingsMarkup({ owner, publicMode, premiumOnly }) {
   ]] };
 }
 
-const BOOTSTRAP_COMMANDS = new Set(['addowner', 'delowner', 'addprem', 'delprem', 'addvip', 'delvip', 'block', 'unblock', 'listpaired']);
+const OWNER_COMMANDS = new Set(['addowner', 'delowner', 'listpaired']);
+const ADMIN_COMMANDS = new Set(['addprem', 'delprem', 'addvip', 'delvip', 'block', 'unblock']);
+// Backward-compatible alias: every owner/admin-restricted command.
+const BOOTSTRAP_COMMANDS = new Set([...OWNER_COMMANDS, ...ADMIN_COMMANDS]);
 const OPEN_COMMANDS = new Set(['start', 'help', 'guide', 'myid', 'verify', 'myaccount', 'account']);
 
 // Chat-type classification. Pairing and every other command WORK in private
@@ -1230,13 +1378,80 @@ class TelegramController {
     }
   }
 
+  // Owner comparison is type-safe: Telegram delivers ctx.from.id as a NUMBER
+  // while config.js stores ownerIds as STRINGS. Both are normalized to the
+  // canonical digit string first, with a Number-equality fallback, so
+  // '123' === 123 can never fail the check. This is the Phase 4 /listpaired
+  // root-cause fix: the permission check stays, the comparison is fixed.
   isBootstrapOwner(id) {
-    return this.bootstrapOwners.has(normalizeTelegramId(id));
+    const normalized = normalizeTelegramId(id);
+    if (this.bootstrapOwners.has(normalized)) return true;
+    const numeric = Number(normalized);
+    for (const entry of this.bootstrapOwners) {
+      if (Number(entry) === numeric) return true;
+    }
+    return false;
   }
 
   async authorized(id) {
     const normalized = normalizeTelegramId(id);
     return this.bootstrapOwners.has(normalized) || await this.controllerStore.has(normalized);
+  }
+
+  // ------------------ centralized permission helpers ------------------
+  // Single source of truth for role checks. Management hierarchy
+  // (OWNER → ADMIN) and subscription hierarchy (NORMAL → PREMIUM → VIP)
+  // are never mixed: tier never implies a management role.
+
+  isOwner(id) {
+    try {
+      return this.isBootstrapOwner(id);
+    } catch {
+      return false;
+    }
+  }
+
+  async isAdmin(id) {
+    try {
+      const access = await this.accessOf(id);
+      return access === 'bootstrap' || access === 'controller';
+    } catch {
+      return false;
+    }
+  }
+
+  async isVip(id) {
+    try {
+      return (await this.vipStatusOf(id)).vip === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async isPremium(id) {
+    try {
+      return (await this.premiumStatusOf(id)).premium === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async isBlocked(id) {
+    try {
+      return await this.checkBlocked(id);
+    } catch {
+      return { blocked: false };
+    }
+  }
+
+  // Pairing gate: limits come from the database tier (via pairingLimitOf),
+  // never from hardcoded per-call values.
+  async canPair(id) {
+    const limit = await this.pairingLimitOf(id);
+    const used = await this.pairingUsageOf(id);
+    if (!Number.isFinite(limit)) return { allowed: true, limit, used };
+    if (used >= limit) return { allowed: false, reason: 'limit', limit, used };
+    return { allowed: true, limit, used };
   }
 
   // bootstrap > controller > public (any user) — never 'none' for normal users
@@ -2209,21 +2424,82 @@ class TelegramController {
     return this.present(chatId, messageId, text, adminPanelMarkup());
   }
 
-  async sendSystemStatusView(chatId, senderId, { messageId } = {}) {
+  async sendSystemStatusView(chatId, senderId, { messageId, owner = false } = {}) {
     const access = await this.accessOf(senderId);
     if (access !== 'bootstrap' && access !== 'controller') throw Object.assign(new Error('Admin only'), { code: 'DENIED' });
     let sessions = 0;
+    let queued = 0;
     try {
       if (typeof this.pairing?.listAllSessions === 'function') sessions = (await this.pairing.listAllSessions().catch(() => [])).length;
       else sessions = (await this.pairing.listSessions(senderId).catch(() => [])).length;
     } catch {}
+    try {
+      if (typeof this.pairing?.queuedPairingCount === 'function') queued = Number(await this.pairing.queuedPairingCount()) || 0;
+    } catch {}
     const text = systemStatusBox({
       uptime: (Date.now() - (this.startedAt || Date.now())) / 1000,
       sessions,
+      queued,
       publicMode: this.publicMode,
       premiumOnly: this.premiumOnly
     });
-    return this.present(chatId, messageId, text, adminPanelMarkup());
+    return this.present(chatId, messageId, text, owner ? ownerPanelMarkup() : adminPanelMarkup());
+  }
+
+  // Owner-only control center. Distinct from the admin panel: owners manage
+  // controllers/owners plus everything admins can see.
+  async sendOwnerPanelView(chatId, senderId, { messageId } = {}) {
+    const access = await this.accessOf(senderId);
+    if (access !== 'bootstrap') {
+      throw Object.assign(new Error('Only bootstrap owners can access the Owner Panel.'), { code: 'DENIED' });
+    }
+    let totalUsers = 0;
+    let controllers = 0;
+    let premiumUsers = 0;
+    let blockedUsers = 0;
+    let sessions = 0;
+    try {
+      if (typeof this.controllerStore?.users === 'function') {
+        const users = await this.controllerStore.users();
+        totalUsers = Object.keys(users).length;
+        blockedUsers = Object.values(users).filter((u) => u.blockedUntil && u.blockedUntil > Date.now()).length;
+      }
+      if (typeof this.controllerStore?.read === 'function') {
+        controllers = (await this.controllerStore.read().catch(() => [])).length;
+      }
+      if (typeof this.controllerStore?.listPremium === 'function') {
+        premiumUsers = (await this.controllerStore.listPremium().catch(() => [])).length;
+      }
+      if (typeof this.pairing?.listAllSessions === 'function') {
+        sessions = (await this.pairing.listAllSessions().catch(() => [])).length;
+      } else {
+        sessions = (await this.pairing.listSessions(senderId).catch(() => [])).length;
+      }
+    } catch {}
+    const text = ownerPanelBox({ controllers, premiumUsers, totalUsers, blockedUsers, sessions });
+    return this.present(chatId, messageId, text, ownerPanelMarkup());
+  }
+
+  // Premium tier info + the requesting user's own premium status.
+  async sendPremiumView(chatId, senderId, { messageId } = {}) {
+    const premium = await this.premiumStatusOf(senderId);
+    const text = premiumBox({ id: senderId, expiresAt: premium.expiresAt, active: premium.premium && !premium.bootstrap });
+    return this.present(chatId, messageId, text, homeOnlyMarkup());
+  }
+
+  // Global session list for admin/owner eyes only. Regular users never reach
+  // this view: the callbacks enforce the management role first.
+  async sendAllSessionsView(chatId, senderId, { messageId, publicChat = false, owner = false } = {}) {
+    const access = await this.accessOf(senderId);
+    if (access !== 'bootstrap' && access !== 'controller') throw Object.assign(new Error('Admin only'), { code: 'DENIED' });
+    const sessions = typeof this.pairing?.listAllSessions === 'function'
+      ? await this.pairing.listAllSessions().catch(() => [])
+      : [];
+    if (!sessions.length) {
+      return this.present(chatId, messageId, box('ANIME MD • ALL SESSIONS', ['', '📭 No paired sessions on this bot.', '']), owner ? ownerPanelMarkup() : adminPanelMarkup());
+    }
+    const lines = sessions.map((session) => `${badgeParts(session.status).icon} ${displayNumber(session, publicChat)} — ${badgeParts(session.status).label || session.status} (user ${session.ownerId ?? '?'})`);
+    return this.present(chatId, messageId, box('ANIME MD • ALL SESSIONS', ['', ...lines, '', `Total: ${sessions.length} session${sessions.length === 1 ? '' : 's'}`]), owner ? ownerPanelMarkup() : adminPanelMarkup());
   }
 
   // ------------------------------ update routing --------------------------
@@ -2279,8 +2555,12 @@ class TelegramController {
       await this.reply(command.chatId, box('ANIME MD • ACCESS DENIED', ['', '❌ You are not authorized to control this bot.', '']));
       return;
     }
-    if (BOOTSTRAP_COMMANDS.has(command.name) && access !== 'bootstrap') {
-      await this.reply(command.chatId, box('ANIME MD • DENIED', ['', '❌ Only bootstrap owners (telegram.ownerIds in config.js) can use this command.', '']));
+    if (OWNER_COMMANDS.has(command.name) && access !== 'bootstrap') {
+      await this.reply(command.chatId, accessDeniedBox('OWNER'), homeOnlyMarkup());
+      return;
+    }
+    if (ADMIN_COMMANDS.has(command.name) && access !== 'bootstrap' && access !== 'controller') {
+      await this.reply(command.chatId, accessDeniedBox('ADMIN'), homeOnlyMarkup());
       return;
     }
 
@@ -2303,9 +2583,11 @@ class TelegramController {
 
     try {
       switch (command.name) {
-        case 'help':
-          await this.reply(command.chatId, helpText(), homeOnlyMarkup());
+        case 'help': {
+          const role = await this.roleOf(command.senderId);
+          await this.reply(command.chatId, helpTextForRole(role), homeOnlyMarkup());
           return;
+        }
         case 'start': {
           // Registration flow: ensure user exists, check block (already), then
           // re-check membership live (opens the main menu = a re-check trigger).
@@ -2314,7 +2596,11 @@ class TelegramController {
           const guard = await this.requireMembership(actor, { chatId: command.chatId, update });
           if (!guard.ok) return;
           const role = await this.roleOf(command.senderId);
-          await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\nChoose an action below, or use /help.`, roleHomeMarkup(role));
+          const tier = await this.tierOf(command.senderId);
+          const limit = await this.pairingLimitOf(command.senderId);
+          const used = await this.pairingUsageOf(command.senderId);
+          const limitDisplay = Number.isFinite(limit) ? limit : '∞';
+          await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\n${tier.icon} Role: ${tier.label} • Sessions: ${used}/${limitDisplay}\n\nChoose an action below, or use /help.`, roleHomeMarkup(role));
           return;
         }
         case 'guide':
@@ -2648,7 +2934,11 @@ class TelegramController {
 
       if (action === 'home') {
         const role = await this.roleOf(senderId);
-        return await this.present(chatId, messageId, `${startupBox()}\n\nChoose an action below, or use /help.`, roleHomeMarkup(role));
+        const tier = await this.tierOf(senderId);
+        const limit = await this.pairingLimitOf(senderId);
+        const used = await this.pairingUsageOf(senderId);
+        const limitDisplay = Number.isFinite(limit) ? limit : '∞';
+        return await this.present(chatId, messageId, `${startupBox()}\n\n${tier.icon} Role: ${tier.label} • Sessions: ${used}/${limitDisplay}\n\nChoose an action below, or use /help.`, roleHomeMarkup(role));
       }
       if (action === 'pair:new') {
         return await this.beginPairPrompt(chatId, senderId);
@@ -2657,7 +2947,14 @@ class TelegramController {
         return await this.present(chatId, messageId, guideBox(), guideMarkup());
       }
       if (action === 'nav:help') {
-        return await this.present(chatId, messageId, helpText(), homeOnlyMarkup());
+        const role = await this.roleOf(senderId);
+        return await this.present(chatId, messageId, helpTextForRole(role), homeOnlyMarkup());
+      }
+      if (action === 'nav:premium') {
+        return await this.sendPremiumView(chatId, senderId, { messageId });
+      }
+      if (action === 'nav:owner') {
+        return await this.sendOwnerPanelView(chatId, senderId, { messageId });
       }
       if (action === 'nav:status') {
         return await this.sendStatusView(chatId, senderId, { messageId, publicChat });
@@ -2674,9 +2971,52 @@ class TelegramController {
       if (action === 'nav:admin') {
         return await this.sendAdminPanelView(chatId, senderId, { messageId });
       }
+      if (scope === 'owner') {
+        if (!isOwner) throw Object.assign(new Error('Only bootstrap owners can access the Owner Panel.'), { code: 'DENIED' });
+        if (verb === 'users') return await this.sendUserManagementView(chatId, senderId, { messageId });
+        if (verb === 'owners') {
+          const runtime = typeof this.controllerStore?.read === 'function' ? await this.controllerStore.read().catch(() => []) : [];
+          const lines = ['', '👑 Bootstrap owners (config.js):', ...[...this.bootstrapOwners].map((id) => ` • ${id}`)];
+          lines.push('', '🤖 Runtime controllers (/addowner):');
+          if (runtime.length) for (const id of runtime) lines.push(` • ${id}`);
+          else lines.push(' • none yet');
+          lines.push('', 'Use /addowner <id> /delowner <id>');
+          return await this.present(chatId, messageId, box('ANIME MD • OWNERS', lines), ownerPanelMarkup());
+        }
+        if (verb === 'admins') {
+          const runtime = typeof this.controllerStore?.read === 'function' ? await this.controllerStore.read().catch(() => []) : [];
+          const lines = runtime.length ? runtime.map((id) => ` • ${id}`) : ['No runtime controllers'];
+          return await this.present(chatId, messageId, box('ANIME MD • ADMINS', ['', ...lines, '', 'Use /addowner <id> /delowner <id>']), ownerPanelMarkup());
+        }
+        if (verb === 'premium') {
+          const premiumUsers = typeof this.controllerStore?.listPremium === 'function' ? await this.controllerStore.listPremium().catch(() => []) : [];
+          const lines = premiumUsers.length ? premiumUsers.map((u) => ` • ${u.id} until ${new Date(u.expiresAt).toISOString().slice(0,10)}`) : ['No premium users'];
+          return await this.present(chatId, messageId, box('ANIME MD • PREMIUM MANAGEMENT', ['', ...lines, '', 'Use /addprem <id> [30d] /delprem <id>']), ownerPanelMarkup());
+        }
+        if (verb === 'vip') {
+          let users = {};
+          try { if (typeof this.controllerStore?.users === 'function') users = await this.controllerStore.users(); } catch {}
+          const vips = Object.entries(users).filter(([, rec]) => rec.vip).map(([id]) => ` • ${id} VIP`);
+          const lines = vips.length ? vips : ['No VIP users'];
+          return await this.present(chatId, messageId, box('ANIME MD • VIP MANAGEMENT', ['', ...lines, '', 'Use /addvip <id> [30d] /delvip <id>']), ownerPanelMarkup());
+        }
+        if (verb === 'sessions') return await this.sendAllSessionsView(chatId, senderId, { messageId, publicChat, owner: true });
+        if (verb === 'blocks') {
+          let users = {};
+          try { if (typeof this.controllerStore?.users === 'function') users = await this.controllerStore.users(); } catch {}
+          const blocked = Object.entries(users).filter(([, rec]) => rec.blockedUntil && rec.blockedUntil > Date.now()).map(([id, rec]) => ` • ${id} until ${formatUnblockTimestamp(rec.blockedUntil)}`);
+          const lines = blocked.length ? blocked : ['No blocked users'];
+          return await this.present(chatId, messageId, box('ANIME MD • BLOCK MANAGEMENT', ['', ...lines, '', 'Use /block <id> [24h] /unblock <id>']), ownerPanelMarkup());
+        }
+        if (verb === 'system') return await this.sendSystemStatusView(chatId, senderId, { messageId, owner: true });
+        if (verb === 'config') return await this.sendSettingsView(chatId, senderId, { messageId, admin: true });
+        throw Object.assign(new Error('Owner button expired'), { code: 'EXPIRED' });
+      }
+
       if (scope === 'admin') {
         if (!admin) throw Object.assign(new Error('Admin only'), { code: 'DENIED' });
         if (verb === 'users') return await this.sendUserManagementView(chatId, senderId, { messageId });
+        if (verb === 'sessions') return await this.sendAllSessionsView(chatId, senderId, { messageId, publicChat });
         if (verb === 'premium') {
           const premiumUsers = typeof this.controllerStore?.listPremium === 'function' ? await this.controllerStore.listPremium().catch(() => []) : [];
           const lines = premiumUsers.length ? premiumUsers.map((u) => ` • ${u.id} until ${new Date(u.expiresAt).toISOString().slice(0,10)}`) : ['No premium users'];
@@ -2873,7 +3213,7 @@ class TelegramController {
       this.pairingFlows.delete(flow.senderKey);
       const successText = connectedBox(session?.numberDisplay || flow.numberDisplay);
       if (flow.public) {
-        await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, connectedBox(flow.publicDisplay), connectedMarkup())).catch((error) => {
+        await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, connectedBox(flow.publicDisplay, flow.actor?.username), connectedMarkup())).catch((error) => {
           this.log.warn?.(`[telegram] Could not update the public connected state: ${error.message}`);
         });
         if (flow.codeMessageId) {
@@ -3017,6 +3357,7 @@ class TelegramController {
 }
 
 module.exports = {
+  ADMIN_COMMANDS,
   CODE_SOURCE_LABEL,
   DEFAULT_BLOCK_DURATION_MS,
   MEMBERSHIP_CACHE_TTL_MS,
@@ -3026,6 +3367,7 @@ module.exports = {
   MEMBERSHIP_RETRY_BASE_DELAY_MS,
   MEMBERSHIP_RETRY_MAX_DELAY_MS,
   NORMAL_PAIRING_LIMIT,
+  OWNER_COMMANDS,
   PREMIUM_PAIRING_LIMIT,
   SENSITIVE_COOLDOWN_MS,
   SENSITIVE_LOCK_TTL_MS,
@@ -3034,6 +3376,7 @@ module.exports = {
   TIER_LABELS,
   TRANSIENT_HTTP_STATUSES,
   TelegramController,
+  accessDeniedBox,
   activityBox,
   actorFrom,
   badgeParts,
@@ -3050,11 +3393,13 @@ module.exports = {
   escapeTelegramHtml,
   formatRemainingDuration,
   formatUnblockTimestamp,
+  formatUptime,
   friendlyPairingError,
   friendlyReasonLine,
   guideBox,
   guideMarkup,
   helpText,
+  helpTextForRole,
   homeMarkup,
   isExplicitlyNotMember,
   isJoinedMemberStatus,
@@ -3075,6 +3420,8 @@ module.exports = {
   normalizeTelegramId,
   normalizeWhatsappNumber: normalizeWhatsAppNumber,
   overallStatusBox,
+  ownerPanelBox,
+  ownerPanelMarkup,
   pairingCodeMarkup,
   pairingExpiredBox,
   pairingFailedBox,
