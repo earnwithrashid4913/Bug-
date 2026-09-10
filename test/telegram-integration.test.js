@@ -24,6 +24,8 @@ userConfig.telegram.botToken = 'integration-token';
 userConfig.telegram.ownerIds = ['10'];
 
 const index = require('../index');
+// The runtime (validated) configuration the controller is actually built from.
+const { config } = require('../system/config');
 
 // A Telegram API stub: getMe/deleteWebhook succeed, the first getUpdates
 // delivers a batch of commands, and later polls never resolve so the poller
@@ -49,13 +51,16 @@ globalThis.fetch = async (url, init) => {
       message(3, 10, '/pair 123'),
       message(4, 10, '/restart 923001234567'),
       message(5, 11, '/sessions'),
-      message(6, 10, '/start')
+      message(6, 10, '/start'),
+      message(7, 10, '/developer'),
+      message(8, 10, '/allmenu'),
+      message(9, 10, '/thanks')
     ]);
   }
   return respond(payload);
 };
 
-test('the Telegram controller wiring starts, greets with the Gojo intro, and serves commands', async () => {
+test('the Telegram controller wiring starts, greets with the ANIME MD intro, and serves commands', async () => {
   const waitFor = async (predicate, label) => {
     for (let attempt = 0; attempt < 200; attempt += 1) {
       if (sent.some(predicate)) return;
@@ -68,11 +73,14 @@ test('the Telegram controller wiring starts, greets with the Gojo intro, and ser
 
   // The startup greeting reaches the configured bootstrap owner first
   // (as a photo caption because a start image is configured).
-  await waitFor((entry) => /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./.test(entry.payload.text || entry.payload.caption || ''), 'the anime md intro');
-  const greeting = sent.find((entry) => /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./.test(entry.payload.text || entry.payload.caption || ''));
+  await waitFor((entry) => /ANIME MD • MAIN MENU/.test(entry.payload.text || entry.payload.caption || ''), 'the anime md intro');
+  const greeting = sent.find((entry) => /ANIME MD • MAIN MENU/.test(entry.payload.text || entry.payload.caption || ''));
   const greetingText = greeting.payload.text || greeting.payload.caption;
-  assert.match(greetingText, /🟢\ 𝙎𝙔𝙎𝙏𝙀𝙈\ 𝙍𝙀𝘼𝘿𝙔/);
+  assert.match(greetingText, /🤖 System: Online/);
   assert.doesNotMatch(greetingText, /WhatsApp Connected/);
+  // Plain text only: no supplementary-plane fancy-font glyphs, which render
+  // mirrored or as empty boxes on clients without a matching font.
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(greetingText), 'the intro is plain text');
 
   // /sessions through the real manager: no sessions yet.
   await waitFor((entry) => entry.method === 'sendMessage' && /ANIME MD • SESSIONS/.test(entry.payload.text), '/sessions');
@@ -104,6 +112,27 @@ test('the Telegram controller wiring starts, greets with the Gojo intro, and ser
   assert.match(activityText, /🆔 ID: 10/);
   assert.match(activityText, /👑 Tier: OWNER/);
   assert.match(activityText, /🔐 Membership: Verified/);
+
+  // The new ANIME MD pages are wired through index.js: the DEVELOPER page uses
+  // the configured owner name plus the canonical developer identity, the
+  // THANKS TO page uses the same identity, and ALL MENU renders the real
+  // WhatsApp command directory with the configured prefix.
+  await waitFor((entry) => /ANIME MD • DEVELOPER/.test(entry.payload.text || ''), '/developer');
+  const developerText = sent.find((entry) => /ANIME MD • DEVELOPER/.test(entry.payload.text || '')).payload.text;
+  assert.match(developerText, /👑 Global Owner/);
+  assert.ok(developerText.includes(config.ownerName), 'the configured owner name is shown');
+  assert.ok(developerText.includes(config.developerName), 'the canonical developer identity is shown');
+  assert.doesNotMatch(developerText, /integration-token|creds|authDir|\.json/, 'no secret or path on the developer page');
+
+  await waitFor((entry) => /ANIME MD • ALL MENU/.test(entry.payload.text || ''), '/allmenu');
+  const allMenuText = sent.find((entry) => /ANIME MD • ALL MENU/.test(entry.payload.text || '')).payload.text;
+  assert.ok(allMenuText.includes(`⌨️ Prefix: ${config.commandPrefix}`), 'the configured WhatsApp prefix is used');
+  assert.match(allMenuText, /🧩 Commands: \d+/);
+  assert.doesNotMatch(allMenuText, /undefined|NaN/);
+
+  await waitFor((entry) => /ANIME MD • THANKS TO/.test(entry.payload.text || ''), '/thanks');
+  const thanksText = sent.find((entry) => /ANIME MD • THANKS TO/.test(entry.payload.text || '')).payload.text;
+  assert.ok(thanksText.includes(config.developerName), 'the thanks page names the real developer');
 });
 
 test('cleanup removes the temporary integration directory', async () => {

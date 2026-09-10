@@ -215,7 +215,7 @@ test('connected notifications use the connected box and are never sent early', a
   assert.equal(replies.length, 0);
 });
 
-test('Telegram startup shows the Gojo intro, verifies the token, and starts one poller', async () => {
+test('Telegram startup shows the ANIME MD intro, verifies the token, and starts one poller', async () => {
   const methods = [];
   const captions = [];
   const controller = new TelegramController({
@@ -240,9 +240,12 @@ test('Telegram startup shows the Gojo intro, verifies the token, and starts one 
   assert.deepEqual(methods.slice(0, 2), ['getMe', 'deleteWebhook']);
   assert.equal(await controller.start(), false, 'a second listener is never started');
     const intro = captions[0];
-  assert.match(intro, /𝙂𝙊𝙅𝙊 𝙄𝙎 𝙃𝙀𝙍𝙀./);
-  assert.match(intro, /🟢 𝙎𝙔𝙎𝙏𝙀𝙈 𝙍𝙀𝘼𝘿𝙔/);
-  assert.match(intro, /👇/);
+  assert.match(intro, /ANIME MD • MAIN MENU/);
+  assert.match(intro, /🤖 System: Online/);
+  assert.match(intro, /buttons below/);
+  // Plain text only: no supplementary-plane "fancy font" glyphs, which render
+  // mirrored/garbled or as empty boxes on clients without a matching font.
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(intro), 'the intro is plain text, not fancy-font Unicode');
   // No server-dashboard jargon in the intro.
   assert.doesNotMatch(intro, /Telegram Controller/);
   assert.doesNotMatch(intro, /Pairing System/);
@@ -256,12 +259,16 @@ test('Telegram startup shows the Gojo intro, verifies the token, and starts one 
 
 test('the startup box never claims a WhatsApp connection by itself', () => {
   const text = startupBox();
-  assert.match(text, /╰┈➤\ ⚡\ 𝘼𝙉𝙄𝙈𝙀\ 𝙈𝘿/);
-  assert.match(text, /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./);
-  assert.match(text, /🟢\ 𝙎𝙔𝙎𝙏𝙀𝙈\ 𝙍𝙀𝘼𝘿𝙔/);
-  assert.match(text, /𝙒𝙝𝙖𝙩'𝙨\ 𝙣𝙚𝙭𝙩\?\ 𝙔𝙤𝙪\ 𝙘𝙝𝙤𝙤𝙨𝙚\.\ 👇/);
+  assert.match(text, /╭━━〔 ANIME MD • MAIN MENU 〕━╮/);
+  assert.match(text, /⚡ ANIME MD/);
+  assert.match(text, /🤖 System: Online/);
+  assert.match(text, /⚡ Status: Operational/);
   assert.doesNotMatch(text, /WhatsApp Connected/);
   assert.doesNotMatch(text, /Session is active/);
+  // No decorative "fancy font" (MATHEMATICAL ALPHANUMERIC SYMBOLS) glyphs.
+  // Those live in the Unicode supplementary planes: clients without a matching
+  // font render them mirrored, inverted or as empty boxes.
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(text), 'no fancy-font Unicode in the ANIME MD style');
 });
 
 test('Telegram callbacks stay authorized and route status through owner-scoped sessions', async () => {
@@ -417,7 +424,7 @@ test('public mode lets any Telegram user verify, pair and manage only their own 
   });
   // A stranger receives the intro plus a verify prompt (no access-denied box).
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/start' } });
-  assert.match(replies.at(-1).caption || replies.at(-1).text, /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./);
+  assert.match(replies.at(-1).caption || replies.at(-1).text, /ANIME MD • MAIN MENU/);
   // Restricted commands require self-verification before they run.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match((replies.at(-1).caption || replies.at(-1).text) || '', /VERIFICATION/);
@@ -607,7 +614,7 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
   const { calls, fetchImpl } = captureApi();
   const { controller } = makeController({ fetchImpl });
   const callback = (data) => controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data, message: { chat: { id: 1 }, message_id: 55 } } });
-  for (const data of ['home', 'nav:guide', 'nav:help', 'nav:status', 'nav:sessions', 'nav:settings']) {
+  for (const data of ['home', 'nav:guide', 'nav:help', 'nav:status', 'nav:sessions', 'nav:settings', 'nav:allmenu', 'nav:developer', 'nav:thanks']) {
     await callback(data);
     const edit = calls.filter((call) => call.method === 'editMessageText').at(-1);
     assert.ok(edit, `an edit was issued for ${data}`);
@@ -616,10 +623,10 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
   // The home view is the dashboard with its navigation buttons.
   await callback('home');
   const home = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(home.payload.text, /𝙂𝙊𝙅𝙊\ 𝙄𝙎\ 𝙃𝙀𝙍𝙀\./);
+  assert.match(home.payload.text, /ANIME MD • MAIN MENU/);
   // Home now includes role-aware buttons, check that core buttons exist
   const flat = home.payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data);
-  for (const expected of ['pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help']) {
+  for (const expected of ['pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help', 'nav:allmenu', 'nav:developer', 'nav:thanks', 'nav:premium', 'nav:account']) {
     assert.ok(flat.includes(expected), `home should include ${expected}`);
   }
 });
@@ -892,15 +899,16 @@ test('a premium user at the unique-number cap is refused before any socket opens
   assert.match(replies.at(-1).text, /3\/3 numbers/);
 });
 
-test('pairing works from groups and supergroups, with the code delivered privately', async () => {
+test('pairing works from groups and supergroups with the code visible in the group', async () => {
   const { calls, fetchImpl } = flowApi();
   const store = memoryUserStore({ verified: new Set(['20']) });
   const { controller } = flowController({ calls, fetchImpl, store });
   controller.running = true;
 
-  // A supergroup user pairs: the command is ACCEPTED (no privacy rejection),
-  // the group never sees the code or the full number, and the code is
-  // delivered to the user's own private chat (chat id == user id).
+  // A supergroup user pairs: the request is ACCEPTED and stays in the group —
+  // it is never silently redirected to a private chat. The group sees the
+  // request, the real WhatsApp code (with the number masked), and nothing
+  // technical.
   await controller.handleUpdate({ message: { chat: { id: -1001, type: 'supergroup' }, from: { id: 10 }, text: '/pair 92355817646' } });
 
   const inChat = (id) => calls.filter((call) => (call.method === 'sendMessage' || call.method === 'editMessageText')
@@ -908,26 +916,39 @@ test('pairing works from groups and supergroups, with the code delivered private
   const groupTexts = inChat(-1001);
   const privateTexts = inChat(10);
 
-  assert.ok(groupTexts.some((text) => /Preparing WhatsApp pairing|Pairing Code Sent/.test(text)), 'the group pairing flow runs');
+  assert.ok(groupTexts.some((text) => /Pairing request received/.test(text)), 'the group visibly acknowledges the request');
+  assert.ok(groupTexts.some((text) => /Preparing WhatsApp pairing/.test(text)), 'the group shows the preparing state');
   assert.ok(!groupTexts.some((text) => /only works in a private chat/i.test(text)), 'no private-chat-only rejection');
   assert.ok(!groupTexts.some((text) => /92355817646/.test(text)), 'the full phone number is never broadcast to the group');
   assert.ok(groupTexts.some((text) => /••••• 646/.test(text)), 'the group only ever sees the masked number');
-  assert.ok(!groupTexts.some((text) => /CODE: CODE-1/.test(text)), 'the pairing code is never shown in the group');
-  // No copy button in the public message: copy_text would carry the code
-  // into the public message payload.
-  for (const call of calls.filter((call) => Number(call.payload.chat_id) === -1001)) {
-    for (const button of (call.payload.reply_markup?.inline_keyboard || []).flat()) {
-      assert.equal(button.copy_text?.text, undefined, 'no copy_text in the public chat');
-    }
+  assert.ok(groupTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && /🔐 CODE: CODE-1/.test(text)), 'the real pairing code is shown in the group');
+  assert.ok(groupTexts.some((text) => /Single use/.test(text)), 'the public code box warns it is single use');
+  // Nothing is quietly moved to a private chat.
+  assert.deepEqual(privateTexts, [], 'the flow stays entirely in the group');
+  // The copy button copies ONLY the code, exactly as in a private chat.
+  const copyButtons = calls
+    .filter((call) => Number(call.payload.chat_id) === -1001)
+    .flatMap((call) => (call.payload.reply_markup?.inline_keyboard || []).flat())
+    .filter((button) => button.copy_text);
+  assert.ok(copyButtons.length, 'the public code message offers a copy button');
+  for (const button of copyButtons) assert.equal(button.copy_text.text, 'CODE-1');
+  // ONE message carries the whole lifecycle: exactly one send, the rest edits.
+  const groupCalls = calls.filter((call) => Number(call.payload.chat_id) === -1001);
+  assert.equal(groupCalls.filter((call) => call.method === 'sendMessage').length, 1, 'one message for the whole public flow');
+  assert.ok(groupCalls.some((call) => call.method === 'editMessageText'), 'the same message is edited to the code state');
+  // No technical wording ever reaches the group.
+  for (const text of groupTexts) {
+    assert.doesNotMatch(text, /number format is invalid/i);
+    assert.doesNotMatch(text, /full international number/i);
+    assert.doesNotMatch(text, /Baileys|socket|creds|authDir|token/i);
   }
-  assert.ok(privateTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && /🔐 CODE: CODE-1/.test(text)), 'the code is delivered to the private chat');
-  assert.ok(privateTexts.some((text) => /📱 Number: \+92355817646/.test(text)), 'the private delivery names the full number');
 
   // The same flow from a regular group behaves identically.
   const before = calls.length;
   await controller.handleUpdate({ message: { chat: { id: -500, type: 'group' }, from: { id: 20 }, text: '/pair 12025550123' } });
   const groupTwoTexts = calls.slice(before).filter((call) => Number(call.payload.chat_id) === -500).map((call) => call.payload.text || '');
-  assert.ok(groupTwoTexts.some((text) => /Preparing WhatsApp pairing|Pairing Code Sent/.test(text)), 'group pairing runs too');
+  assert.ok(groupTwoTexts.some((text) => /Preparing WhatsApp pairing/.test(text)), 'group pairing runs too');
+  assert.ok(groupTwoTexts.some((text) => /🔐 CODE: CODE-2/.test(text)), 'the code is visible in a regular group as well');
   assert.ok(!groupTwoTexts.some((text) => /12025550123/.test(text)), 'no full number in the group');
   assert.ok(!groupTwoTexts.some((text) => /only works in a private chat/i.test(text)), 'no private-chat-only rejection in groups either');
 
@@ -943,6 +964,7 @@ test('pairing works from groups and supergroups, with the code delivered private
   const codeEdit = privateFlow.find((call) => call.method === 'editMessageText' && /🔐 CODE: CODE-3/.test(call.payload.text || ''));
   assert.equal(sends, 1, 'private flow still sends exactly one message');
   assert.ok(codeEdit, 'the code still arrives as an edit of that message');
+  assert.match(codeEdit.payload.text, /📱 Number: \+923001234567/, 'a private chat still shows the full, unmasked number');
 });
 
 test('session and status views render masked numbers in public chats and full numbers privately', async () => {
@@ -1494,7 +1516,7 @@ test('a completely normal user can verify and is not blocked by owner/admin-only
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/start' } });
   const result = replies.at(-1);
   const intro = result.caption || result.text;
-  assert.match(intro, /𝙂𝙊𝙅𝙊 𝙄𝙎 𝙃𝙀𝙍𝙀\./);
+  assert.match(intro, /ANIME MD • MAIN MENU/);
   assert.equal(await store.isVerified('42'), true, 'a normal user who is a member is verified');
   // The normal user can then use a protected command.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/sessions' } });
