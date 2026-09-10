@@ -22,6 +22,9 @@ const CATEGORY_META = Object.freeze({
   sessions: { id: 'sessions', label: 'JADIBOT / SESSIONS', icon: '🧩', title: 'Sessions' },
   telegram: { id: 'telegram', label: 'TELEGRAM', icon: '✈️', title: 'Telegram' },
   settings: { id: 'settings', label: 'SETTINGS', icon: '⚙️', title: 'Settings' },
+  anime: { id: 'anime', label: 'ANIME / OTAKU', icon: '🍥', title: 'Anime & Otaku' },
+  quiz: { id: 'quiz', label: 'QUIZ', icon: '❓', title: 'Quiz' },
+  funextra: { id: 'funextra', label: 'FUN EXTRAS', icon: '🎭', title: 'Fun Extras' },
   other: { id: 'other', label: 'OTHER', icon: '✨', title: 'Other' }
 });
 
@@ -63,6 +66,7 @@ const COMMANDS = Object.freeze([
   command('calc', 'tools', 'Safely calculate a math expression.', { aliases: ['calculate', 'math'], usage: '<expression>' }),
   command('ss', 'tools', 'Capture a screenshot of a website.', { aliases: ['screenshot'], usage: '<url>' }),
   command('short', 'tools', 'Shorten a URL.', { aliases: ['shorten', 'tinyurl'], usage: '<url>' }),
+  command('uid', 'tools', 'Show your WhatsApp UID/JID.'),
   command('tools', 'tools', 'Show available tools.', { aliases: ['utils'] }),
 
   command('hidetag', 'group', 'Send a message mentioning every group member without visible tags.', { aliases: ['ht'], usage: '<message>', permission: 'admin' }),
@@ -128,7 +132,36 @@ const COMMANDS = Object.freeze([
   command('stopsession', 'sessions', 'Owner-only safe unpaired-session cleanup command.', { aliases: ['stop'], usage: '<number>', permission: 'owner' }),
 
   command('pairing', 'telegram', 'Show the authorized Telegram pairing controller link.', { aliases: ['tgpair'] }),
-  command('telegram', 'telegram', 'Show Telegram controller setup status.', { aliases: ['tg'] })
+  command('telegram', 'telegram', 'Show Telegram controller setup status.', { aliases: ['tg'] }),
+
+  // --- ANIME / OTAKU ---
+  command('anime', 'anime', 'Search for an anime on MyAnimeList.', { usage: '<title>' }),
+  command('manga', 'anime', 'Search for a manga on MyAnimeList.', { usage: '<title>' }),
+  command('character', 'anime', 'Look up an anime character.', { aliases: ['char'], usage: '<name>' }),
+  command('waifu', 'anime', 'Get a random waifu image.'),
+  command('husbando', 'anime', 'Get a random husbando image.'),
+  command('dailywaifu', 'anime', 'Get your daily waifu image.'),
+  command('animequote', 'anime', 'Get a random anime/manga quote.', { aliases: ['quote'] }),
+  command('animevs', 'anime', 'Compare two anime power levels.', { usage: '<anime1> vs <anime2>' }),
+  command('profile', 'anime', 'View your otaku profile and stats.', { aliases: ['otakuprofile'] }),
+  command('badges', 'anime', 'View your earned otaku badges.', { aliases: ['badge'] }),
+  command('leaderboard', 'anime', 'View the top otaku leaderboard.', { aliases: ['lb', 'topplayers'] }),
+
+  // --- QUIZ ---
+  command('quiz', 'quiz', 'Start an anime quiz session.', { aliases: ['startquiz'], usage: '[category] [maxPlayers]' }),
+
+  // --- FUN EXTRAS ---
+  command('couple', 'funextra', 'Match two random group members as a couple.', { aliases: ['lovemeter'] }),
+  command('ship', 'funextra', 'Check love compatibility between two names.', { usage: '<name1> <name2>' }),
+  command('truth', 'funextra', 'Get a random truth question.'),
+  command('dare', 'funextra', 'Get a random dare challenge.'),
+  command('fact', 'funextra', 'Get a random fun fact.', { aliases: ['randomfact'] }),
+  command('pickup', 'funextra', 'Get a random pickup line.', { aliases: ['pickupline'] }),
+  command('meteo', 'funextra', 'Get weather info for a city.', { aliases: ['weather'], usage: '<city>' }),
+  command('lyrics', 'funextra', 'Search for song lyrics.', { aliases: ['lyric'], usage: '<song title>' }),
+  command('tiktok', 'downloader', 'Download a TikTok video without watermark.', { aliases: ['tt', 'ttdl'], usage: '<link>' }),
+  command('facebook', 'downloader', 'Download a Facebook video.', { aliases: ['fb', 'fbdl'], usage: '<link>' }),
+  command('twitter', 'downloader', 'Download a Twitter/X video.', { aliases: ['xdl', 'twdl'], usage: '<link>' })
 ]);
 
 const ALIAS_MAP = COMMANDS.reduce((map, entry) => {

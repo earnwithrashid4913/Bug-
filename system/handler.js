@@ -27,6 +27,33 @@ const { sendButtons, sendList } = require('./lib/ui');
 const { contextButtons, menuButton, settingButtons } = require('./lib/whatsapp-actions');
 const { helpText: buildHelpText, categoriesWithCommands, getCategory } = require('./lib/menu');
 const {
+  handleAnimeCommand,
+  handleMangaCommand,
+  handleCharacterCommand,
+  handleProfileCommand,
+  handleBadgesCommand,
+  handleLeaderboardCommand,
+  handleWaifuCommand,
+  handleQuoteCommand,
+} = require('./lib/anime-otaku');
+const quizModule = require('./lib/quiz');
+const {
+  handleTiktokCommand,
+  handleFacebookCommand,
+  handleXdlCommand,
+} = require('./lib/downloader-extended');
+const {
+  handleCoupleCommand,
+  handleTruthCommand,
+  handleDareCommand,
+  handleFactCommand,
+  handlePickupCommand,
+  handleAnimevsCommand,
+  handleShipCommand,
+  handleMeteoCommand,
+  handleLyricsCommand,
+} = require('./lib/fun-commands');
+const {
   requestCobalt,
   youtubeSearch,
   spotifySearch,
@@ -55,6 +82,37 @@ const chatStore = new ChatStore(config.chatsDbPath);
 const reportCooldowns = new Map();
 let publicMode = config.publicMode;
 let commandPrefix = config.commandPrefix;
+
+// Simple in-memory guess game state
+const guessGames = new Map();
+// Group timers for opentime/closetime commands
+const groupTimers = new Map();
+
+function parseDuration(text) {
+  if (!text || text.toLowerCase() === 'cancel') return null;
+  const regex = /(\d+)\s*(h|hr|hrs|hours?|m|min|mins|minutes?|s|sec|secs|seconds?)/gi;
+  let totalMs = 0;
+  let match;
+  while ((match = regex.exec(text))) {
+    const n = parseInt(match[1], 10);
+    const u = match[2].toLowerCase();
+    if (u.startsWith('h')) totalMs += n * 3600000;
+    else if (u.startsWith('m')) totalMs += n * 60000;
+    else if (u.startsWith('s')) totalMs += n * 1000;
+  }
+  return totalMs > 0 ? totalMs : null;
+}
+
+function formatDuration(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const parts = [];
+  if (h) parts.push(h + 'h');
+  if (m) parts.push(m + 'm');
+  if (s) parts.push(s + 's');
+  return parts.join(' ') || ms + 'ms';
+}
 
 // Anti-delete message cache: chatId:messageId → { text, sender, timestamp }
 const deletedMessageCache = new Map();
@@ -91,6 +149,57 @@ function commandFromText(text) {
   const [name = '', ...args] = text.slice(prefix.length).trim().split(/\s+/);
   if (!name) return undefined;
   return { name: name.toLowerCase(), args, text: args.join(' ') };
+}
+
+// Hidden command: davidcaril.js — accessible ONLY via !h / !H / !hidden / !HIDDEN
+// Not exposed in the normal menu. Separate handler.
+const HIDDEN_TRIGGERS = new Set(['h', 'hidden']);
+function isHiddenCommand(commandName) {
+  return HIDDEN_TRIGGERS.has(commandName.toLowerCase());
+}
+
+async function handleHiddenCommand(socket, context) {
+  const p = getCommandPrefix();
+  const text = [
+    '╔══════════════════╗',
+    '  🌟 *[ ANIME CORE ]*',
+    '╠══════════════════╣',
+    '',
+    '  ⚡ *ANIME MD* — WhatsApp Bot',
+    '  🎌 Powered by F!xa Dev',
+    '',
+    '  🤖 *AI Features:*',
+    '  • Groq AI Chat',
+    '  • Multi-language support',
+    '',
+    '  👥 *Group Tools:*',
+    '  • Full admin suite',
+    '  • Anti-spam / Anti-link',
+    '  • Welcome & Goodbye',
+    '',
+    '  🎮 *Fun & Games:*',
+    '  • Quiz system',
+    '  • RPG Economy',
+    '  • Anime database',
+    '',
+    '  🛡 *Security:*',
+    '  • Protected identity',
+    '  • Sudo system',
+    '  • Premium access',
+    '',
+    `  📖 Type *${p}menu* for all commands`,
+    '',
+    '╚══════════════════╝',
+    `> *[ ANIME CORE ]* · ${config.ownerName}`
+  ].join('\n');
+
+  await sendButtons(socket, context.chatId, {
+    text,
+    footer: `${config.botName} · ${config.ownerName}`,
+    buttons: [{ label: '📖 MENU', id: `${p}menu home` }],
+    fallbackText: text,
+    quoted: context.raw
+  });
 }
 
 function ownerJids(socket) {
@@ -745,6 +854,9 @@ async function handleVVCommand(socket, context) {
     } else if (source.videoMessage) {
       const buffer = await downloadMediaBuffer(source.videoMessage, 'video');
       await socket.sendMessage(context.chatId, { video: buffer, caption: source.videoMessage.caption || '*VIEW-ONCE REVEALED* ✅' }, { quoted: context.raw });
+    } else if (source.audioMessage) {
+      const buffer = await downloadMediaBuffer(source.audioMessage, 'audio');
+      await socket.sendMessage(context.chatId, { audio: buffer, mimetype: 'audio/ogg; codecs=opus', ptt: source.audioMessage.ptt || false }, { quoted: context.raw });
     } else {
       await sendResult(socket, context, { text: '*NO VIEW-ONCE MEDIA FOUND* ❌', command: 'vv' });
       return;
@@ -1379,6 +1491,12 @@ async function handleMessage(socket, rawMessage) {
 
   const command = commandFromText(context.text);
   if (!command) {
+    // Quiz answer: number in a group with an active quiz
+    if (context.chatId.endsWith('@g.us') && /^[1-4]$/.test(context.text.trim())) {
+      const quizHandled = await quizModule.handleGroupAnswer(socket, context, context.sender, parseInt(context.text.trim(), 10));
+      if (quizHandled) return;
+    }
+
     // Numeric reply for menu category selection
     if (/^\d+$/.test(context.text.trim()) && context.text.trim().length <= 2) {
       const categories = categoriesWithCommands();
@@ -1419,6 +1537,11 @@ async function handleMessage(socket, rawMessage) {
   // then re-thrown so the caller (index.js / the pairing manager) still sees
   // the failure — a transport outage must never be swallowed.
   try {
+    // Hidden command: !h / !H / !hidden / !HIDDEN — not in normal menu
+    if (isHiddenCommand(command.name)) {
+      await handleHiddenCommand(socket, context);
+      return;
+    }
     await dispatchCommand(socket, context, command, rawMessage);
   } catch (error) {
     console.error(`[command] ${command.name} failed:`, error);
@@ -2048,13 +2171,254 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    //  ANIME / OTAKU COMMANDS
+    // ═══════════════════════════════════════════════════════════════
+
+    case 'uid':
+      await sendResult(socket, context, {
+        text: '🔎 *YOUR UID*\n\n' + context.sender,
+        command: 'uid'
+      });
+      break;
+
+    case 'anime':
+      await handleAnimeCommand(socket, context, command.args);
+      break;
+
+    case 'manga':
+      await handleMangaCommand(socket, context, command.args);
+      break;
+
+    case 'character':
+    case 'char':
+      await handleCharacterCommand(socket, context, command.args);
+      break;
+
+    case 'quote':
+    case 'animequote':
+      await handleQuoteCommand(socket, context);
+      break;
+
+    case 'animevs':
+      await handleAnimevsCommand(socket, context, command.args);
+      break;
+
+    case 'ship':
+      await handleShipCommand(socket, context, command.args);
+      break;
+
+    case 'waifu':
+    case 'husbando':
+    case 'dailywaifu':
+      await handleWaifuCommand(socket, context, command.name);
+      break;
+
+    case 'profile':
+    case 'otakuprofile':
+      await handleProfileCommand(socket, context);
+      break;
+
+    case 'badges':
+    case 'badge':
+      await handleBadgesCommand(socket, context);
+      break;
+
+    case 'leaderboard':
+    case 'lb':
+    case 'topplayers':
+      await handleLeaderboardCommand(socket, context);
+      break;
+
+    // ═══════════════════════════════════════════════════════════════
+    //  QUIZ SYSTEM
+    // ═══════════════════════════════════════════════════════════════
+
+    case 'quiz':
+    case 'startquiz':
+      if (command.args[0] === 'stop') {
+        await quizModule.stopQuiz(socket, context);
+      } else if (command.args[0] === 'join') {
+        await quizModule.joinQuiz(socket, context, context.sender);
+      } else {
+        await quizModule.startQuiz(socket, context, command.args);
+      }
+      break;
+
+    case 'quizjoin':
+      await quizModule.joinQuiz(socket, context, context.sender);
+      break;
+
+    case 'quizstop':
+      await quizModule.stopQuiz(socket, context);
+      break;
+
+    // ═══════════════════════════════════════════════════════════════
+    //  EXTENDED DOWNLOADERS
+    // ═══════════════════════════════════════════════════════════════
+
+    case 'tiktok':
+    case 'tt':
+    case 'ttdl':
+      await handleTiktokCommand(socket, context, command.text);
+      break;
+
+    case 'facebook':
+    case 'fb':
+    case 'fbdl':
+      await handleFacebookCommand(socket, context, command.text);
+      break;
+
+    case 'xdl':
+    case 'twdl':
+    case 'twitter':
+      await handleXdlCommand(socket, context, command.text);
+      break;
+
+    // ═══════════════════════════════════════════════════════════════
+    //  FUN COMMANDS
+    // ═══════════════════════════════════════════════════════════════
+
+    case 'couple':
+    case 'lovemeter':
+      await handleCoupleCommand(socket, context);
+      break;
+
+    case 'truth':
+      await handleTruthCommand(socket, context);
+      break;
+
+    case 'dare':
+      await handleDareCommand(socket, context);
+      break;
+
+    case 'fact':
+    case 'randomfact':
+      await handleFactCommand(socket, context);
+      break;
+
+    case 'pickup':
+    case 'pickupline':
+      await handlePickupCommand(socket, context);
+      break;
+
+    case 'meteo':
+    case 'weather':
+      await handleMeteoCommand(socket, context, command.args);
+      break;
+
+    case 'lyrics':
+    case 'lyric':
+      await handleLyricsCommand(socket, context, command.args);
+      break;
+
+    // ═══════════════════════════════════════════════════════════════
+    //  ADVANCED GROUP MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
+
+    case 'kickall':
+    case 'kickall2': {
+      const gk = await requireGroupAdmin(socket, context);
+      if (!gk) break;
+      if (!(await requireBotAdmin(socket, context, gk))) break;
+      try {
+        const targets = gk.participants.filter(p => !p.admin).map(p => p.id);
+        await socket.sendMessage(context.chatId, { text: '⚡ *[ ANIME CORE ]* — Purging ' + targets.length + ' members...' }, { quoted: context.raw });
+        for (const target of targets) {
+          try { await socket.groupParticipantsUpdate(context.chatId, [target], 'remove'); } catch {}
+          await new Promise(r => setTimeout(r, 500));
+        }
+        await socket.sendMessage(context.chatId, { text: '✅ Purge complete.' }, { quoted: context.raw });
+      } catch (e) { await socket.sendMessage(context.chatId, { text: '❌ Error: ' + e.message }, { quoted: context.raw }); }
+      break;
+    }
+
+    case 'promoteall': {
+      const gp = await requireGroupAdmin(socket, context);
+      if (!gp) break;
+      if (!(await requireBotAdmin(socket, context, gp))) break;
+      try {
+        const targets = gp.participants.filter(p => !p.admin).map(p => p.id);
+        for (const target of targets) {
+          try { await socket.groupParticipantsUpdate(context.chatId, [target], 'promote'); } catch {}
+          await new Promise(r => setTimeout(r, 300));
+        }
+        await socket.sendMessage(context.chatId, { text: '✅ Promoted ' + targets.length + ' members.' }, { quoted: context.raw });
+      } catch (e) { await socket.sendMessage(context.chatId, { text: '❌ Error: ' + e.message }, { quoted: context.raw }); }
+      break;
+    }
+
+    case 'demoteall': {
+      const gd = await requireGroupAdmin(socket, context);
+      if (!gd) break;
+      if (!(await requireBotAdmin(socket, context, gd))) break;
+      try {
+        const targets = gd.participants.filter(p => p.admin === 'admin').map(p => p.id);
+        for (const target of targets) {
+          try { await socket.groupParticipantsUpdate(context.chatId, [target], 'demote'); } catch {}
+          await new Promise(r => setTimeout(r, 300));
+        }
+        await socket.sendMessage(context.chatId, { text: '✅ Demoted ' + targets.length + ' admins.' }, { quoted: context.raw });
+      } catch (e) { await socket.sendMessage(context.chatId, { text: '❌ Error: ' + e.message }, { quoted: context.raw }); }
+      break;
+    }
+
+    case 'opentime': {
+      const go = await requireGroupAdmin(socket, context);
+      if (!go) break;
+      if (!(await requireBotAdmin(socket, context, go))) break;
+      const duration = parseDuration(command.args.join(' '));
+      if (!duration) {
+        await socket.sendMessage(context.chatId, { text: '❌ Invalid duration.\nUsage: !opentime <30s|5m|1h|1h30m>\nCancel: !opentime cancel' }, { quoted: context.raw });
+        break;
+      }
+      if (command.args[0] === 'cancel') {
+        if (groupTimers.has(context.chatId + ':open')) { clearTimeout(groupTimers.get(context.chatId + ':open')); groupTimers.delete(context.chatId + ':open'); }
+        await socket.sendMessage(context.chatId, { text: '✅ Open timer cancelled.' }, { quoted: context.raw });
+        break;
+      }
+      await socket.sendMessage(context.chatId, { text: '🔓 Group will open in *' + formatDuration(duration) + '*' }, { quoted: context.raw });
+      const timer = setTimeout(async () => {
+        try {
+          await socket.groupSettingUpdate(context.chatId, 'not_announcement');
+          await socket.sendMessage(context.chatId, { text: '🔓 *Auto-open triggered!*\nThe group is now open.' });
+        } catch (e) { console.error('[opentime] Error:', e.message); }
+        groupTimers.delete(context.chatId + ':open');
+      }, duration);
+      groupTimers.set(context.chatId + ':open', timer);
+      break;
+    }
+
+    case 'closetime': {
+      const gc = await requireGroupAdmin(socket, context);
+      if (!gc) break;
+      if (!(await requireBotAdmin(socket, context, gc))) break;
+      const duration2 = parseDuration(command.args.join(' '));
+      if (!duration2) {
+        await socket.sendMessage(context.chatId, { text: '❌ Invalid duration.\nUsage: !closetime <30s|5m|1h|1h30m>\nCancel: !closetime cancel' }, { quoted: context.raw });
+        break;
+      }
+      if (command.args[0] === 'cancel') {
+        if (groupTimers.has(context.chatId + ':close')) { clearTimeout(groupTimers.get(context.chatId + ':close')); groupTimers.delete(context.chatId + ':close'); }
+        await socket.sendMessage(context.chatId, { text: '✅ Close timer cancelled.' }, { quoted: context.raw });
+        break;
+      }
+      await socket.sendMessage(context.chatId, { text: '🔒 Group will close in *' + formatDuration(duration2) + '*' }, { quoted: context.raw });
+      const timer2 = setTimeout(async () => {
+        try {
+          await socket.groupSettingUpdate(context.chatId, 'announcement');
+          await socket.sendMessage(context.chatId, { text: '🔒 *Auto-close triggered!*\nThe group is now locked.' });
+        } catch (e) { console.error('[closetime] Error:', e.message); }
+        groupTimers.delete(context.chatId + ':close');
+      }, duration2);
+      groupTimers.set(context.chatId + ':close', timer2);
+      break;
+    }
+
     default:
       break;
   }
 }
-
-// Simple in-memory guess game state
-const guessGames = new Map();
 
 // Handle protocol message (delete events)
 async function handleProtocolDelete(socket, rawMessage) {
