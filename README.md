@@ -43,12 +43,57 @@ reconnect backoff. Paired sessions survive bot restarts and are restored
 automatically. Raw disconnect reasons stay in the server log; Telegram users
 only see friendly ANIME MD status boxes.
 
+### Pairing from a public group or supergroup
+
+`/pair <number>` works in a private chat, a group and a supergroup with the same
+core engine — there is no separate group implementation, and a request is never
+silently redirected to a private chat. In a group the whole lifecycle is visible
+in **one message** that is edited in place:
+
+`PAIRING REQUEST → PREPARING → PAIRING CODE → CONNECTED / failed`
+
+Public chats keep the sensitive parts out of sight: the phone number is always
+masked (`+92 ••••• 567`), and a failure renders one short line —
+*“Pairing request could not be started. Please check the number and try again.”*
+The real reason (validation failure, Baileys error, disconnect code, timeout) is
+written to the server log only. Tokens, owner IDs, session paths, credential
+files and stack traces never reach any chat.
+
+Because the code is posted where everyone in the group can see it, the public
+code box warns that it is single use; use it immediately. Group traffic is paced
+independently of the per-user limits: a short spacing window between pairing
+starts per chat, a cap of three simultaneous pairing flows per chat, duplicate
+requests for the same number acknowledged instead of re-run, and automatic
+cleanup of the chat's counters when a flow ends. One member's pairing never
+blocks or corrupts another member's.
+
 ### Telegram commands and buttons
 
 Available Telegram commands are `/start`, `/pair [number]`, `/status [number]`,
 `/sessions` (alias `/listsessions`), `/stop <number>` (alias `/delpair`),
-`/restart <number>`, `/guide`, `/settings`, `/myid`, `/premium`, `/addowner`,
-`/delowner`, `/addprem`, `/delprem`, `/listpaired`, and `/help`.
+`/restart <number>`, `/guide`, `/allmenu`, `/developer`, `/thanks`, `/settings`,
+`/myid`, `/premium`, `/addowner`, `/delowner`, `/addprem`, `/delprem`,
+`/listpaired`, and `/help`.
+
+The main menu is the ANIME MD system dashboard: **PAIR WHATSAPP**, **MY
+SESSIONS**, **ALL MENU**, **STATUS**, **MY ACCOUNT**, **BUY ACCESS**,
+**DEVELOPER**, **THANKS TO**, **GUIDE**, **HELP**, **SETTINGS**, plus **ADMIN**
+for admins and **OWNER MENU** for bootstrap owners.
+
+- **ALL MENU** is a read-only directory of the WhatsApp commands the project
+  really registers, generated from `system/lib/menu.js` at request time, so a
+  command can never be advertised without existing.
+- **DEVELOPER** and **THANKS TO** render the canonical protected identity from
+  `system/security.js` plus the configured owner name and contact link — never
+  a phone number, Telegram ID or path.
+- **BUY ACCESS** renders the free/premium/VIP pairing limits from the access
+  model constants and the caller's own tier and usage from the user database.
+
+Every button on every page has a real handler; there are no decorative or dead
+buttons. All Telegram text is plain Latin inside the ANIME MD box style: the
+decorative "fancy font" glyphs (MATHEMATICAL ALPHANUMERIC SYMBOLS) were removed
+because clients without a matching font draw them mirrored, inverted or as
+empty boxes.
 
 The dashboard and every list view use inline buttons — Pair WhatsApp, My
 Sessions, Status, Pairing Guide, Settings, Help, Refresh, Back, Home, per

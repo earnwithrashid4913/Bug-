@@ -9,7 +9,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   ADMIN_COMMANDS,
+  NORMAL_PAIRING_LIMIT,
   OWNER_COMMANDS,
+  PREMIUM_PAIRING_LIMIT,
   TelegramController,
   accessDeniedBox,
   connectedMarkup,
@@ -281,7 +283,16 @@ test('premium view shows tier info and the user status', async () => {
   await controller.handleUpdate({ callback_query: { id: 'c1', from: { id: 42 }, data: 'nav:premium', message: { chat: { id: 1 }, message_id: 21 } } });
   const edit = calls.filter((c) => c.method === 'editMessageText').at(-1);
   assert.match(edit.payload.text, /ANIME MD • PREMIUM/);
-  assert.match(edit.payload.text, /FREE 1 • PREMIUM 3 • VIP/);
+  // The limits are rendered from the access-model constants, and the caller's
+  // own tier/usage from the user database — nothing is hardcoded in the page.
+  assert.match(edit.payload.text, new RegExp(`• ${NORMAL_PAIRING_LIMIT} pairing session`));
+  assert.match(edit.payload.text, new RegExp(`• ${PREMIUM_PAIRING_LIMIT} pairing sessions`));
+  assert.match(edit.payload.text, /✦ VIP Premium/);
+  assert.match(edit.payload.text, /👤 Your tier: FREE/);
+  assert.match(edit.payload.text, /📱 Your sessions: 0\/1/);
+  // Every button on the page is handled.
+  const buttons = edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.deepEqual(buttons, ['nav:account', 'home']);
 });
 
 test('admin sessions view lists every session globally (admin/owner only)', async () => {

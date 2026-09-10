@@ -92,7 +92,12 @@ function makeStack({ fake = fakeBaileys() } = {}) {
     limits: { ownerCooldownMs: 0, reconnectBaseDelayMs: 5, reconnectMaxDelayMs: 10 }
   });
 
+  // One array holds EVERY message the controller produces, in order: real
+  // sends (`edited: false`) and in-place edits of the single pairing message
+  // (`edited: true`). The pairing lifecycle is one message edited through
+  // PREPARING → CODE → CONNECTED, so the acceptance checks must see the edits.
   const replies = [];
+  let nextMessageId = 0;
   const controller = new TelegramController({
     token: 'token',
     owners: [OWNER_ID],
@@ -109,8 +114,20 @@ function makeStack({ fake = fakeBaileys() } = {}) {
     fetchImpl: async (_url, init) => ({ ok: true, json: async () => ({ ok: true, result: JSON.parse(init.body) }) }),
     log: { info: () => {}, warn: () => {}, error: () => {} }
   });
-  controller.reply = async (chatId, text, markup) => replies.push({ chatId, text, markup });
-  controller.replyPhoto = async (chatId, image, caption) => replies.push({ chatId, text: caption, image });
+  controller.reply = async (chatId, text, markup) => {
+    nextMessageId += 1;
+    replies.push({ chatId, messageId: nextMessageId, text, markup, edited: false });
+    return { message_id: nextMessageId };
+  };
+  controller.replyPhoto = async (chatId, image, caption, markup) => {
+    nextMessageId += 1;
+    replies.push({ chatId, messageId: nextMessageId, text: caption, image, markup, edited: false });
+    return { message_id: nextMessageId };
+  };
+  controller.editMessage = async (chatId, messageId, text, markup) => {
+    replies.push({ chatId, messageId, text, markup, edited: true });
+    return { message_id: messageId };
+  };
   controller.running = true;
   controller.startedAt = Date.now();
   manager.onConnected = async (ownerId, session) => controller.notifySessionConnected(ownerId, session);
@@ -138,21 +155,26 @@ test('ACCEPTANCE: /pair returns the real WhatsApp code and reports CONNECTED onl
 
   await sendPair(controller, `/pair ${NUMBER}`);
 
-  // 1. Two Telegram messages: the acknowledgement, then the code box.
-  assert.equal(replies.length, 2);
-  assert.match(replies[0].text, /Preparing WhatsApp pairing/);
-  assert.match(replies[1].text, /ANIME MD • PAIRING CODE/);
+  // 1. ONE Telegram message: the acknowledgement is sent once, then that same
+  //    message is edited to the code box. No second message is ever sent.
+  const sends = replies.filter((entry) => !entry.edited);
+  assert.equal(sends.length, 1, 'exactly one message is sent for the whole lifecycle');
+  assert.match(sends[0].text, /Preparing WhatsApp pairing/);
+  const codeEntry = replies.find((entry) => /ANIME MD • PAIRING CODE/.test(entry.text || ''));
+  assert.ok(codeEntry, 'the pairing code box is produced');
+  assert.equal(codeEntry.edited, true, 'the code arrives as an edit, not a new message');
+  assert.equal(codeEntry.messageId, sends[0].messageId, 'the same message is edited in place');
 
   // 2. The code came from the real Baileys API, called with the number only.
   assert.deepEqual(fake.pairingCalls, [{ number: NUMBER, argCount: 1 }]);
   const realCode = whatsappStyleCode(NUMBER);
-  const displayed = replies[1].text.match(/🔐 CODE: (\S+)/)[1];
+  const displayed = codeEntry.text.match(/🔐 CODE: (\S+)/)[1];
   assert.equal(displayed, `${realCode.slice(0, 4)}-${realCode.slice(4)}`, 'Telegram shows the exact socket code');
   assert.equal(displayed.replace('-', ''), realCode, 'the dash is display-only');
   for (const character of realCode) {
     assert.ok(PAIRING_ALPHABET.includes(character), `${character} is not a WhatsApp pairing-alphabet symbol`);
   }
-  assert.doesNotMatch(replies[1].text, /GOAT/i, 'no custom/GOAT-MODS code anywhere in the reply');
+  assert.doesNotMatch(codeEntry.text, /GOAT/i, 'no custom/GOAT-MODS code anywhere in the reply');
 
   // 3. No connection is claimed before WhatsApp reports open.
   assert.doesNotMatch(allText(replies), /WhatsApp Connected/);
@@ -183,28 +205,36 @@ test('ACCEPTANCE: /pair returns the real WhatsApp code and reports CONNECTED onl
   await manager.shutdown();
 });
 
-test('ACCEPTANCE: /pair from a supergroup pairs, with the code delivered only to the private chat', async () => {
+test('ACCEPTANCE: /pair from a supergroup pairs with the real code visible in the group', async () => {
   const { manager, controller, fake, replies } = makeStack();
 
   // A real supergroup update: the command must be ACCEPTED, not rejected with
-  // a private-chat-only notice.
+  // a private-chat-only notice, and the flow must STAY in the group.
   await controller.handleUpdate({ message: { chat: { id: -1001, type: 'supergroup' }, from: { id: Number(OWNER_ID) }, text: `/pair ${NUMBER}` } });
 
   const groupTexts = replies.filter((entry) => String(entry.chatId) === String(-1001)).map((entry) => entry.text || '');
   const privateTexts = replies.filter((entry) => String(entry.chatId) === OWNER_ID).map((entry) => entry.text || '');
 
-  assert.ok(groupTexts.some((text) => /Preparing WhatsApp pairing|Pairing Code Sent/.test(text)), 'the group pairing flow ran');
+  assert.ok(groupTexts.some((text) => /Pairing request received/.test(text)), 'the group visibly acknowledges the request');
+  assert.ok(groupTexts.some((text) => /Preparing WhatsApp pairing/.test(text)), 'the group pairing flow ran');
   assert.ok(!groupTexts.some((text) => /only works in a private chat/i.test(text)), 'no private-chat-only rejection');
   assert.ok(!groupTexts.some((text) => /92349494494/.test(text)), 'the full number is never broadcast to the group');
   assert.ok(groupTexts.some((text) => /••••• 494/.test(text)), 'the group only ever sees the masked number');
-  assert.ok(!groupTexts.some((text) => /🔐 CODE:/.test(text)), 'the pairing code never appears in the group');
+  assert.deepEqual(privateTexts, [], 'nothing is silently redirected to a private chat');
 
-  // The private chat (the initiator themself) receives the real socket code.
+  // The group itself receives the real socket code — the exact value the live
+  // Baileys socket returned, formatted XXXX-XXXX.
   const realCode = whatsappStyleCode(NUMBER);
   assert.ok(
-    privateTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && text.includes(`${realCode.slice(0, 4)}-${realCode.slice(4)}`)),
-    'the code was delivered privately'
+    groupTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && text.includes(`${realCode.slice(0, 4)}-${realCode.slice(4)}`)),
+    'the real WhatsApp code is shown in the group'
   );
+  assert.equal(fake.pairingCalls.length, 1, 'exactly one real pairing code was generated');
+  // No technical wording ever reaches a public chat.
+  for (const text of groupTexts) {
+    assert.doesNotMatch(text, /number format is invalid/i);
+    assert.doesNotMatch(text, /Baileys|socket|creds|authDir|token/i);
+  }
 
   // Complete the link on the real (fake) socket: creds registered, 515
   // restart, replacement socket open.
@@ -220,13 +250,16 @@ test('ACCEPTANCE: /pair from a supergroup pairs, with the code delivered only to
   await sleep(20);
 
   assert.equal(manager.getSession(OWNER_ID, NUMBER).status, 'CONNECTED');
-  // The group success is masked; the full confirmation lands in the private
-  // chat. Neither side claims the connection before connection open.
+  // The group success is masked, and it is an EDIT of the same pairing message
+  // — the connected state never claims a connection before connection open.
   const groupAfter = replies.filter((entry) => String(entry.chatId) === String(-1001)).map((entry) => entry.text || '');
-  const privateAfter = replies.filter((entry) => String(entry.chatId) === OWNER_ID).map((entry) => entry.text || '');
   assert.ok(groupAfter.some((text) => /WhatsApp Connected/.test(text) && /••••• 494/.test(text)), 'the group shows a masked success');
   assert.ok(!groupAfter.some((text) => /92349494494/.test(text)), 'still no full number in the group after connecting');
-  assert.ok(privateAfter.some((text) => /WhatsApp Connected/.test(text) && /\+92 349 494494/.test(text)), 'the private confirmation names the number');
+  assert.deepEqual(
+    replies.filter((entry) => String(entry.chatId) === OWNER_ID),
+    [],
+    'the whole lifecycle stayed inside the group'
+  );
   assert.equal(fake.pairingCalls.length, 1, 'exactly one real pairing code was generated');
 
   await manager.shutdown();
