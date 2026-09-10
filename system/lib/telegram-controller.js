@@ -294,13 +294,19 @@ function pairingStartedBox(numberDisplay) {
   ]);
 }
 
-function pairingLoadingBox(numberDisplay, frame) {
+function pairingLoadingBox(numberDisplay, frame, stage = 'PREPARING') {
   // The single pairing message carries the loading animation in its title so
-  // it is edited (not re-sent) on every frame.
+  // it is edited (not re-sent) on every frame. The stage line follows the real
+  // socket lifecycle reported by the pairing manager: PREPARING while the
+  // WhatsApp handshake runs, GENERATING_CODE once requestPairingCode() is
+  // actually being called on the open socket.
+  const stageLine = stage === 'GENERATING_CODE'
+    ? '🔐 Generating pairing code...'
+    : '⏳ Preparing WhatsApp pairing...';
   return box(`ANIME MD • PAIRING ${frame}`, [
     '',
     `📱 Number: ${numberDisplay}`,
-    '⏳ Preparing WhatsApp pairing...',
+    stageLine,
     '',
     'Please wait.'
   ]);
@@ -2264,7 +2270,7 @@ class TelegramController {
           // code/connected/failed state while this frame was waiting its
           // turn, the frame is dropped instead of overwriting the new state.
           if (!this.spinnerIsCurrent(flow, generation)) return;
-          const text = pairingLoadingBox(flow.publicDisplay, frame);
+          const text = pairingLoadingBox(flow.publicDisplay, frame, flow.stage);
           flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, text, undefined))?.message_id || flow.messageId;
         });
       } catch {
@@ -2295,6 +2301,11 @@ class TelegramController {
     const limit = await this.pairingLimitOf(senderId);
     const request = { sessionLimit: limit };
     if (regenerate) request.regenerate = true;
+    // Live stage updates ride on the existing spinner: the next frame renders
+    // the new stage line, so no extra Telegram message is ever sent.
+    request.onProgress = (stage) => {
+      if (!flow.stopped && flow.state === 'PREPARING') flow.stage = stage;
+    };
     const result = await this.pairing.requestPairing(senderId, input || number, request);
     if (flow.stopped) return result;
     this.stopSpinner(flow);
@@ -2592,6 +2603,7 @@ class TelegramController {
         await this.pairing.cancelPairing(senderId, flow.number, {});
       }
       flow.state = 'PREPARING';
+      flow.stage = 'PREPARING';
       flow.code = undefined;
       flow.displayCode = undefined;
       flow.expiresAt = undefined;
