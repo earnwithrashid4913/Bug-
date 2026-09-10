@@ -306,7 +306,7 @@ async function sendConnectionSuccess(socket) {
   await sendButtons(socket, target, {
     text,
     footer: `${config.botName} · ${config.ownerName}`,
-    buttons: [{ label: '☷ Open Menu', id: `${prefix}menu home` }],
+    buttons: [{ label: '📖 MENU', id: `${prefix}menu home` }],
     fallbackText: `${text}\n\nType ${prefix}menu to open the command menu.`
   });
 }

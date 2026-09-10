@@ -154,7 +154,6 @@ function pairingError(message, code, status = 400) {
 }
 
 async function waitForPairingReady(ready, socket, timeoutMs) {
-  let timeout;
   let poll;
   const transportReady = new Promise((resolve, reject) => {
     // Baileys 7 does not guarantee a `qr` connection.update for a phone-number
@@ -181,7 +180,6 @@ async function waitForPairingReady(ready, socket, timeoutMs) {
   try {
     await Promise.race([ready, transportReady]);
   } finally {
-    if (timeout) clearTimeout(timeout);
     if (poll) clearTimeout(poll);
   }
 }
