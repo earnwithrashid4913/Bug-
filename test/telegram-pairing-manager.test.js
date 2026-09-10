@@ -676,3 +676,90 @@ test('a stored session under another controller blocks a fresh pairing (LOCKED)'
   });
   await manager.shutdown();
 });
+
+// ---------------------------------------------------------------------------
+// Socket construction hardening ("code generated but Couldn't link device").
+// ---------------------------------------------------------------------------
+
+function fakeBaileysCapturingConfig(extra = {}) {
+  const fake = fakeBaileys();
+  const original = fake.makeWASocket;
+  fake.configs = [];
+  fake.makeWASocket = (config) => {
+    fake.configs.push(config);
+    return original(config);
+  };
+  return Object.assign(fake, extra);
+}
+
+test('the pairing socket announces the live WhatsApp Web version and a stock browser descriptor', async () => {
+  let fetches = 0;
+  const fake = fakeBaileysCapturingConfig({
+    fetchLatestBaileysVersion: async () => {
+      fetches += 1;
+      return { version: [2, 3000, 1234567890], isLatest: true };
+    }
+  });
+  const { manager } = makeManager({ fake });
+  await manager.requestPairing('10', '923001234567');
+  await manager.requestPairing('11', '923001234568');
+  assert.equal(fake.configs.length, 2);
+  for (const config of fake.configs) {
+    assert.deepEqual(config.version, [2, 3000, 1234567890], 'the fetched version is passed to makeWASocket');
+    assert.equal(config.browser[0], 'Ubuntu', 'a stock Baileys OS descriptor is used, never a made-up one');
+    assert.equal(config.browser[1], 'Chrome');
+    assert.ok(config.qrTimeout >= 60_000, 'pair-device refs live long enough for the whole code TTL');
+    assert.ok(config.auth?.creds, 'the socket is bound to the session auth state');
+  }
+  assert.equal(fetches, 1, 'the version is cached across pairings');
+  await manager.shutdown();
+});
+
+test('a failing or slow version fetch falls back to the bundled default instead of blocking pairing', async () => {
+  const fake = fakeBaileysCapturingConfig({
+    fetchLatestBaileysVersion: () => new Promise(() => {}) // never resolves
+  });
+  const { manager } = makeManager({ fake, limits: { versionFetchTimeoutMs: 20 } });
+  const result = await manager.requestPairing('10', '923001234567');
+  assert.equal(result.code, whatsappStyleCode('923001234567'));
+  assert.equal(fake.configs[0].version, undefined, 'no version key: Baileys uses its bundled default');
+  await manager.shutdown();
+});
+
+test('every pairing socket has its own auth state — credentials never cross sessions', async () => {
+  const fake = fakeBaileysCapturingConfig();
+  const { manager } = makeManager({ fake });
+  await manager.requestPairing('10', '923001234567');
+  await manager.requestPairing('10', '923001234568');
+  assert.notEqual(fake.configs[0].auth.creds, fake.configs[1].auth.creds);
+  assert.notEqual(manager.getSession('10', '923001234567').authDir, manager.getSession('10', '923001234568').authDir);
+  await manager.shutdown();
+});
+
+test('progress stages are reported in lifecycle order and never claim success', async () => {
+  const { manager } = makeManager();
+  const stages = [];
+  await manager.requestPairing('10', '923001234567', { onProgress: (stage) => stages.push(stage) });
+  assert.deepEqual(stages, ['PREPARING', 'GENERATING_CODE']);
+  assert.equal(manager.getSession('10', '923001234567').status, STATUS.WAITING_FOR_LINK, 'a code is NOT a connection');
+  await manager.shutdown();
+});
+
+test('a link completed on the in-memory credentials survives a close even if the creds.update flag was missed', async () => {
+  const { manager, fake } = makeManager();
+  await manager.requestPairing('10', '923001234567');
+  const session = manager.getSession('10', '923001234567');
+  // The phone accepted the code: Baileys flips the live credential object.
+  session.authState.state.creds.registered = true;
+  await fs.mkdir(session.authDir, { recursive: true });
+  await fs.writeFile(path.join(session.authDir, 'creds.json'), JSON.stringify({ registered: true }));
+  session.socket.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 515 } } } });
+  await sleep(25);
+  const revived = manager.getSession('10', '923001234567');
+  assert.ok(revived, 'the linked session was not cleaned up as a failed pairing');
+  assert.equal(revived.registered, true);
+  fake.sockets.at(-1).ev.emit('connection.update', { connection: 'open' });
+  await sleep(5);
+  assert.equal(revived.status, STATUS.CONNECTED);
+  await manager.shutdown();
+});
