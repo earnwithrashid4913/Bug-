@@ -211,6 +211,17 @@ function startTelegramController() {
     requiredChannels: config.telegramRequiredChannels,
     sessionLimit: telegramPairingManager.limits.maxSessionsPerController,
     codeSource: telegramPairingManager.codeSourceLabel,
+    // Identity shown by the Telegram DEVELOPER / THANKS TO pages: the configured
+    // owner name plus the canonical protected developer identity, and the
+    // configured official contact link. Nothing secret is passed here.
+    identity: {
+      owner: config.ownerName,
+      developer: config.developerName,
+      channel: config.whatsappChannel
+    },
+    // WhatsApp command prefix, used only to render the read-only ALL MENU
+    // command directory on Telegram.
+    commandPrefix: config.commandPrefix,
     // Owner activity monitoring: every notable event (start, pair request,
     // pairing issued/failed/completed, session connect/disconnect, protected
     // command use, verification success/failure) is formatted into a compact
