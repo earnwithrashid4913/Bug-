@@ -183,6 +183,55 @@ test('ACCEPTANCE: /pair returns the real WhatsApp code and reports CONNECTED onl
   await manager.shutdown();
 });
 
+test('ACCEPTANCE: /pair from a supergroup pairs, with the code delivered only to the private chat', async () => {
+  const { manager, controller, fake, replies } = makeStack();
+
+  // A real supergroup update: the command must be ACCEPTED, not rejected with
+  // a private-chat-only notice.
+  await controller.handleUpdate({ message: { chat: { id: -1001, type: 'supergroup' }, from: { id: Number(OWNER_ID) }, text: `/pair ${NUMBER}` } });
+
+  const groupTexts = replies.filter((entry) => String(entry.chatId) === String(-1001)).map((entry) => entry.text || '');
+  const privateTexts = replies.filter((entry) => String(entry.chatId) === OWNER_ID).map((entry) => entry.text || '');
+
+  assert.ok(groupTexts.some((text) => /Preparing WhatsApp pairing|Pairing Code Sent/.test(text)), 'the group pairing flow ran');
+  assert.ok(!groupTexts.some((text) => /only works in a private chat/i.test(text)), 'no private-chat-only rejection');
+  assert.ok(!groupTexts.some((text) => /92349494494/.test(text)), 'the full number is never broadcast to the group');
+  assert.ok(groupTexts.some((text) => /••••• 494/.test(text)), 'the group only ever sees the masked number');
+  assert.ok(!groupTexts.some((text) => /🔐 CODE:/.test(text)), 'the pairing code never appears in the group');
+
+  // The private chat (the initiator themself) receives the real socket code.
+  const realCode = whatsappStyleCode(NUMBER);
+  assert.ok(
+    privateTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && text.includes(`${realCode.slice(0, 4)}-${realCode.slice(4)}`)),
+    'the code was delivered privately'
+  );
+
+  // Complete the link on the real (fake) socket: creds registered, 515
+  // restart, replacement socket open.
+  const session = manager.getSession(OWNER_ID, NUMBER);
+  const originalSocket = session.socket;
+  originalSocket.authState.creds.registered = true;
+  originalSocket.ev.emit('creds.update', { registered: true, me: { id: `${NUMBER}:1@s.whatsapp.net` } });
+  await fs.mkdir(session.authDir, { recursive: true });
+  await fs.writeFile(path.join(session.authDir, 'creds.json'), JSON.stringify({ registered: true }));
+  originalSocket.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 515 } } } });
+  await sleep(30);
+  fake.sockets.at(-1).ev.emit('connection.update', { connection: 'open' });
+  await sleep(20);
+
+  assert.equal(manager.getSession(OWNER_ID, NUMBER).status, 'CONNECTED');
+  // The group success is masked; the full confirmation lands in the private
+  // chat. Neither side claims the connection before connection open.
+  const groupAfter = replies.filter((entry) => String(entry.chatId) === String(-1001)).map((entry) => entry.text || '');
+  const privateAfter = replies.filter((entry) => String(entry.chatId) === OWNER_ID).map((entry) => entry.text || '');
+  assert.ok(groupAfter.some((text) => /WhatsApp Connected/.test(text) && /••••• 494/.test(text)), 'the group shows a masked success');
+  assert.ok(!groupAfter.some((text) => /92349494494/.test(text)), 'still no full number in the group after connecting');
+  assert.ok(privateAfter.some((text) => /WhatsApp Connected/.test(text) && /\+92 349 494494/.test(text)), 'the private confirmation names the number');
+  assert.equal(fake.pairingCalls.length, 1, 'exactly one real pairing code was generated');
+
+  await manager.shutdown();
+});
+
 test('ACCEPTANCE: an invalid number never opens a socket and reports the format problem', async () => {
   const { manager, controller, fake, replies } = makeStack();
   for (const bad of ['/pair 123', '/pair abcdefgh', '/pair']) {

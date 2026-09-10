@@ -344,6 +344,42 @@ test('an expired pairing code cleans up its socket and credentials', async () =>
   await manager.shutdown();
 });
 
+test('code expiry triggers onCodeExpired AFTER the session is cleaned up', async () => {
+  const expired = [];
+  const { manager } = makeManager({ limits: { pairingCodeTtlMs: 25 } });
+  manager.onCodeExpired = (ownerId, session) => expired.push({ ownerId, number: session.number, status: session.status, stillRegistered: manager.getSession(ownerId, session.number) !== undefined });
+  await manager.requestPairing('10', '923001234567');
+  await sleep(60);
+  assert.equal(expired.length, 1, 'the expiry callback fired exactly once');
+  assert.equal(expired[0].ownerId, '10');
+  assert.equal(expired[0].number, '923001234567');
+  assert.equal(expired[0].status, STATUS.EXPIRED);
+  assert.equal(expired[0].stillRegistered, false, 'the callback runs only after cleanup');
+  await manager.shutdown();
+});
+
+test('the new-flow cooldown still gates fresh pairings, but a regeneration is exempt', async () => {
+  const { manager, fake } = makeManager({ limits: { ownerCooldownMs: 60_000 } });
+  const first = await manager.requestPairing('10', '923001234567');
+  assert.ok(first.code);
+  // A fresh flow for a DIFFERENT number within the cooldown window is still
+  // refused — the anti-spam gate is untouched.
+  await assert.rejects(manager.requestPairing('10', '12025550123'), (error) => {
+    assert.equal(error.code, 'COOLDOWN');
+    return true;
+  });
+  // But the "Generate New Code" path (cancel + regenerate the SAME flow) is
+  // exempt: it is rate-limited by the Telegram layer's own debounce.
+  const requestsBefore = fake.pairingCalls.length;
+  await manager.cancelPairing('10', '923001234567');
+  const again = await manager.requestPairing('10', '923001234567', { regenerate: true });
+  assert.ok(again.code, 'a regeneration inside the cooldown window succeeds');
+  assert.equal(again.code, first.code, 'the code is the one the live socket returned (deterministic fake)');
+  assert.equal(fake.pairingCalls.length, requestsBefore + 1, 'a brand-new code was requested from the socket');
+  assert.equal(manager.getSession('10', '923001234567').status, STATUS.WAITING_FOR_LINK);
+  await manager.shutdown();
+});
+
 test('a linked session reconnects with backoff after a transient disconnect', async () => {
   const { manager, fake } = makeManager();
   await manager.requestPairing('10', '923001234567');

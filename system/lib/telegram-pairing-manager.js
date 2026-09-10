@@ -256,6 +256,11 @@ class TelegramPairingManager {
     this.log = log;
     this.onConnected = undefined;
     this.onDisconnected = undefined;
+    // Called (with the session snapshot) when a valid pairing code expires
+    // without a link, AFTER its socket and unregistered credentials have been
+    // cleaned up. Lets the Telegram layer update the pairing message instead
+    // of leaving a stale "code ready" box forever.
+    this.onCodeExpired = undefined;
     this.onSocket = onSocket;
     this.baileys = {
       makeWASocket: baileys.makeWASocket || makeWASocket,
@@ -674,7 +679,18 @@ class TelegramPairingManager {
       if (session.stopped || session.registered || session.status === STATUS.CONNECTED) return;
       session.setStatus(STATUS.EXPIRED);
       this.log.info?.(`[telegram-pairing] Pairing code for ${session.numberDisplay} expired without a link.`);
-      void this.cleanupSession(session, { deleteCreds: true });
+      const snapshot = this.sessionSnapshot(session);
+      void this.cleanupSession(session, { deleteCreds: true })
+        .then(() => {
+          try {
+            this.onCodeExpired?.(session.ownerId, snapshot);
+          } catch (error) {
+            this.log.error?.(`[telegram-pairing] onCodeExpired callback failed for ${session.numberDisplay}: ${error.message}`);
+          }
+        })
+        .catch((error) => {
+          this.log.error?.(`[telegram-pairing] Cleanup after code expiry failed for ${session.numberDisplay}: ${error.message}`);
+        });
     }, this.limits.pairingCodeTtlMs);
     session.expiryTimer.unref();
   }
@@ -729,12 +745,20 @@ class TelegramPairingManager {
       throw pairingError(`This controller already holds the maximum of ${effectiveLimit} sessions. Stop an unused one with /stop first.`, 'LIMIT', 409);
     }
 
-    const now = Date.now();
-    const lastFlow = this.ownerCooldowns.get(owner) || 0;
-    if (now - lastFlow < this.limits.ownerCooldownMs) {
-      throw pairingError(`Please wait ${Math.ceil((this.limits.ownerCooldownMs - (now - lastFlow)) / 1000)} seconds before starting another pairing.`, 'COOLDOWN', 429);
+    // The cooldown gates FRESH pairing flows (anti-spam). A regeneration of
+    // the same flow ("Generate New Code") is not a fresh flow: the Telegram
+    // layer already debounces it with its own per-user rate limit, and
+    // applying the cooldown here would make the regenerate button fail with
+    // "please wait" almost every time, because a code is normally issued
+    // well inside the cooldown window after the original /pair.
+    if (!options.regenerate) {
+      const now = Date.now();
+      const lastFlow = this.ownerCooldowns.get(owner) || 0;
+      if (now - lastFlow < this.limits.ownerCooldownMs) {
+        throw pairingError(`Please wait ${Math.ceil((this.limits.ownerCooldownMs - (now - lastFlow)) / 1000)} seconds before starting another pairing.`, 'COOLDOWN', 429);
+      }
     }
-    this.ownerCooldowns.set(owner, now);
+    this.ownerCooldowns.set(owner, Date.now());
 
     // LOCKING: one pairing flow per number, process-wide.
     this.numberLocks.add(number);

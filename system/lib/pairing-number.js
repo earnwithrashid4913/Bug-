@@ -124,12 +124,30 @@ function formatPairingCodeDisplay(code) {
   return value.match(/.{1,4}/g).join('-');
 }
 
+/**
+ * Public-chat display form of a canonical number: the country code and the
+ * last three digits stay visible (so the initiator can recognize their own
+ * number), the middle is masked. A full phone number is personal data and
+ * must never be broadcast into a group or supergroup; the unmasked form is
+ * reserved for the private chat where the pairing code itself is delivered.
+ *
+ *   92349494494  →  +92 ••••• 494
+ *   12025550123  →  +1 ••••• 123
+ */
+function maskInternationalNumber(number) {
+  const canonical = normalizeWhatsAppNumber(number);
+  const { countryCode, subscriber } = splitCountryCode(canonical);
+  const tail = subscriber.slice(-3);
+  return `+${countryCode} ••••• ${tail}`;
+}
+
 module.exports = {
   MAX_DIGITS,
   MIN_DIGITS,
   NumberFormatError,
   formatInternationalNumber,
   formatPairingCodeDisplay,
+  maskInternationalNumber,
   normalizeWhatsAppNumber,
   splitCountryCode
 };

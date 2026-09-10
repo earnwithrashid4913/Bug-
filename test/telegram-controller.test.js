@@ -892,21 +892,197 @@ test('a premium user at the unique-number cap is refused before any socket opens
   assert.match(replies.at(-1).text, /3\/3 numbers/);
 });
 
-test('public chats never reveal a phone number or session detail', async () => {
+test('pairing works from groups and supergroups, with the code delivered privately', async () => {
   const { calls, fetchImpl } = flowApi();
-  const { controller } = flowController({ calls, fetchImpl });
+  const store = memoryUserStore({ verified: new Set(['20']) });
+  const { controller } = flowController({ calls, fetchImpl, store });
   controller.running = true;
-  // A public group user tries to pair; the bot refuses with a privacy notice
-  // and NEVER sends the PREPARING box with the number.
+
+  // A supergroup user pairs: the command is ACCEPTED (no privacy rejection),
+  // the group never sees the code or the full number, and the code is
+  // delivered to the user's own private chat (chat id == user id).
   await controller.handleUpdate({ message: { chat: { id: -1001, type: 'supergroup' }, from: { id: 10 }, text: '/pair 92355817646' } });
-  const texts = calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload.text);
-  assert.equal(texts.length, 1);
-  assert.match(texts[0], /this bot only works in a private chat/i);
-  assert.doesNotMatch(texts[0], /92355817646/, 'the phone number is never broadcast to a public chat');
-  // Private chats still pair normally.
-  await controller.handleUpdate({ message: { chat: { id: 1, type: 'private' }, from: { id: 10 }, text: '/pair 92355817646' } });
-  const pairSends = calls.filter((call) => call.method === 'sendMessage').map((call) => call.payload.text);
-  assert.ok(pairSends.some((text) => /Preparing WhatsApp pairing/.test(text)), 'the private chat still pairs');
+
+  const inChat = (id) => calls.filter((call) => (call.method === 'sendMessage' || call.method === 'editMessageText')
+    && Number(call.payload.chat_id) === id).map((call) => call.payload.text || '');
+  const groupTexts = inChat(-1001);
+  const privateTexts = inChat(10);
+
+  assert.ok(groupTexts.some((text) => /Preparing WhatsApp pairing|Pairing Code Sent/.test(text)), 'the group pairing flow runs');
+  assert.ok(!groupTexts.some((text) => /only works in a private chat/i.test(text)), 'no private-chat-only rejection');
+  assert.ok(!groupTexts.some((text) => /92355817646/.test(text)), 'the full phone number is never broadcast to the group');
+  assert.ok(groupTexts.some((text) => /••••• 646/.test(text)), 'the group only ever sees the masked number');
+  assert.ok(!groupTexts.some((text) => /CODE: CODE-1/.test(text)), 'the pairing code is never shown in the group');
+  // No copy button in the public message: copy_text would carry the code
+  // into the public message payload.
+  for (const call of calls.filter((call) => Number(call.payload.chat_id) === -1001)) {
+    for (const button of (call.payload.reply_markup?.inline_keyboard || []).flat()) {
+      assert.equal(button.copy_text?.text, undefined, 'no copy_text in the public chat');
+    }
+  }
+  assert.ok(privateTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && /🔐 CODE: CODE-1/.test(text)), 'the code is delivered to the private chat');
+  assert.ok(privateTexts.some((text) => /📱 Number: \+92355817646/.test(text)), 'the private delivery names the full number');
+
+  // The same flow from a regular group behaves identically.
+  const before = calls.length;
+  await controller.handleUpdate({ message: { chat: { id: -500, type: 'group' }, from: { id: 20 }, text: '/pair 12025550123' } });
+  const groupTwoTexts = calls.slice(before).filter((call) => Number(call.payload.chat_id) === -500).map((call) => call.payload.text || '');
+  assert.ok(groupTwoTexts.some((text) => /Preparing WhatsApp pairing|Pairing Code Sent/.test(text)), 'group pairing runs too');
+  assert.ok(!groupTwoTexts.some((text) => /12025550123/.test(text)), 'no full number in the group');
+  assert.ok(!groupTwoTexts.some((text) => /only works in a private chat/i.test(text)), 'no private-chat-only rejection in groups either');
+
+  // Private chats still pair exactly as before: code edited into the flow message.
+  // (The 20s sensitive-operation cooldown of the first flow is cleared so this
+  // back-to-back request is evaluated normally.)
+  controller.sensitiveRequests.clear();
+  controller.sensitiveLocks.clear();
+  const beforePrivate = calls.length;
+  await controller.handleUpdate({ message: { chat: { id: 1, type: 'private' }, from: { id: 10 }, text: '/pair 923001234567' } });
+  const privateFlow = calls.slice(beforePrivate).filter((call) => Number(call.payload.chat_id) === 1);
+  const sends = privateFlow.filter((call) => call.method === 'sendMessage').length;
+  const codeEdit = privateFlow.find((call) => call.method === 'editMessageText' && /🔐 CODE: CODE-3/.test(call.payload.text || ''));
+  assert.equal(sends, 1, 'private flow still sends exactly one message');
+  assert.ok(codeEdit, 'the code still arrives as an edit of that message');
+});
+
+test('session and status views render masked numbers in public chats and full numbers privately', async () => {
+  const { calls, fetchImpl } = flowApi();
+  const { controller } = flowController({
+    calls, fetchImpl,
+    pairing: flowPairing({
+      listSessions: async () => [
+        { number: '92355817646', numberDisplay: '+92 355 817646', status: 'CONNECTED', connected: true },
+        { number: '12025550123', numberDisplay: '+1 202 555 0123', status: 'WAITING_FOR_LINK', connected: false }
+      ],
+      statusOf: async (_ownerId, number) => ({ number, numberDisplay: '+92 355 817646', status: 'RECONNECTING', connected: false, registered: true, reconnects: 1, ownerId: '10' })
+    })
+  });
+  controller.running = true;
+
+  const lastEditIn = (id) => calls.filter((call) => call.method === 'editMessageText' && Number(call.payload.chat_id) === id).at(-1);
+
+  // Group sessions view: masked in the box AND in the button labels.
+  await controller.handleUpdate({ callback_query: { id: 'cb1', from: { id: 10 }, data: 'nav:sessions', message: { chat: { id: -1001, type: 'group' }, message_id: 55 } } });
+  const groupSessions = lastEditIn(-1001);
+  assert.match(groupSessions.payload.text, /••••• 646/);
+  assert.match(groupSessions.payload.text, /••••• 123/);
+  assert.doesNotMatch(groupSessions.payload.text, /355 817646|555 0123/, 'no full number in the group box');
+  for (const button of groupSessions.payload.reply_markup.inline_keyboard.flat()) {
+    assert.doesNotMatch(button.text || '', /355 817646|555 0123/, 'no full number in group button labels');
+  }
+
+  // Private sessions view: full numbers.
+  await controller.handleUpdate({ callback_query: { id: 'cb2', from: { id: 10 }, data: 'nav:sessions', message: { chat: { id: 1, type: 'private' }, message_id: 56 } } });
+  const privateSessions = lastEditIn(1);
+  assert.match(privateSessions.payload.text, /\+92 355 817646/);
+  assert.match(privateSessions.payload.text, /\+1 202 555 0123/);
+
+  // /status <number> in a group: masked.
+  await controller.handleUpdate({ message: { chat: { id: -1001, type: 'group' }, from: { id: 10 }, text: '/status 92355817646' } });
+  const groupStatus = calls.filter((call) => call.method === 'sendMessage' && Number(call.payload.chat_id) === -1001).at(-1);
+  assert.match(groupStatus.payload.text, /SESSION STATUS/);
+  assert.match(groupStatus.payload.text, /••••• 646/);
+  assert.doesNotMatch(groupStatus.payload.text, /355 817646/, 'no full number in the group status box');
+});
+
+test('a repeated /pair for the same number never opens a second flow or code message', async () => {
+  const { calls, fetchImpl } = flowApi();
+  const requests = [];
+  const { controller } = flowController({
+    calls, fetchImpl,
+    pairing: flowPairing({
+      requestPairing: async (ownerId, number, options) => {
+        requests.push({ ownerId, number, options });
+        return { code: `CODE${requests.length}`, displayCode: `CODE-${requests.length}`, brand: 'WhatsApp-generated', number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 };
+      }
+    })
+  });
+  controller.running = true;
+
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 92355817646' } });
+  // Let the 20s sensitive-operation cooldown lapse so the second request is
+  // evaluated on the flow-level dedupe, not on the rate limit.
+  controller.sensitiveRequests.clear();
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 92355817646' } });
+
+  assert.equal(requests.length, 1, 'the pairing manager was asked exactly once');
+  assert.equal(controller.pairingFlows.size, 1, 'only one flow exists');
+  const codeMessages = calls.filter((call) => /🔐 CODE:/.test(call.payload.text || ''));
+  assert.equal(codeMessages.length, 1, 'exactly one code message exists for the number');
+  const inProgress = calls.filter((call) => call.method === 'sendMessage').at(-1);
+  assert.match(inProgress.payload.text, /already in progress/, 'the repeat is acknowledged without a second flow');
+});
+
+test('a spinner frame can never overwrite the delivered code', async () => {
+  // Reproduces the old race: a loading frame that is still in flight when the
+  // code arrives must be dropped (or must land BEFORE the code), never after.
+  // Long timers are fast-forwarded so the spinner tick fires immediately and
+  // its edit overlaps the code delivery.
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => realSetTimeout(fn, Number(ms) >= 100 ? 1 : ms, ...args);
+  try {
+    const { controller } = flowController({ calls: [], fetchImpl: flowApi().fetchImpl });
+    const flow = {
+      chatId: 1, senderKey: '10', number: '92355817646',
+      numberDisplay: '+92 355 817646', publicDisplay: '+92 355 817646',
+      public: false, state: 'PREPARING', token: 'tok',
+      messageId: 77, spinnerTimer: undefined, spinnerFrame: 0, spinnerGeneration: 0,
+      editChain: undefined, code: undefined, displayCode: undefined, expiresAt: undefined,
+      stopped: false, actor: { id: 10 }
+    };
+    controller.pairingFlows.set('10', flow);
+    const edits = [];
+    controller.editMessage = async (chatId, messageId, text) => {
+      edits.push(text);
+      await new Promise((resolve) => setTimeout(resolve, 5)); // in-flight window
+      return { message_id: messageId };
+    };
+
+    // Start the spinner, let the first frame go in flight, then deliver the
+    // code while that frame is still being applied.
+    controller.startSpinner(flow);
+    await new Promise((resolve) => setTimeout(resolve, 3)); // first tick now in flight
+    controller.stopSpinner(flow);
+    flow.state = 'WAITING';
+    await controller.queueFlowEdit(flow, () => controller.editMessage(flow.chatId, flow.messageId, 'CODE-BOX'));
+    // Let every queued edit settle, then verify nothing further ever lands.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.ok(edits.some((text) => /Preparing WhatsApp pairing/.test(text)), 'a loading frame was actually in flight');
+    assert.equal(edits.at(-1), 'CODE-BOX', 'the code box is the final edit of the message');
+    assert.ok(!edits.slice(edits.lastIndexOf('CODE-BOX') + 1).some((text) => /Preparing WhatsApp pairing/.test(text)),
+      'no loading frame landed after the code');
+    assert.equal(flow.spinnerTimer, undefined, 'the spinner loop is fully stopped');
+    assert.equal(flow.stopped, false, 'the flow itself was not marked stopped');
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+});
+
+test('the Generate New Code button works immediately after a code is issued', async () => {
+  const { calls, fetchImpl } = flowApi();
+  const requests = [];
+  const { controller } = flowController({
+    calls, fetchImpl,
+    pairing: flowPairing({
+      requestPairing: async (ownerId, number, options) => {
+        requests.push({ number, regenerate: options?.regenerate === true });
+        return { code: `CODE${requests.length}`, displayCode: `CODE-${requests.length}`, brand: 'WhatsApp-generated', number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 };
+      }
+    })
+  });
+  controller.running = true;
+  await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 92355817646' } });
+  const codeEdit = calls.filter((call) => call.method === 'editMessageText').find((call) => /🔐 CODE: CODE-1/.test(call.payload.text || ''));
+  const token = codeEdit.payload.reply_markup.inline_keyboard[1][0].callback_data.split(':')[2];
+  const messageId = codeEdit.payload.message_id;
+
+  // Pressed immediately (well inside any manager cooldown window).
+  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: `pair:regen:${token}`, message: { chat: { id: 1 }, message_id: messageId } } });
+  assert.equal(requests.length, 2, 'a regeneration request reached the pairing layer');
+  assert.equal(requests[1].regenerate, true, 'it is marked as a regeneration, not a fresh flow');
+  const regenerated = calls.filter((call) => call.method === 'editMessageText').find((call) => /🔐 CODE: CODE-2/.test(call.payload.text || ''));
+  assert.ok(regenerated, 'the new code is shown');
 });
 
 // ---------------------------------------------------------------------------

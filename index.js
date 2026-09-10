@@ -228,6 +228,12 @@ function startTelegramController() {
     // owner; temporary disconnects are handled by the reconnect logic.
     await telegramController?.notifySessionDisconnected(ownerId, session, classification);
   };
+  telegramPairingManager.onCodeExpired = async (ownerId, session) => {
+    // The code's TTL passed without a link (socket + unregistered credentials
+    // already cleaned up): keep the pairing message honest instead of leaving
+    // a stale "code ready" box.
+    await telegramController?.notifyCodeExpired(ownerId, session);
+  };
   void telegramController.start()
     .then(async () => {
       console.info('[telegram] Controller started successfully.');
@@ -401,6 +407,20 @@ async function startBot() {
     // version; falling back to Baileys' bundled default keeps this safe offline.
     const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
     if (!version) console.warn('[connection] Could not fetch the latest WhatsApp Web version; using the bundled default.');
+
+    // A reconnect creates a fresh socket. Close a stale previous socket that
+    // is somehow still open so it can never hold a handle, fire events into
+    // the previous pairing state, or race the new socket. (Normally the old
+    // socket is already dead — that is what triggered the reconnect — so this
+    // is a no-op; its events are additionally filtered by the identity guard
+    // in handleConnectionUpdate.)
+    if (activeSocket?.ws?.isOpen) {
+      try {
+        activeSocket.ws.close();
+      } catch {
+        /* already gone */
+      }
+    }
 
     const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
     const logger = pino({ level: config.logLevel });
