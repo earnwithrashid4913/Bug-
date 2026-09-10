@@ -153,20 +153,36 @@ function pairingError(message, code, status = 400) {
   return Object.assign(new Error(message), { code, status });
 }
 
-async function waitForPairingReady(ready, timeoutMs) {
+async function waitForPairingReady(ready, socket, timeoutMs) {
   let timeout;
+  let poll;
+  const transportReady = new Promise((resolve, reject) => {
+    // Baileys 7 does not guarantee a `qr` connection.update for a phone-number
+    // pairing request. `qr` belongs to the QR-registration flow; native
+    // requestPairingCode() only needs the underlying WebSocket transport to be
+    // open. Keep accepting the QR event for older/fake-compatible adapters,
+    // but also resolve from the real socket state so production never waits
+    // forever for an event that will not be emitted.
+    const started = Date.now();
+    const check = () => {
+      if (socket?.ws?.isOpen) {
+        resolve();
+        return;
+      }
+      if (Date.now() - started >= timeoutMs) {
+        reject(pairingError('WhatsApp did not become ready for pairing in time.', 'PAIRING_TIMEOUT', 504));
+        return;
+      }
+      poll = setTimeout(check, 50);
+      poll.unref?.();
+    };
+    check();
+  });
   try {
-    await Promise.race([
-      ready,
-      new Promise((_, reject) => {
-        timeout = setTimeout(
-          () => reject(pairingError('WhatsApp did not become ready for pairing in time.', 'PAIRING_TIMEOUT', 504)),
-          timeoutMs
-        );
-      })
-    ]);
+    await Promise.race([ready, transportReady]);
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (poll) clearTimeout(poll);
   }
 }
 
@@ -832,7 +848,7 @@ class TelegramPairingManager {
         // hook was running; never regress that status.
         if (session.status === STATUS.INITIALIZING) session.setStatus(STATUS.CONNECTING);
 
-        await waitForPairingReady(session.ready, this.limits.pairingReadyTimeoutMs);
+        await waitForPairingReady(session.ready, session.socket, this.limits.pairingReadyTimeoutMs);
 
         if (session.stopped || !session.socket) {
           throw pairingError('The WhatsApp pairing socket closed before a pairing code could be generated.', 'CONNECTION_CLOSED', 502);
