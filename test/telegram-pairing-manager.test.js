@@ -546,7 +546,9 @@ test('restore drops stale unpaired credential directories', async () => {
 test('disconnect classifications map Baileys reasons to safe types', () => {
   const cases = [
     [DisconnectReason.loggedOut, 'LOGGED_OUT'],
-    [DisconnectReason.badSession, 'BAD_AUTH'],
+    // 500 is Baileys' catch-all for unclassifiable errors, so it is a bounded
+    // reconnect and never a credential deletion. See the classification table.
+    [DisconnectReason.badSession, 'SESSION_ERROR'],
     [DisconnectReason.connectionReplaced, 'REPLACED'],
     [DisconnectReason.timedOut, 'TIMEOUT'],
     [DisconnectReason.connectionClosed, 'CONNECTION_LOST'],

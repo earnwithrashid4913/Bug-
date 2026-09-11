@@ -21,7 +21,7 @@ const { handleGroupParticipantsUpdate } = require('./system/group-events');
 const handleMessage = require('./system/handler');
 const { MemoryCache } = require('./system/lib/cache');
 const { formatPairingCodeDisplay: formatPairingCode } = require('./system/lib/pairing-number');
-const { prepareSession } = require('./system/session');
+const { hasSession, prepareSession } = require('./system/session');
 const { sendButtons } = require('./system/lib/ui');
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
@@ -38,10 +38,45 @@ const { TelegramPairingManager } = require('./system/lib/telegram-pairing-manage
 const CHILD_FLAG = '--child';
 const isChildProcess = process.argv.includes(CHILD_FLAG);
 
-// How many worker exits inside one minute are tolerated before the supervisor
-// gives up instead of looping forever.
+// ---------------------------------------------------------------------------
+// Supervisor restart policy.
+//
+// On Pterodactyl (and Heroku/Render) the supervisor *is* the container process,
+// so `process.exit()` here is exactly what the panel reports as the server going
+// OFFLINE. A worker that dies repeatedly therefore no longer takes the whole
+// deployment down with it: after a burst of fast exits the supervisor cools off
+// and keeps trying, and only gives up after a genuinely sustained failure.
+// ---------------------------------------------------------------------------
 const MAX_WORKER_RESTARTS_PER_MINUTE = 5;
+// First pause taken after a burst of fast worker exits, instead of exiting.
+// It doubles on every consecutive burst (60s, 120s, 240s, 300s cap), so a
+// broken worker cannot burn CPU while a healthy one is never delayed.
+const WORKER_COOLDOWN_MS = 60_000;
+const WORKER_COOLDOWN_MAX_MS = 5 * 60_000;
+// Absolute ceiling: only this many exits inside this window ends the supervisor.
+const MAX_WORKER_RESTARTS_PER_WINDOW = 20;
+const WORKER_GIVEUP_WINDOW_MS = 10 * 60_000;
+// A worker that stayed up this long proves the deployment is healthy, so the
+// burst/cool-off accounting starts fresh.
+const HEALTHY_WORKER_MS = 60_000;
 let workerExits = [];
+let workerCoolingDown = false;
+let workerCoolOffCount = 0;
+let workerStartedAt = 0;
+
+// The worker must never be allowed to run out of event-loop handles while it is
+// supposed to be running. A dropped close event, a terminal primary disconnect
+// (logout / replaced), or a Telegram outage would otherwise let Node exit
+// cleanly with code 0 — the exact "silently goes OFFLINE" failure this bot had.
+// This is not synthetic activity and it does not mask a crash: an uncaught
+// exception still exits through the supervisor path below. It only stops a
+// *legitimate* "nothing left to wait for" exit while Telegram-paired sessions,
+// pending reconnects and the polling loop still have work to do. The watchdog
+// in startDiagnostics() makes any genuinely stuck state visible instead of
+// silent.
+const KEEP_ALIVE_INTERVAL_MS = 60 * 60_000;
+// Resource/health heartbeat for 24/7 diagnosis. Nothing secret is logged.
+const MEMORY_LOG_INTERVAL_MS = 10 * 60_000;
 
 // WhatsApp/socket noise that must never take the whole process down. The
 // connection layer filters these; each one is already handled by the
@@ -61,7 +96,8 @@ let activeSocket;
 let childProcess;
 let workerLaunchTimer;
 let reconnectTimer;
-let idleKeepAliveTimer;
+let keepAliveTimer;
+let memoryTimer;
 let reconnectAttempts = 0;
 let stopping = false;
 let resetting = false;
@@ -107,18 +143,81 @@ function decodeJid(jid) {
   return jid;
 }
 
+// ---------------------------------------------------------------------------
+// Diagnostics helpers.
+//
+// Every operational line carries one of the stable tags — [BOOT] [WHATSAPP]
+// [TELEGRAM] [RECONNECT] [DATABASE] [ERROR] [MEMORY] [SHUTDOWN] — so a 24/7 host
+// can be diagnosed from the panel console alone. The original human-readable
+// prefixes ([connection], [startup], [telegram], [session], [supervisor], ...)
+// are kept verbatim next to them, so anything already reading these logs keeps
+// working. Nothing secret is ever interpolated: no Telegram token, no pairing
+// code, no credential or session material — only status codes, counters and
+// timings.
+// ---------------------------------------------------------------------------
+
+function stamp() {
+  return new Date().toISOString();
+}
+
+function megabytes(value) {
+  return (Number(value || 0) / 1_048_576).toFixed(1);
+}
+
+// Whether the primary WhatsApp credentials are still usable. Read from the live
+// Baileys credential object only — never from disk, never logged in full.
+function authStillValid() {
+  const creds = activeSocket?.authState?.creds;
+  return creds ? Boolean(creds.registered) : Boolean(liveStatus.session === 'paired');
+}
+
+function ensureKeepAlive() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => { /* intentional no-op handle; see note above */ }, KEEP_ALIVE_INTERVAL_MS);
+}
+
+// Slow resource/health heartbeat. Runs in the worker only, is unref'd so it can
+// never by itself hold the loop open, and logs enough to spot a leak or a stuck
+// connection from the panel console after the fact.
+function startDiagnostics() {
+  if (memoryTimer) return;
+  memoryTimer = setInterval(() => {
+    const memory = process.memoryUsage();
+    console.info(
+      `[MEMORY] ${stamp()} rss=${megabytes(memory.rss)}MB heapUsed=${megabytes(memory.heapUsed)}MB`
+      + ` heapTotal=${megabytes(memory.heapTotal)}MB external=${megabytes(memory.external)}MB`
+      + ` handles=${process.getActiveResourcesInfo().length} uptime=${Math.floor(process.uptime())}s`
+      + ` state=${liveStatus.state} connected=${liveStatus.connected}`
+      + ` reconnectPending=${Boolean(reconnectTimer)} authValid=${authStillValid()}`
+      + ` pairedSockets=${telegramPairingManager ? telegramPairingManager.socketCount() : 0}`
+    );
+  }, MEMORY_LOG_INTERVAL_MS);
+  memoryTimer.unref();
+}
+
 function disconnectStatusCode(lastDisconnect) {
   const error = lastDisconnect?.error;
   if (!error) return undefined;
   return error?.output?.statusCode || new Boom(error).output.statusCode;
 }
 
+// Disconnect reasons that permanently end the primary session.
+//
+// `badSession` (500) is deliberately NOT in this list. Baileys uses 500 as its
+// catch-all fallback for every error it cannot classify:
+//   lib/Utils/generics.js  getCodeFromWSError()      -> `let statusCode = 500;`
+//   lib/Utils/generics.js  getErrorCodeFromStreamError() -> `|| DisconnectReason.badSession`
+// so most 500s are transient server-side hiccups, not invalid credentials.
+// Treating 500 as terminal was what stopped the bot reconnecting and let the
+// worker fall through to a clean exit. Credentials are never deleted here for
+// any reason — re-pairing stays a deliberate human action.
+const TERMINAL_DISCONNECT_REASONS = Object.freeze([
+  DisconnectReason.connectionReplaced,
+  DisconnectReason.loggedOut
+]);
+
 function shouldReconnect(reason) {
-  return ![
-    DisconnectReason.badSession,
-    DisconnectReason.connectionReplaced,
-    DisconnectReason.loggedOut
-  ].includes(reason);
+  return !TERMINAL_DISCONNECT_REASONS.includes(reason);
 }
 
 function scheduleReconnect() {
@@ -128,7 +227,7 @@ function scheduleReconnect() {
   const delay = Math.min(config.reconnectBaseDelayMs * 2 ** exponent, config.reconnectMaxDelayMs);
   reconnectAttempts += 1;
 
-  console.warn(`[connection] Reconnecting in ${Math.ceil(delay / 1000)}s (attempt ${reconnectAttempts}).`);
+  console.warn(`[RECONNECT] [connection] ${stamp()} reconnecting in ${Math.ceil(delay / 1000)}s (attempt ${reconnectAttempts}, backoff capped at ${Math.ceil(config.reconnectMaxDelayMs / 1000)}s).`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
     void startBot();
@@ -162,9 +261,17 @@ function renderQrCode(qr, pairingState) {
 // two groups of four characters separated by a dash. The formatter lives in
 // system/lib/pairing-number.js and is shared with the Telegram pairing flow.
 
+// Telegram controller startup retry: 5s, 10s, 20s … capped at 5 minutes,
+// unlimited attempts. The controller instance is reused, so no duplicate
+// polling loop can ever be created.
+const TELEGRAM_RETRY_BASE_DELAY_MS = 5_000;
+const TELEGRAM_RETRY_MAX_DELAY_MS = 5 * 60_000;
+let telegramStartAttempts = 0;
+let telegramRetryTimer;
+
 function startTelegramController() {
   if (!config.telegramEnabled || (!config.telegramBotToken && !config.telegramOwnerIds.length)) {
-    console.info('[telegram] Controller disabled: configure telegram.enabled, telegram.botToken, and telegram.ownerIds in config.js to enable it.');
+    console.info('[TELEGRAM] [telegram] Controller disabled: configure telegram.enabled, telegram.botToken, and telegram.ownerIds in config.js to enable it.');
     return;
   }
   if (!config.telegramBotToken) {
@@ -260,20 +367,40 @@ function startTelegramController() {
     // a stale "code ready" box.
     await telegramController?.notifyCodeExpired(ownerId, session);
   };
-  void telegramController.start()
-    .then(async () => {
-      console.info('[telegram] Controller started successfully.');
-      // Bring previously paired sessions back online after a restart. This
-      // never claims a WhatsApp connection: each session only reports CONNECTED
-      // when its own socket reaches connection open.
-      await telegramPairingManager.restore().catch((error) => {
-        console.error(`[telegram] Session restore failed: ${error.message}`);
-      });
-    })
-    .catch((error) => {
-      telegramController = undefined;
-      console.error(`[telegram] Controller failed to start: ${error.message}. Check telegram.botToken, telegram.ownerIds, and Telegram network access.`);
+  void startTelegramWithRetry();
+}
+
+// Telegram must survive a transient API/network failure at boot. The previous
+// one-shot `.catch()` assigned `telegramController = undefined` permanently, so
+// a single failed `getMe` left the entire pairing system dead for the lifetime
+// of the process. The SAME controller instance is retried: `start()` guards on
+// `this.running`, so a retry can never open a second polling loop.
+async function startTelegramWithRetry() {
+  if (stopping || !telegramController) return;
+  try {
+    await telegramController.start();
+    telegramStartAttempts = 0;
+    console.info(`[TELEGRAM] [telegram] ${stamp()} Controller started successfully.`);
+    // Bring previously paired sessions back online after a restart. This
+    // never claims a WhatsApp connection: each session only reports CONNECTED
+    // when its own socket reaches connection open.
+    await telegramPairingManager.restore().catch((error) => {
+      console.error(`[DATABASE] [telegram] Session restore failed: ${error.message}`);
     });
+  } catch (error) {
+    telegramStartAttempts += 1;
+    const exponent = Math.min(telegramStartAttempts - 1, 6);
+    const delay = Math.min(TELEGRAM_RETRY_BASE_DELAY_MS * 2 ** exponent, TELEGRAM_RETRY_MAX_DELAY_MS);
+    console.error(`[TELEGRAM] [telegram] ${stamp()} Controller failed to start (attempt ${telegramStartAttempts}): ${error.message}. Retrying in ${Math.ceil(delay / 1000)}s.`);
+    if (telegramStartAttempts === 1) {
+      console.error('[TELEGRAM] Check telegram.botToken, telegram.ownerIds, and Telegram network access. Pairing stays unavailable until the controller starts.');
+    }
+    if (stopping) return;
+    telegramRetryTimer = setTimeout(() => {
+      telegramRetryTimer = undefined;
+      void startTelegramWithRetry();
+    }, delay);
+  }
 }
 
 async function sendConnectionSuccess(socket) {
@@ -365,25 +492,43 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   pairingState.readyForPairing = false;
   const reason = disconnectStatusCode(update.lastDisconnect);
   const label = disconnectLabels[reason] || `Unknown disconnect reason: ${reason ?? 'not supplied'}.`;
+  const willReconnect = shouldReconnect(reason);
   setStatus(reason === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected', label, {
     pairingCode: null,
     pairingNumber: null,
     pairingRequestedAt: null,
     session: reason === DisconnectReason.loggedOut ? 'logged_out' : liveStatus.session
   });
-  console.warn(`[connection] ${label}`);
+  // One line per close carrying everything needed to diagnose a 24/7 outage
+  // after the fact: reason, status code, the reconnect decision, and whether
+  // the saved credentials are still usable. Never any credential material.
+  console.warn(
+    `[WHATSAPP] [connection] ${stamp()} ${label}`
+    + ` | reason=${reason ?? 'none'} code=${reason ?? 'n/a'}`
+    + ` reconnect=${willReconnect} authValid=${authStillValid()}`
+    + ` registered=${Boolean(pairingState.registered)}`
+  );
 
-  if (shouldReconnect(reason)) {
+  if (willReconnect) {
     scheduleReconnect();
     return;
   }
 
+  // Terminal reasons (loggedOut / connectionReplaced). Credentials are left on
+  // disk untouched, and the worker deliberately stays alive: one dead primary
+  // session must never take the Telegram-paired sessions down with it. Without
+  // the keep-alive handle this is exactly where Node used to run out of things
+  // to wait for and exit cleanly with code 0.
+  ensureKeepAlive();
+
   if (reason === DisconnectReason.loggedOut) {
-    console.error('[connection] This device was logged out. Pair again through Telegram, or set a fresh SESSION_ID, then restart the bot.');
+    console.error('[ERROR] [WHATSAPP] This device was logged out. Pair again through Telegram, or set a fresh SESSION_ID, then restart the bot.');
+    console.info('[WHATSAPP] The process stays online: Telegram pairing and any already-paired sessions keep working.');
     return;
   }
 
-  console.error('[connection] Automatic reconnection stopped to avoid a loop. Remove the invalid AUTH_DIR only if you need to pair again, then restart the bot.');
+  console.error('[ERROR] [WHATSAPP] Automatic reconnection of the PRIMARY session stopped to avoid a loop (the session was replaced by another WhatsApp connection).');
+  console.info('[WHATSAPP] The process stays online: Telegram pairing and any already-paired sessions keep working. Remove the invalid AUTH_DIR only if you need to pair again, then restart the bot.');
 }
 
 async function handleMessages(socket, upsert) {
@@ -422,15 +567,24 @@ async function startBot() {
   if (stopping) return;
 
   // Telegram owns new pairing sessions. Do not create an unauthenticated
-  // primary socket when there is no restored primary session: it cannot serve
-  // a pairing request and was the source of needless timeout/reconnect noise.
-  if (config.authMethod === 'pairing' && !['existing', 'created', 'overwritten'].includes(liveStatus.session)) {
+  // primary socket when there is no primary session on disk: it cannot serve a
+  // pairing request and was the source of needless timeout/reconnect noise.
+  //
+  // The decision is made from the credential file itself, NOT from
+  // liveStatus.session. That string is a live status mirror: it becomes 'paired'
+  // the moment the socket reaches connection open and 'logged_out' after a
+  // logout. Gating on it meant a session that had connected even once could
+  // never be recreated by the reconnect path — its first disconnect fell into
+  // this idle branch and the primary session stayed dead until a manual restart.
+  // Reading the disk is the only check that stays correct across reconnects,
+  // restarts and a session being added or removed while the bot is running.
+  if (config.authMethod === 'pairing' && !hasSession(config.authDir)) {
     setStatus('telegram_pairing', 'No primary session is restored. Use an authorized Telegram controller to pair a session.');
     // With no restored primary session and no Telegram token, Node otherwise
     // has no active handles and the supervisor would repeatedly restart the
     // healthy worker. Keep the process alive for later panel/env configuration.
-    if (!idleKeepAliveTimer) idleKeepAliveTimer = setInterval(() => {}, 60 * 60_000);
-    console.info('[startup] Primary WhatsApp socket is idle; Telegram Pairing owns new sessions.');
+    ensureKeepAlive();
+    console.info('[BOOT] [WHATSAPP] [startup] Primary WhatsApp socket is idle; Telegram Pairing owns new sessions.');
     return;
   }
 
@@ -475,10 +629,23 @@ async function startBot() {
       userDevicesCache: new MemoryCache({ stdTtlMs: 5 * 60_000, maxEntries: 500 })
     });
 
+    // ---------------------------------------------------------------------
+    // Listener attachment MUST happen synchronously right here.
+    //
+    // makeWASocket() starts the WebSocket handshake synchronously, and Baileys
+    // destroys the socket's emitter inside its own end() handler
+    // (lib/Socket/socket.js: `ev.removeAllListeners('connection.update')` +
+    // `ev.destroy()`, which in turn calls `ev.removeAllListeners()`). Any
+    // `await` between creating the socket and subscribing therefore opens a
+    // window in which a connection.update is emitted and permanently lost.
+    //
+    // That is exactly what used to take this bot OFFLINE: a 'close' landing in
+    // the window meant no reconnect was scheduled and no handle was left, so
+    // Node exited cleanly with code 0. Subscribing first makes the race
+    // impossible; everything after the subscriptions may await safely.
+    // ---------------------------------------------------------------------
     activeSocket = socket;
     socket.decodeJid = decodeJid;
-    // Restores the persisted public/self mode (data/mode.json).
-    socket.public = (await handleMessage.initializeMode(socket)) === 'public';
 
     const pairingState = {
       pending: false,
@@ -490,15 +657,8 @@ async function startBot() {
       lastQr: undefined
     };
 
-    setStatus(
-      pairingState.registered ? 'connecting' : 'pairing',
-      pairingState.registered
-        ? 'Restoring the saved WhatsApp session…'
-        : 'Telegram Pairing is ready for authorized controllers.'
-    );
-
     socket.ev.on('creds.update', () => {
-      void saveCreds().catch((error) => console.error('[auth] Failed to save credentials:', error));
+      void saveCreds().catch((error) => console.error('[DATABASE] [auth] Failed to save credentials:', error));
     });
     socket.ev.on('connection.update', (update) => {
       void handleConnectionUpdate(socket, update, pairingState);
@@ -508,14 +668,25 @@ async function startBot() {
     });
     socket.ev.on('group-participants.update', (update) => {
       void handleGroupParticipantsUpdate(socket, update).catch((error) => {
-        console.error('[group-events] Failed to process participant update:', error);
+        console.error('[ERROR] [group-events] Failed to process participant update:', error);
       });
     });
 
-    console.log(chalk.cyan(`[startup] ${config.botName} started. Auth directory: ${config.authDir}`));
+    setStatus(
+      pairingState.registered ? 'connecting' : 'pairing',
+      pairingState.registered
+        ? 'Restoring the saved WhatsApp session…'
+        : 'Telegram Pairing is ready for authorized controllers.'
+    );
+
+    // Restores the persisted public/self mode (data/mode.json).
+    socket.public = (await handleMessage.initializeMode(socket)) === 'public';
+
+    console.log(chalk.cyan(`[BOOT] [startup] ${config.botName} started. Auth directory: ${config.authDir}`));
   } catch (error) {
     activeSocket = undefined;
     setStatus('error', `WhatsApp failed to initialize: ${error.message}`);
+    console.error(`[ERROR] [WHATSAPP] [startup] ${stamp()} Failed to initialize WhatsApp: ${error.message}`);
     console.error('[startup] Failed to initialize WhatsApp:', error);
     scheduleReconnect();
   }
@@ -525,14 +696,16 @@ function shutdown(signal) {
   if (stopping) return;
   stopping = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  if (idleKeepAliveTimer) clearInterval(idleKeepAliveTimer);
+  if (keepAliveTimer) clearInterval(keepAliveTimer);
+  if (memoryTimer) clearInterval(memoryTimer);
+  if (telegramRetryTimer) clearTimeout(telegramRetryTimer);
   if (workerLaunchTimer) clearTimeout(workerLaunchTimer);
-  console.log(`[shutdown] Received ${signal}; closing the bot process.`);
+  console.log(`[SHUTDOWN] [shutdown] ${stamp()} Received ${signal}; closing the bot process.`);
 
   try {
     activeSocket?.ws?.close();
   } catch (error) {
-    console.error('[shutdown] Failed to close the WhatsApp socket cleanly:', error);
+    console.error('[SHUTDOWN] [shutdown] Failed to close the WhatsApp socket cleanly:', error);
   }
   telegramController?.stop();
   void telegramPairingManager?.shutdown();
@@ -552,6 +725,7 @@ function launchChild() {
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
   });
   childProcess = child;
+  workerStartedAt = Date.now();
 
   child.on('message', (message) => {
     if (message?.type !== 'reset') return;
@@ -570,20 +744,57 @@ function launchChild() {
       return;
     }
 
-    // Crash-loop guard: a worker that keeps dying immediately means the
-    // deployment itself is broken (bad configuration, missing credentials), so
-    // report it instead of burning CPU in a restart loop.
+    // ---------------------------------------------------------------------
+    // Crash-loop guard.
+    //
+    // This used to call shutdown() — and therefore process.exit() — after 5
+    // worker exits in a minute. On Pterodactyl/Heroku/Render the supervisor IS
+    // the container process, so that single exit is exactly what the panel
+    // reports as the server going OFFLINE, and nothing brings it back. A
+    // transient WhatsApp or network outage could therefore end the deployment
+    // permanently.
+    //
+    // Now a burst of fast exits triggers a cool-off pause instead (so a broken
+    // worker cannot burn CPU in a tight loop) and the supervisor keeps running.
+    // It only gives up after a genuinely sustained failure.
+    // ---------------------------------------------------------------------
     const now = Date.now();
-    workerExits = workerExits.filter((at) => now - at < 60_000);
+    // A worker that stayed up for a while proves the deployment is healthy, so
+    // the burst accounting starts fresh and a normal deployment can never
+    // accumulate its way to the ceiling below.
+    if (workerStartedAt && now - workerStartedAt >= HEALTHY_WORKER_MS) {
+      workerExits = [];
+      workerCoolOffCount = 0;
+    }
+    workerStartedAt = 0;
     workerExits.push(now);
+    workerExits = workerExits.filter((at) => now - at < WORKER_GIVEUP_WINDOW_MS);
+    const burst = workerExits.filter((at) => now - at < 60_000).length;
 
-    if (workerExits.length >= MAX_WORKER_RESTARTS_PER_MINUTE) {
-      console.error('[supervisor] The worker keeps exiting; stopping instead of looping. Check the errors above.');
+    if (workerExits.length >= MAX_WORKER_RESTARTS_PER_WINDOW) {
+      // Documented fatal termination. The worker has exited
+      // MAX_WORKER_RESTARTS_PER_WINDOW times inside WORKER_GIVEUP_WINDOW_MS,
+      // which means the deployment itself cannot start (bad configuration,
+      // missing credentials, unreadable auth directory). Continuing would burn
+      // CPU forever without progress, so a human has to intervene.
+      console.error(`[ERROR] [supervisor] ${stamp()} The worker exited ${workerExits.length} times in ${Math.round(WORKER_GIVEUP_WINDOW_MS / 60_000)} minutes; the deployment cannot start. Check the errors above.`);
       process.exitCode = code ?? 1;
       shutdown('crash-loop');
       return;
     }
 
+    if (burst >= MAX_WORKER_RESTARTS_PER_MINUTE) {
+      const cooldownMs = Math.min(WORKER_COOLDOWN_MS * 2 ** Math.min(workerCoolOffCount, 4), WORKER_COOLDOWN_MAX_MS);
+      workerCoolOffCount += 1;
+      if (!workerCoolingDown) {
+        workerCoolingDown = true;
+        console.error(`[ERROR] [supervisor] ${stamp()} The worker exited ${burst} times in the last minute (code ${code}, signal ${signal}). Pausing ${Math.round(cooldownMs / 1000)}s before the next start instead of stopping — the container stays online.`);
+      }
+      scheduleWorkerLaunch(cooldownMs);
+      return;
+    }
+
+    workerCoolingDown = false;
     console.warn(`[supervisor] Worker exited (code ${code}, signal ${signal}); restarting.`);
     scheduleWorkerLaunch();
   });
@@ -597,13 +808,15 @@ function launchChild() {
 // callback. Besides giving stdio a chance to flush the exit diagnostic, this
 // prevents a rapidly failing worker from re-entering the supervisor's child
 // lifecycle while Node is still delivering the prior exit event.
-function scheduleWorkerLaunch() {
+function scheduleWorkerLaunch(delayMs = 25) {
   if (stopping || workerLaunchTimer) return;
 
   workerLaunchTimer = setTimeout(() => {
     workerLaunchTimer = undefined;
+    // Each cool-off cycle reports itself once, then the counter starts fresh.
+    workerCoolingDown = false;
     if (!stopping) launchChild();
-  }, 25);
+  }, delayMs);
 }
 
 process.once('SIGINT', () => {
@@ -625,17 +838,20 @@ process.once('SIGTERM', () => {
 });
 
 process.on('unhandledRejection', (error) => {
-  console.error('[process] Unhandled promise rejection:', error);
+  // Deliberately non-fatal: a single rejected promise (a failed send, a stalled
+  // API call) must not end a 24/7 process. It is logged with enough context to
+  // find the cause.
+  console.error(`[ERROR] [process] ${stamp()} Unhandled promise rejection:`, error);
 });
 
 process.on('uncaughtException', (error) => {
   const text = String(error?.message || error);
   if (IGNORED_PROCESS_ERRORS.some((needle) => text.includes(needle))) {
-    console.warn(`[process] Ignored known WhatsApp socket noise: ${text}`);
+    console.warn(`[ERROR] [process] ${stamp()} Ignored known WhatsApp socket noise: ${text}`);
     return;
   }
 
-  console.error('[process] Uncaught exception:', error);
+  console.error(`[ERROR] [process] ${stamp()} Uncaught exception:`, error);
   process.exitCode = 1;
   shutdown('uncaughtException');
 });
@@ -644,8 +860,13 @@ if (!isChildProcess && !config.dryRun) {
   launchChild();
 } else if (config.dryRun) {
   bootstrapSession();
-  console.log(`[startup] Dry run successful. Configuration for ${config.botName} is valid; no WhatsApp connection was opened.`);
+  console.log(`[BOOT] [startup] Dry run successful. Configuration for ${config.botName} is valid; no WhatsApp connection was opened.`);
 } else {
+  console.log(`[BOOT] [startup] ${stamp()} ${config.botName} worker starting (pid ${process.pid}, node ${process.version}).`);
+  // Keeps the worker from ever running out of event-loop handles while it is
+  // supposed to be running, and emits the periodic [MEMORY]/health heartbeat.
+  ensureKeepAlive();
+  startDiagnostics();
   bootstrapSession();
   startTelegramController();
   void startBot();
@@ -653,11 +874,21 @@ if (!isChildProcess && !config.dryRun) {
 
 module.exports = {
   IGNORED_PROCESS_ERRORS,
+  MAX_WORKER_RESTARTS_PER_MINUTE,
+  MAX_WORKER_RESTARTS_PER_WINDOW,
+  MEMORY_LOG_INTERVAL_MS,
+  TELEGRAM_RETRY_BASE_DELAY_MS,
+  TELEGRAM_RETRY_MAX_DELAY_MS,
+  TERMINAL_DISCONNECT_REASONS,
+  WORKER_COOLDOWN_MS,
+  WORKER_GIVEUP_WINDOW_MS,
   decodeJid,
   disconnectStatusCode,
   formatPairingCode,
   liveStatus,
   shouldReconnect,
-  // Exposed for integration tests; the worker calls this during startup.
-  startTelegramController
+  // Exposed for integration tests; the worker calls these during startup.
+  startBot,
+  startTelegramController,
+  startTelegramWithRetry
 };

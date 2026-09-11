@@ -26,6 +26,12 @@
 const crypto = require('node:crypto');
 const TELEGRAM_API = 'https://api.telegram.org';
 const POLL_TIMEOUT_SECONDS = 25;
+// Every Telegram API call is bounded. Without an explicit signal a half-open
+// connection stalls for undici's ~300s default, blocking the polling loop (and
+// every button press behind it) for minutes. getUpdates needs headroom above
+// its own long-poll window so it is never aborted mid-poll.
+const API_TIMEOUT_MS = 15_000;
+const POLL_REQUEST_TIMEOUT_MS = (POLL_TIMEOUT_SECONDS * 1_000) + 10_000;
 const SENSITIVE_COOLDOWN_MS = 20_000;
 const SENSITIVE_LOCK_TTL_MS = 2 * 60_000;
 const PENDING_NUMBER_TTL_MS = 5 * 60_000;
@@ -2029,9 +2035,25 @@ class TelegramController {
   // ------------------------------ Telegram API ----------------------------
 
   async api(method, payload) {
-    const response = await this.fetch(`${TELEGRAM_API}/bot${this.token}/${method}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
-    });
+    const timeoutMs = method === 'getUpdates' ? POLL_REQUEST_TIMEOUT_MS : API_TIMEOUT_MS;
+    let response;
+    try {
+      response = await this.fetch(`${TELEGRAM_API}/bot${this.token}/${method}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch (error) {
+      // A timed-out or aborted request is a transient network condition, not a
+      // Telegram rejection. Normalise it to the same shape as an HTTP 408 so
+      // every existing retry/backoff path classifies it as transient instead of
+      // surfacing an opaque DOMException to the user.
+      if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+        const timeout = new Error(`Telegram API request timed out after ${Math.round(timeoutMs / 1000)}s (${method}).`);
+        timeout.httpStatus = 408;
+        throw timeout;
+      }
+      throw error;
+    }
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) {
       const error = new Error(result.description || `Telegram API request failed (${response.status}).`);
@@ -3789,6 +3811,9 @@ module.exports = {
   PREMIUM_PAIRING_LIMIT,
   SENSITIVE_COOLDOWN_MS,
   SENSITIVE_LOCK_TTL_MS,
+  API_TIMEOUT_MS,
+  POLL_REQUEST_TIMEOUT_MS,
+  POLL_TIMEOUT_SECONDS,
   SPINNER_FRAMES,
   SESSION_STATE_BADGES,
   TIER_LABELS,

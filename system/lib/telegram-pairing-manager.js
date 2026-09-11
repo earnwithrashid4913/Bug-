@@ -114,9 +114,17 @@ const DISCONNECT_CLASSIFICATIONS = new Map([
     type: 'BAD_AUTH', terminal: true, deleteCreds: true,
     userMessage: 'WhatsApp refused this session. Pair again with /pair.'
   }],
+  // 500 is NOT treated as bad auth. Baileys uses it as its catch-all fallback
+  // for every error it cannot classify:
+  //   lib/Utils/generics.js getCodeFromWSError()          -> `let statusCode = 500;`
+  //   lib/Utils/generics.js getErrorCodeFromStreamError() -> `|| DisconnectReason.badSession`
+  // so most 500s are transient server-side hiccups. Classifying them as
+  // terminal + deleteCreds was destroying perfectly valid paired sessions on a
+  // temporary error. They now go through the bounded reconnect path
+  // (MAX_RECONNECT_ATTEMPTS) and credentials are never deleted for this reason.
   [DisconnectReason.badSession, {
-    type: 'BAD_AUTH', terminal: true, deleteCreds: true,
-    userMessage: 'The saved WhatsApp session became invalid. Pair again with /pair.'
+    type: 'SESSION_ERROR', reconnect: true,
+    userMessage: 'WhatsApp reported a session error; the session is retrying.'
   }],
   [DisconnectReason.multideviceMismatch, {
     type: 'BAD_AUTH', terminal: true, deleteCreds: true,
