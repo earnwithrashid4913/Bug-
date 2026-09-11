@@ -20,11 +20,19 @@ const {
   shouldReconnect
 } = require('../index');
 
-test('a logged-out or invalid session never triggers automatic reconnection', () => {
+test('a logged-out or replaced session never triggers automatic reconnection', () => {
   assert.equal(shouldReconnect(DisconnectReason.loggedOut), false);
-  assert.equal(shouldReconnect(DisconnectReason.badSession), false);
   assert.equal(shouldReconnect(DisconnectReason.connectionReplaced), false);
   assert.equal(DisconnectReason.loggedOut, 401, 'WhatsApp reports logout as HTTP 401');
+});
+
+test('a 500 does reconnect: Baileys uses it as its catch-all for unclassifiable errors', () => {
+  // lib/Utils/generics.js getCodeFromWSError() defaults to 500 and
+  // getErrorCodeFromStreamError() falls back to DisconnectReason.badSession, so
+  // most 500s are transient. Treating 500 as terminal stopped the reconnect and
+  // let the worker fall through to a clean exit(0).
+  assert.equal(shouldReconnect(DisconnectReason.badSession), true);
+  assert.equal(DisconnectReason.badSession, 500);
 });
 
 test('transient disconnects do reconnect', () => {
