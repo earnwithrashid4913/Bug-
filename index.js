@@ -837,6 +837,28 @@ process.once('SIGTERM', () => {
   shutdown('SIGTERM');
 });
 
+// SIGHUP (terminal hangup / container signal) shuts down gracefully exactly
+// like SIGTERM. Without this handler the default action kills the process
+// immediately, skipping socket cleanup and credential saves.
+process.once('SIGHUP', () => {
+  if (!isChildProcess && childProcess) {
+    stopping = true;
+    childProcess.kill('SIGHUP');
+    return;
+  }
+  shutdown('SIGHUP');
+});
+
+// If the supervisor dies without warning (SIGKILL, OOM kill, panel kill),
+// the IPC channel breaks. Without this handler the worker would keep running
+// as an orphan — and any external supervisor (panel, PM2, restart loop)
+// would then start a SECOND copy of the bot, duplicating Telegram polling
+// and WhatsApp connections. 'disconnect' fires only when the parent side
+// goes away; the supervisor never disconnects a healthy worker deliberately.
+if (isChildProcess && typeof process.send === 'function') {
+  process.on('disconnect', () => shutdown('supervisor-disconnect'));
+}
+
 process.on('unhandledRejection', (error) => {
   // Deliberately non-fatal: a single rejected promise (a failed send, a stalled
   // API call) must not end a 24/7 process. It is logged with enough context to

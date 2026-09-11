@@ -205,6 +205,56 @@ test('the supervisor survives a worker crash loop instead of going OFFLINE', asy
   assert.match(log, /the container stays online/);
 });
 
+test('a SIGKILLed supervisor does not leave an orphaned worker behind', async () => {
+  // The supervisor can die without warning (SIGKILL, OOM, panel kill) and a
+  // dead parent cannot clean up its children — so the worker watches the IPC
+  // channel and shuts itself down on 'disconnect'. Without that, any external
+  // supervisor (panel, PM2, restart loop) would start a second copy of the
+  // bot next to the orphan, duplicating Telegram polling and WhatsApp
+  // connections.
+  const supervisor = spawn(process.execPath, ['index.js'], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  const logs = [];
+  supervisor.stdout.on('data', (chunk) => logs.push(chunk.toString()));
+  supervisor.stderr.on('data', (chunk) => logs.push(chunk.toString()));
+  supervisor.on('error', () => {});
+
+  const workerPid = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), 15_000);
+    const poll = setInterval(() => {
+      const match = logs.join('').match(/worker starting \(pid (\d+)/);
+      if (match) {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve(Number(match[1]));
+      }
+    }, 100);
+  });
+  assert.ok(workerPid, `the worker never booted; log:\n${logs.join('')}`);
+
+  supervisor.kill('SIGKILL');
+  await new Promise((resolve) => supervisor.once('exit', resolve));
+
+  const workerGone = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 15_000);
+    const poll = setInterval(() => {
+      try {
+        process.kill(workerPid, 0);
+      } catch {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve(true);
+      }
+    }, 100);
+  });
+
+  const log = logs.join('');
+  assert.equal(workerGone, true, `worker ${workerPid} survived its supervisor (orphan); log:\n${log}`);
+  assert.match(log, /supervisor-disconnect/, 'the worker must log the supervisor-disconnect shutdown');
+});
+
 test('a graceful stop still terminates the whole tree', async () => {
   const supervisor = spawn(process.execPath, ['index.js'], {
     cwd: ROOT,

@@ -519,6 +519,7 @@ class TelegramPairingManager {
         this.baileys.fetchLatestBaileysVersion(),
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error('version fetch timed out')), this.limits.versionFetchTimeoutMs);
+          timer.unref?.();
         })
       ]);
       const version = Array.isArray(result?.version) && result.version.length === 3 ? result.version : undefined;
@@ -942,7 +943,6 @@ class TelegramPairingManager {
         if (session.status === STATUS.INITIALIZING) session.setStatus(STATUS.CONNECTING);
 
         await waitForPairingReady(session.ready, session.socket, this.limits.pairingReadyTimeoutMs);
-        await waitForPairingReady(session.ready, this.limits.pairingReadyTimeoutMs);
         report('GENERATING_CODE');
 
         if (session.stopped || !session.socket) {

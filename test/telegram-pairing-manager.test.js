@@ -174,6 +174,53 @@ test('the pairing code is requested only after the real handshake (first QR), ne
   await manager.shutdown();
 });
 
+test('pairing succeeds when Baileys never emits a QR event (transport-ready path)', async () => {
+  // Baileys 7 does not guarantee a `qr` connection.update for a phone-number
+  // pairing request — the code only needs the WebSocket transport to be open.
+  // A duplicated readiness gate used to wait on the QR promise a second time
+  // with the timeout argument missing, which hung the pairing forever on
+  // exactly those sockets (the 50ms poll compared against `undefined` and
+  // could never time out). The transport going open must be sufficient.
+  const sockets = [];
+  const pairingCalls = [];
+  const fake = {
+    sockets,
+    pairingCalls,
+    makeWASocket: () => {
+      const ev = new EventEmitter();
+      const socket = {
+        ev,
+        authState: { creds: { registered: false } },
+        qrSeen: false,
+        requestPairingCode: async (number) => {
+          pairingCalls.push({ number, argCount: 1, afterQr: socket.qrSeen });
+          return whatsappStyleCode(number);
+        },
+        ws: { isOpen: false, close() {} }
+      };
+      sockets.push(socket);
+      queueMicrotask(() => {
+        ev.emit('connection.update', { connection: 'connecting' });
+        // The transport opens like production, but no QR event ever arrives.
+        setTimeout(() => { socket.ws.isOpen = true; }, 10);
+      });
+      return socket;
+    },
+    useMultiFileAuthState: async () => ({ state: { creds: { registered: false }, keys: {} }, saveCreds: async () => {} }),
+    makeCacheableSignalKeyStore: () => ({})
+  };
+  const { manager } = makeManager({ fake, limits: { pairingReadyTimeoutMs: 5_000 } });
+  // Bounded so a reintroduced hang fails instead of stalling the suite.
+  const result = await Promise.race([
+    manager.requestPairing('10', '923001234567'),
+    sleep(15_000).then(() => { throw new Error('pairing hung: no code was issued without a QR event'); })
+  ]);
+  assert.equal(result.code, whatsappStyleCode('923001234567'));
+  assert.equal(pairingCalls.length, 1);
+  assert.equal(pairingCalls[0].afterQr, false, 'no QR was emitted; the transport alone gated the code request');
+  await manager.shutdown();
+});
+
 test('a failed attempt that left "me" in unregistered credentials is reset before the retry', async () => {
   const { manager, fake, authDir } = makeManager();
   const dir = path.join(authDir, 'telegram-pairings', '10', '923001234567');
