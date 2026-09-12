@@ -5,7 +5,7 @@
 // sessions, role-filtered help, centralized permission helpers, uptime
 // formatting, and the owner-ID type fix behind /listpaired.
 
-const assert = require('node:assert/strict');
+const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
 const test = require('node:test');
 const {
   ADMIN_COMMANDS,

@@ -1,11 +1,16 @@
 'use strict';
 
+const { BotTracker } = require('./lib/bot-tracker');
+const recovery = require('./lib/message-recovery');
+const sourceCommands = require('./lib/source-commands');
+const { storedMedia } = require('./lib/stored-media');
 const QRCode = require('qrcode');
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { config, normalizePhoneNumber } = require('./config');
 const { groupSettings } = require('./group-events');
 const {
   getImageMessage,
+  getQuotedMessage,
   getMessageContext,
   getStickerMessage,
   getTargetJid,
@@ -19,13 +24,13 @@ const { requestRestart } = require('./lib/runtime');
 const { RuntimeSettingsStore } = require('./lib/runtime-settings');
 const { SudoStore } = require('./lib/sudo');
 const { WarningStore } = require('./lib/warnings');
-const { AutomationStore } = require('./lib/automation');
+const { AutomationStore, DEFAULT_EMOJIS, handleAutoReact, handleAutowriteMessage, handleAutoStatus } = require('./lib/automation');
 const { EconomyStore } = require('./lib/economy');
 const { ChatStore } = require('./lib/chats');
-const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker } = require('./lib/sticker');
+const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker, createVideoSticker, takeSticker, convertToVideo } = require('./lib/sticker');
 const { sendButtons, sendList } = require('./lib/ui');
 const { contextButtons, menuButton, settingButtons } = require('./lib/whatsapp-actions');
-const { helpText: buildHelpText, categoriesWithCommands, getCategory } = require('./lib/menu');
+const { helpText: buildHelpText, categoriesWithCommands, getCategory, resolveCommand } = require('./lib/menu');
 const {
   handleAnimeCommand,
   handleMangaCommand,
@@ -55,7 +60,6 @@ const {
 } = require('./lib/fun-commands');
 const {
   requestCobalt,
-  youtubeSearch,
   spotifySearch,
   translateText,
   textToSpeech,
@@ -78,6 +82,8 @@ const warningStore = new WarningStore(config.warningDbPath);
 const automationStore = new AutomationStore(config.automationDbPath);
 const economyStore = new EconomyStore(config.economyDbPath);
 const settingsStore = new RuntimeSettingsStore(config.settingsDbPath, { prefix: config.commandPrefix });
+const botTracker = new BotTracker(settingsStore);
+let trackerReady;
 const chatStore = new ChatStore(config.chatsDbPath);
 const reportCooldowns = new Map();
 let publicMode = config.publicMode;
@@ -115,12 +121,9 @@ function formatDuration(ms) {
 }
 
 // Anti-delete message cache: chatId:messageId → { text, sender, timestamp }
-const deletedMessageCache = new Map();
-const MAX_CACHED_MESSAGES = 2_000;
+
 // Anti-spam per-chat per-user timestamps
 const spamTracker = new Map();
-const SPAM_THRESHOLD = 5;
-const SPAM_WINDOW_MS = 8_000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -258,7 +261,7 @@ async function sendResult(socket, context, { text, command, ctx, buttons, quoted
     || (command ? contextButtons(prefix, command, ctx || {}) : [menuButton(prefix)]);
   await sendButtons(socket, context.chatId, {
     text,
-    footer: `${config.botName} • ${config.ownerName}`,
+    footer: `${config.botName} • ${sourceCommands.FOOTER}`,
     buttons: resolved,
     fallbackText: text,
     quoted: quoted === undefined ? context.raw : quoted
@@ -313,7 +316,12 @@ async function getGroupInfo(socket, context) {
     }
   }
   const botJid = normalizeJid(socket, socket.user?.id);
-  const botParticipant = participants.find((entry) => normalizeJid(socket, entry.id) === botJid);
+  let botParticipant = participants.find((entry) => [entry.id, entry.lid, entry.jid].some(id => id && normalizeJid(socket, id) === botJid));
+  if (!botParticipant) {
+    for (const entry of participants) {
+      if ((await resolveJid(socket, entry.id)) === botJid) { botParticipant = entry; break; }
+    }
+  }
   return {
     participants,
     isAdmin: Boolean(participant?.admin),
@@ -383,49 +391,24 @@ async function handleReport(socket, context, message) {
   await sendResult(socket, context, { text: '*REQUEST SENT* ✅\nThe owner has been notified.', command: 'request' });
 }
 
-async function handleGreetingSettings(socket, context, command, group) {
-  const action = command.args[0]?.toLowerCase() || 'status';
-  const settingKey = command.name === 'goodbye' ? 'goodbyeEnabled' : 'welcomeEnabled';
-  const label = command.name === 'goodbye' ? 'Goodbye messages' : 'Welcome messages';
-
+async function handleGreetingSettings(socket, context, command) {
+  const settings = await groupSettings.get(context.chatId);
+  const action = command.args[0]?.toLowerCase();
+  const updates = {};
   if (command.name === 'greet') {
-    const settings = await groupSettings.get(context.chatId);
-    await sendResult(socket, context, {
-      text: [
-        '👋 *GREETING SETTINGS*',
-        '',
-        `*Welcome:* ${settings.welcomeEnabled ? 'ON ✅' : 'OFF ❌'}`,
-        `*Goodbye:* ${settings.goodbyeEnabled ? 'ON ✅' : 'OFF ❌'}`
-      ].join('\n'),
-      command: 'greet',
-      buttons: [
-        { label: '👋 Welcome', id: `${getCommandPrefix()}welcome status` },
-        { label: '👋 Goodbye', id: `${getCommandPrefix()}goodbye status` },
-        { label: '⬅️ Back', id: `${getCommandPrefix()}menu group` }
-      ]
-    });
-    return;
+    if (['welcome', 'both'].includes(action)) updates.welcomeEnabled = !settings.welcomeEnabled;
+    if (['goodbye', 'both'].includes(action)) updates.goodbyeEnabled = !settings.goodbyeEnabled;
+    if (action && !['welcome', 'goodbye', 'both', 'status'].includes(action)) {
+      await sendResult(socket, context, { text: 'Usage: greet <welcome|goodbye|both>', command: 'greet' }); return;
+    }
+  } else {
+    const key = command.name === 'goodbye' ? 'goodbyeEnabled' : 'welcomeEnabled';
+    if (!action) updates[key] = !settings[key];
+    else if (['on', 'off'].includes(action)) updates[key] = action === 'on';
+    else if (action !== 'status') { await sendResult(socket, context, { text: 'Usage: welcome/goodbye <on|off|status>', command: command.name }); return; }
   }
-
-  if (!['on', 'off', 'status'].includes(action)) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}${command.name} <on|off|status>` }, { quoted: context.raw });
-    return;
-  }
-  if (action === 'status') {
-    const settings = await groupSettings.get(context.chatId);
-    await sendResult(socket, context, {
-      text: `${label}: *${settings[settingKey] ? 'ON ✅' : 'OFF ❌'}*`,
-      command: command.name,
-      buttons: settingButtons(getCommandPrefix(), command.name, { showStatus: true })
-    });
-    return;
-  }
-  const settings = await groupSettings.update(context.chatId, { [settingKey]: action === 'on' });
-  await sendResult(socket, context, {
-    text: `${label}: *${settings[settingKey] ? 'ON ✅' : 'OFF ❌'}*`,
-    command: command.name,
-    buttons: settingButtons(getCommandPrefix(), command.name, { enabled: settings[settingKey], showStatus: false })
-  });
+  const next = Object.keys(updates).length ? await groupSettings.update(context.chatId, updates) : settings;
+  await sendResult(socket, context, { text: `GREETING SETTINGS\nWelcome: ${next.welcomeEnabled ? 'ON ✅' : 'OFF ❌'}\nGoodbye: ${next.goodbyeEnabled ? 'ON ✅' : 'OFF ❌'}\nUsage: greet both`, command: command.name, buttons: [ { label: 'Welcome', id: `${getCommandPrefix()}welcome status` }, { label: 'Goodbye', id: `${getCommandPrefix()}goodbye status` } ] });
 }
 
 async function handleGroupManagement(socket, context, command, group) {
@@ -489,6 +472,7 @@ async function handleGroupManagement(socket, context, command, group) {
       case 'unlock':
         await socket.groupSettingUpdate(context.chatId, 'not_announcement');
         break;
+      case 'linkgc':
       case 'grouplink': {
         const code = await socket.groupInviteCode(context.chatId);
         if (!code) throw new Error('Unable to retrieve this group invite code.');
@@ -521,7 +505,7 @@ async function handleAiCommand(socket, context, command) {
   }
   try {
     reserveAiRequest(context.sender);
-    const answer = await askGroq({ apiKey: config.groqApiKey, model: config.groqModel, prompt, botName: config.botName });
+    const answer = await askGroq({ apiKey: config.groqApiKey, model: config.groqModel, prompt, botName: config.botName, persona: ['loveai', 'love', 'dark'].includes(command.name) ? 'love' : ['ia', 'groq'].includes(command.name) ? 'free' : 'standard' });
     await sendResult(socket, context, { text: `🤖 *${config.botName}*\n\n${answer}`, command: 'ai' });
   } catch (error) {
     console.error('[ai] Request failed:', error);
@@ -531,7 +515,7 @@ async function handleAiCommand(socket, context, command) {
 
 async function handleGetProfilePhoto(socket, context, command) {
   let target = getTargetJid(context.raw) || (context.isGroup ? context.chatId : context.sender);
-  if (command.args[0]) {
+  if (command.args[0] && !getTargetJid(context.raw)) {
     // A malformed number is user input, not a programming error: it must reach
     // the user as a message instead of rejecting the whole handler (which used
     // to leave the command silently unanswered).
@@ -572,7 +556,11 @@ async function handleSetBotProfilePhoto(socket, context) {
   }
   try {
     const imageBuffer = await downloadMediaBuffer(imageMessage, 'image');
-    await socket.updateProfilePicture(socket.user.id, imageBuffer);
+    if (context.isGroup) {
+      const group = await getGroupInfo(socket, context);
+      if (!(await requireBotAdmin(socket, context, group))) return;
+    }
+    await socket.updateProfilePicture(context.isGroup ? context.chatId : socket.user.id, imageBuffer);
     await sendResult(socket, context, { text: '*PROFILE PICTURE UPDATED* ✅', command: 'setpp' });
   } catch (error) {
     console.error('[setpp] Profile picture update failed:', error);
@@ -587,6 +575,7 @@ async function handleSetBotProfilePhoto(socket, context) {
 // --- MENU ---
 
 async function handleMenuCommand(socket, context, command) {
+  const botName = await settingsStore.get('bot_name') || config.botName;
   const p = getCommandPrefix();
   const categoryId = command.args[0]?.toLowerCase();
 
@@ -594,7 +583,7 @@ async function handleMenuCommand(socket, context, command) {
     const categories = categoriesWithCommands();
     try {
       await sendList(socket, context.chatId, {
-        text: `*${config.botName}*\n\nChoose a category:`,
+        text: `*${botName}*\n\nChoose a category:`,
         footer: `Developer: ${config.developerName}`,
         title: 'Browse Categories',
         sections: [{
@@ -611,7 +600,8 @@ async function handleMenuCommand(socket, context, command) {
           { label: '👑 Owner', id: `${p}owner` }
         ],
         fallbackText: [
-          `*${config.botName}*`,
+          '*ANIME MD*',
+          `Name: ${botName}`,
           '',
           '*Categories:*',
           ...categories.map((cat, i) => `${i + 1}. ${cat.icon} ${cat.label}  → ${p}menu ${cat.id}`),
@@ -635,30 +625,20 @@ async function handleMenuCommand(socket, context, command) {
     return;
   }
 
-  const lines = category.commands.map((cmd) => {
-    const parts = [`${p}${cmd.name}`];
-    if (cmd.usage) parts.push(cmd.usage);
-    return parts.join(' ');
-  });
-
-  const text = [
-    `*${category.icon} ${category.label}*`,
-    '',
-    ...lines,
-    '',
-    `Type ${p}menu for the full menu.`
-  ].join('\n');
+  // One shared rendering includes every execute alias in both interactive
+  // bodies and the plain-text fallback; list rows keep canonical actions.
+  const text = buildHelpText(p, category.id);
 
   try {
     await sendList(socket, context.chatId, {
-      text: `*${category.icon} ${category.label}*`,
+      text,
       footer: `Developer: ${config.developerName}`,
       title: category.label,
       sections: [{
         title: category.label,
         rows: category.commands.map((cmd) => ({
           header: category.icon,
-          title: `${p}${cmd.name}${cmd.usage ? ` ${cmd.usage}` : ''}`,
+          title: `${p}${cmd.name}`,
           description: cmd.description,
           id: `${p}${cmd.name}`
         }))
@@ -676,90 +656,6 @@ async function handleMenuCommand(socket, context, command) {
 }
 
 // --- DOWNLOADER ---
-
-async function handlePlayCommand(socket, context, command) {
-  if (!command.text) {
-    await sendResult(socket, context, { text: usageLine('play', '<song name | url>', 'play Faded'), command: 'play' });
-    return;
-  }
-  await socket.sendMessage(context.chatId, { text: '⏳ *Searching…*' }, { quoted: context.raw });
-  const query = command.text;
-  try {
-    let videoUrl = query;
-    let title = query;
-
-    if (!/^https?:\/\//.test(query)) {
-      const results = await youtubeSearch(query, 1);
-      videoUrl = results[0].url;
-      title = results[0].title;
-    }
-
-    const result = await requestCobalt(config.cobaltApiUrl, videoUrl, { audio: true });
-    if (!result?.url) throw new Error('No audio stream was returned for that link.');
-    await socket.sendMessage(context.chatId, {
-      audio: { url: result.url },
-      mimetype: 'audio/mpeg',
-      fileName: result.filename || `${title}.mp3`,
-      ptt: false
-    }, { quoted: context.raw });
-    await sendResult(socket, context, {
-      text: ['*AUDIO READY* ✅', '', `*Title:* ${title}`, '*Format:* mp3'].join('\n'),
-      command: 'play',
-      ctx: { query }
-    });
-  } catch (error) {
-    console.error('[play] Download failed:', error);
-    await sendResult(socket, context, {
-      text: `*DOWNLOAD FAILED* ❌\n${error.message}`,
-      command: 'play',
-      ctx: { query }
-    });
-  }
-}
-
-async function handleYtmp3Command(socket, context, command) {
-  await handlePlayCommand(socket, context, command);
-}
-
-async function handleVideoCommand(socket, context, command) {
-  if (!command.text) {
-    await sendResult(socket, context, { text: usageLine('video', '<query | url>', 'video Faded'), command: 'video' });
-    return;
-  }
-  await socket.sendMessage(context.chatId, { text: '⏳ *Searching…*' }, { quoted: context.raw });
-  const query = command.text;
-  try {
-    let videoUrl = query;
-    let title = query;
-
-    if (!/^https?:\/\//.test(query)) {
-      const results = await youtubeSearch(query, 1);
-      videoUrl = results[0].url;
-      title = results[0].title;
-    }
-
-    const result = await requestCobalt(config.cobaltApiUrl, videoUrl, { audio: false });
-    if (!result?.url) throw new Error('No video stream was returned for that link.');
-    await socket.sendMessage(context.chatId, {
-      video: { url: result.url },
-      mimetype: 'video/mp4',
-      caption: '*VIDEO READY* ✅',
-      fileName: result.filename || `${title}.mp4`
-    }, { quoted: context.raw });
-    await sendResult(socket, context, {
-      text: `*VIDEO READY* ✅\n\n*Title:* ${title}\n*Format:* mp4`,
-      command: 'video',
-      ctx: { query }
-    });
-  } catch (error) {
-    console.error('[video] Download failed:', error);
-    await sendResult(socket, context, {
-      text: `*DOWNLOAD FAILED* ❌\n${error.message}`,
-      command: 'video',
-      ctx: { query }
-    });
-  }
-}
 
 async function handleSpotifyCommand(socket, context, command) {
   if (!command.text) {
@@ -834,37 +730,7 @@ async function handleMediaCommand(socket, context, command) {
 // --- STICKER (VV) ---
 
 async function handleVVCommand(socket, context) {
-  const viewOnce = context.raw?.message?.viewOnceMessage?.message || context.raw?.message?.viewOnceMessageV2?.message;
-  const quotedViewOnce = context.raw?.message?.extendedTextMessage?.contextInfo?.quotedMessage?.viewOnceMessage?.message
-    || context.raw?.message?.extendedTextMessage?.contextInfo?.quotedMessage?.viewOnceMessageV2?.message;
-
-  const source = viewOnce || quotedViewOnce;
-  if (!source) {
-    await sendResult(socket, context, {
-      text: `*REPLY TO A VIEW-ONCE MEDIA* 👁\nThen send ${getCommandPrefix()}vv.`,
-      command: 'vv'
-    });
-    return;
-  }
-
-  try {
-    if (source.imageMessage) {
-      const buffer = await downloadMediaBuffer(source.imageMessage, 'image');
-      await socket.sendMessage(context.chatId, { image: buffer, caption: source.imageMessage.caption || '*VIEW-ONCE REVEALED* ✅' }, { quoted: context.raw });
-    } else if (source.videoMessage) {
-      const buffer = await downloadMediaBuffer(source.videoMessage, 'video');
-      await socket.sendMessage(context.chatId, { video: buffer, caption: source.videoMessage.caption || '*VIEW-ONCE REVEALED* ✅' }, { quoted: context.raw });
-    } else if (source.audioMessage) {
-      const buffer = await downloadMediaBuffer(source.audioMessage, 'audio');
-      await socket.sendMessage(context.chatId, { audio: buffer, mimetype: 'audio/ogg; codecs=opus', ptt: source.audioMessage.ptt || false }, { quoted: context.raw });
-    } else {
-      await sendResult(socket, context, { text: '*NO VIEW-ONCE MEDIA FOUND* ❌', command: 'vv' });
-      return;
-    }
-    await sendResult(socket, context, { text: '*VIEW-ONCE REVEALED* ✅', command: 'vv' });
-  } catch (error) {
-    await sendResult(socket, context, { text: `*COULD NOT REVEAL* ❌\n${error.message}`, command: 'vv' });
-  }
+  await recovery.revealViewOnce(socket, context, downloadMediaBuffer);
 }
 
 // --- CONVERTER ---
@@ -903,7 +769,8 @@ async function handleQRCommand(socket, context, command) {
 async function handleTourlCommand(socket, context) {
   const media = getImageMessage(context.raw) || getStickerMessage(context.raw);
   if (!media) {
-    const docOrVideo = context.raw?.message?.documentMessage || context.raw?.message?.videoMessage;
+    const quoted = getQuotedMessage(context.raw);
+    const docOrVideo = context.raw?.message?.documentMessage || context.raw?.message?.videoMessage || context.raw?.message?.audioMessage || quoted.documentMessage || quoted.videoMessage || quoted.audioMessage;
     if (!docOrVideo) {
       await sendResult(socket, context, {
         text: `*REPLY TO MEDIA* 📤\nImage, video, sticker or document,\nthen send ${getCommandPrefix()}tourl.`,
@@ -912,7 +779,7 @@ async function handleTourlCommand(socket, context) {
       return;
     }
     try {
-      const type = docOrVideo.mimetype?.includes('video') ? 'video' : docOrVideo.mimetype?.includes('image') ? 'image' : 'document';
+      const type = docOrVideo.mimetype?.includes('audio') ? 'audio' : docOrVideo.mimetype?.includes('video') ? 'video' : docOrVideo.mimetype?.includes('image') ? 'image' : 'document';
       const buffer = await downloadMediaBuffer(docOrVideo, type);
       const ext = docOrVideo.mimetype?.split('/')[1] || 'bin';
       const url = await uploadToCatbox(config.uploadApiUrl, buffer, { filename: `upload.${ext}`, mimetype: docOrVideo.mimetype });
@@ -1031,7 +898,9 @@ async function handleAntiToggleCommand(socket, context, command) {
   const settingKey = settingsMap[command.name];
   if (!settingKey) return;
 
-  const action = command.args[0]?.toLowerCase() || 'status';
+  const current = await groupSettings.get(context.chatId);
+  const inputAction = command.args[0]?.toLowerCase();
+  const action = (inputAction === 'enable' ? 'on' : inputAction === 'disable' ? 'off' : inputAction) || (['antilink', 'antispam', 'antitag'].includes(command.name) ? (current[settingKey] ? 'off' : 'on') : 'status');
   const labels = {
     antilink: 'Link protection',
     antispam: 'Spam protection',
@@ -1104,79 +973,104 @@ async function handleUnwarnCommand(socket, context, command) {
   await socket.sendMessage(context.chatId, { text: `Warnings cleared for @${num}.` }, { quoted: context.raw, mentions: [target] });
 }
 
-async function handleWarnsCommand(socket, context) {
-  const records = await warningStore.list(context.chatId);
-  if (!records.length) {
-    await sendResult(socket, context, { text: '🛡 *GROUP WARNINGS*\n\n➜ No active warnings.', command: 'warns' });
+async function handleWarnsCommand(socket, context, command) {
+  if (!context.isGroup) { await sendResult(socket, context, { text: 'This command is only available in groups.', command: 'warns' }); return; }
+  if (!(await requireGroupAdmin(socket, context))) return;
+  const target = getTargetJid(context.raw);
+  if (command.args[0]?.toLowerCase() === 'reset') {
+    if (!(await requireGroupAdmin(socket, context))) return;
+    if (target) await warningStore.remove(context.chatId, target);
+    else for (const record of await warningStore.list(context.chatId)) await warningStore.remove(context.chatId, record.userJid);
+    await sendResult(socket, context, { text: 'Warnings reset in this group.', command: 'warns' }); return;
+  }
+  if (target) {
+    const data = await warningStore.read();
+    const record = data.groups?.[warningStore.key(context.chatId, target)];
+    const history = record?.history || [];
+    await socket.sendMessage(context.chatId, { text: `Warnings for @${target.split('@')[0]}\nAnti-Link: ${history.filter(w => w.reason === 'antilink').length}/3\nAnti-Spam: ${history.filter(w => w.reason === 'antispam').length}/3\nTotal: ${record?.count || 0}`, mentions: [target] }, { quoted: context.raw });
     return;
   }
-  const lines = records.map((record, i) => `${i + 1}. @${record.userJid.split('@')[0]} — ${record.count} warning(s)`);
-  await socket.sendMessage(context.chatId, {
-    text: `🛡 *GROUP WARNINGS*\n\n${lines.join('\n')}`,
-    mentions: records.map((r) => r.userJid)
-  }, { quoted: context.raw });
+  const records = await warningStore.list(context.chatId);
+  await sendResult(socket, context, { text: `GROUP WARNINGS\n${records.length ? records.map(r => `${r.userJid}: ${r.count}`).join('\n') : 'No active warnings.'}\nUsage: warnings @user | warnings reset [@user]`, command: 'warns' });
+}
+
+async function applyGroupProtections(socket, context) {
+  const settings = await groupSettings.get(context.chatId);
+  if (!['antilink', 'antispam', 'antimention', 'antitag'].some(key => settings[key])) return;
+  if (isOwner(socket, context.sender)) return;
+  const group = await getGroupInfo(socket, context);
+  if (group.isAdmin || !group.isBotAdmin) return;
+  const body = context.text || '';
+  const { getContextInfo } = require('./lib/message');
+  const mentions = getContextInfo(context.raw.message)?.mentionedJid || [];
+  const violations = [];
+  if (settings.antilink && /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\/[^\s]*)/i.test(body)) violations.push('antilink');
+  if (settings.antispam) {
+    const key = `${socket.user?.id}:${context.chatId}:${context.sender}`;
+    const now = Date.now();
+    for (const [id, times] of spamTracker) if (now - times.at(-1) > 5000) spamTracker.delete(id);
+    const times = (spamTracker.get(key) || []).filter(time => now - time < 5000);
+    times.push(now); spamTracker.set(key, times.slice(-6));
+    if (times.length > 5) violations.push('antispam');
+  }
+  if (settings.antimention && (mentions.length >= 3 || /@everyone|@all/.test(body))) violations.push('antimention');
+  if (settings.antitag && mentions.length >= 5) violations.push('antitag');
+  if (!violations.length) return;
+  await socket.sendMessage(context.chatId, { delete: context.raw.key });
+  let remove = false;
+  for (const type of violations) {
+    let count = 0;
+    if (['antilink', 'antispam'].includes(type)) {
+      const record = await warningStore.add(context.chatId, context.sender, type);
+      count = record.history.filter(w => w.reason === type).length;
+      if (count >= 3) remove = true;
+    }
+    await socket.sendMessage(context.chatId, { text: `@${context.sender.split('@')[0]} — ${type} violation${count ? ` (${count}/3)` : ''}`, mentions: [context.sender] });
+  }
+  if (remove) await socket.groupParticipantsUpdate(context.chatId, [context.sender], 'remove');
 }
 
 // --- AUTOMATION ---
 
 async function handleAutomationToggle(socket, context, command, group) {
-  const settingKey = command.name;
-  if (settingKey === 'autostatus') {
+  const canonical = resolveCommand(command.name)?.name || command.name;
+  const key = canonical === 'autoreact' ? 'autoreact' : canonical === 'autowrite' ? 'autowrite' : 'autostatus';
+  let action = command.args[0]?.toLowerCase() || 'status';
+  if (key === 'autostatus') {
     if (!(await requireOwner(socket, context))) return;
-    const action = command.args[0]?.toLowerCase() || 'status';
-    if (!['on', 'off', 'status'].includes(action)) {
-      await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}autostatus <on|off|status>` }, { quoted: context.raw });
-      return;
-    }
+    const data = await automationStore.read();
+    const current = data.global || {};
     if (action === 'status') {
-      const current = await automationStore.getGlobal('autostatus');
-      await sendResult(socket, context, {
-        text: `Auto-status: *${current ? 'ON ✅' : 'OFF ❌'}*`,
-        command: 'autostatus',
-        buttons: settingButtons(getCommandPrefix(), 'autostatus', { showStatus: true })
-      });
+      await sendResult(socket, context, { text: `AutoStatus Settings\nView: ${current.autostatus ? 'ON' : 'OFF'}\nReact: ${current.statusReact ? 'ON' : 'OFF'}\nEmoji: ${current.statusEmoji || '❤️'}`, command: key });
       return;
     }
-    await automationStore.setGlobal('autostatus', action === 'on');
-    await sendResult(socket, context, {
-      text: `Auto-status: *${action === 'on' ? 'ON ✅' : 'OFF ❌'}*`,
-      command: 'autostatus',
-      buttons: settingButtons(getCommandPrefix(), 'autostatus', { enabled: action === 'on', showStatus: false })
-    });
+    let field = 'autostatus';
+    let sub = action;
+    if (action === 'view' || action === 'react') {
+      field = action === 'view' ? 'autostatus' : 'statusReact';
+      sub = command.args[1]?.toLowerCase();
+    }
+    if (action === 'react' && sub === 'emoji' && command.args[2]) {
+      await automationStore.update(data => { data.global = { ...data.global, statusEmoji: command.args[2] }; });
+    } else if (['on', 'off'].includes(sub)) await automationStore.setGlobal(field, sub === 'on');
+    else { await sendResult(socket, context, { text: 'Usage: autostatus <view|react> <on|off> | autostatus react emoji <emoji> | autostatus status', command: key }); return; }
+    await sendResult(socket, context, { text: 'AutoStatus settings updated. Status delivery requires the main message route to forward status events.', command: key });
     return;
   }
-
-  // Group-level automation
-  const action = command.args[0]?.toLowerCase() || 'status';
-  const labels = { autoreact: 'Auto-react', autowrite: 'Auto-write' };
-  const label = labels[settingKey] || settingKey;
-
-  if (!['on', 'off', 'status'].includes(action)) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}${command.name} <on|off|status>` }, { quoted: context.raw });
+  if (key === 'autoreact' && !group) return;
+  const data = await automationStore.read();
+  const current = data.chats?.[context.chatId] || {};
+  if (action === 'emojis' && key === 'autoreact') {
+    const emojis = command.args.slice(1);
+    if (!emojis.length) { await sendResult(socket, context, { text: 'Usage: autoreact emojis 😂 👍 ❤️', command: key }); return; }
+    await automationStore.update(data => { data.chats = data.chats || {}; data.chats[context.chatId] = { ...data.chats[context.chatId], emojis }; });
+    await sendResult(socket, context, { text: `AutoReact emojis updated: ${emojis.join(' ')}`, command: key });
     return;
   }
-
-  if (action === 'status') {
-    const current = await automationStore.getChat(context.chatId, settingKey);
-    await sendResult(socket, context, {
-      text: `${label}: *${current ? 'ON ✅' : 'OFF ❌'}*`,
-      command: command.name,
-      buttons: settingButtons(getCommandPrefix(), command.name, { showStatus: true })
-    });
-    return;
-  }
-
-  if (settingKey !== 'autowrite' && !group) {
-    await socket.sendMessage(context.chatId, { text: 'This automation is only available in groups.' }, { quoted: context.raw });
-    return;
-  }
-
-  await automationStore.setChat(context.chatId, settingKey, action === 'on');
-  await sendResult(socket, context, {
-    text: `${label}: *${action === 'on' ? 'ON ✅' : 'OFF ❌'}*`,
-    command: command.name,
-    buttons: settingButtons(getCommandPrefix(), command.name, { enabled: action === 'on', showStatus: false })
-  });
+  if (!['on', 'off', 'status'].includes(action)) { await sendResult(socket, context, { text: `Usage: ${key} <on|off|status${key === 'autoreact' ? '|emojis' : ''}>`, command: key }); return; }
+  if (action !== 'status') await automationStore.setChat(context.chatId, key, action === 'on');
+  const enabled = action === 'status' ? current[key] : action === 'on';
+  await sendResult(socket, context, { text: `${key}: ${enabled ? 'ON ✅' : 'OFF ❌'}${key === 'autoreact' ? '\nEmojis: ' + (current.emojis || DEFAULT_EMOJIS).join(' ') : ''}`, command: key, buttons: settingButtons(getCommandPrefix(), key, { showStatus: true }) });
 }
 
 // --- GAMES ---
@@ -1328,12 +1222,13 @@ async function setCommandPrefix(prefix) {
 
 async function handleSetNameCommand(socket, context, command) {
   const name = command.text.trim();
-  if (!name || name.length > 25) {
-    await socket.sendMessage(context.chatId, { text: 'Name must be 1-25 characters.' }, { quoted: context.raw });
+  if (!name || name.length < 2 || name.length > 30) {
+    await socket.sendMessage(context.chatId, { text: 'Name must be 2-30 characters.' }, { quoted: context.raw });
     return;
   }
   try {
     await socket.updateProfileName(name);
+    await settingsStore.set('bot_name', name);
     await sendResult(socket, context, { text: `*NAME UPDATED* ✅\n➜ ${name}`, command: 'setname' });
   } catch (error) {
     await sendResult(socket, context, { text: `*NAME UPDATE FAILED* ❌\n${error.message}`, command: 'setname' });
@@ -1343,12 +1238,16 @@ async function handleSetNameCommand(socket, context, command) {
 // --- SUDO ---
 
 async function handleSudoCommand(socket, context, command) {
-  if (!command.args[0]) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}sudo <number>` }, { quoted: context.raw });
+  const target = getTargetJid(context.raw);
+  const resolved = target ? await resolveJid(socket, target) : undefined;
+  const number = resolved?.endsWith('@s.whatsapp.net') ? resolved.split('@')[0] : target ? undefined : command.args[0];
+  if (!number) {
+    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}sudo <number|mention|reply>. LID targets must resolve to a phone JID.` }, { quoted: context.raw });
     return;
   }
   try {
-    const result = await sudoStore.add(command.args[0]);
+    if (await sudoStore.has(number)) { await sendResult(socket, context, { text: 'User already has sudo privileges.', command: 'sudo' }); return; }
+    const result = await sudoStore.add(number);
     await sendResult(socket, context, { text: `*SUDO GRANTED* ✅\n➜ ${result.id}`, command: 'sudo' });
   } catch (error) {
     await sendResult(socket, context, { text: `*SUDO FAILED* ❌\n${error.message}`, command: 'sudo' });
@@ -1356,12 +1255,13 @@ async function handleSudoCommand(socket, context, command) {
 }
 
 async function handleDelsudoCommand(socket, context, command) {
-  if (!command.args[0]) {
-    await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}delsudo <number>` }, { quoted: context.raw });
-    return;
-  }
+  const target = getTargetJid(context.raw);
+  const resolved = target ? await resolveJid(socket, target) : undefined;
+  const number = resolved?.endsWith('@s.whatsapp.net') ? resolved.split('@')[0] : target ? undefined : command.args[0];
+  if (!target && !number) return handleSudolistCommand(socket, context);
+  if (!number) { await sendResult(socket, context, { text: 'Cannot resolve this LID to a phone number.', command: 'delsudo' }); return; }
   try {
-    const result = await sudoStore.remove(command.args[0]);
+    const result = await sudoStore.remove(number);
     await sendResult(socket, context, {
       text: result.removed ? `*SUDO REMOVED* ✅\n➜ ${result.id}` : '*NOT A SUDO USER* ❌',
       command: 'delsudo'
@@ -1443,27 +1343,6 @@ async function handleStopSessionCommand(socket, context, command) {
 
 // --- DELETE CACHE (anti-delete) ---
 
-function cacheMessageForAntiDelete(socket, rawMessage) {
-  const chatId = rawMessage?.key?.remoteJid;
-  const messageId = rawMessage?.key?.id;
-  if (!chatId || !messageId || chatId.endsWith('@g.us') === false) return;
-
-  // Manage cache size
-  if (deletedMessageCache.size > MAX_CACHED_MESSAGES) {
-    const oldest = deletedMessageCache.keys().next().value;
-    deletedMessageCache.delete(oldest);
-  }
-
-  const text = rawMessage?.message?.conversation || rawMessage?.message?.extendedTextMessage?.text || '';
-  if (text) {
-    deletedMessageCache.set(`${chatId}:${messageId}`, {
-      text,
-      sender: normalizeJid(socket, rawMessage.key?.participant || rawMessage.key?.remoteJid),
-      timestamp: Date.now()
-    });
-  }
-}
-
 // ---------------------------------------------------------------------------
 // MAIN MESSAGE HANDLER
 // ---------------------------------------------------------------------------
@@ -1476,24 +1355,29 @@ async function handleMessage(socket, rawMessage) {
   // registry is a convenience and must never break message handling.
   void chatStore.track(context.chatId).catch(() => {});
 
-  // Cache incoming messages for anti-delete feature
-  if (context.chatId.endsWith('@g.us')) {
-    cacheMessageForAntiDelete(socket, rawMessage);
-  }
-
-  // Process protocol messages (deletes)
-  if (rawMessage?.message?.protocolMessage?.type === 0) {
-    await handleProtocolDelete(socket, rawMessage);
+  if (context.chatId === 'status@broadcast') {
+    await handleAutoStatus(socket, rawMessage, automationStore);
     return;
   }
-
-  if (!context.text) return;
+  const antiEnabled = context.isGroup
+    ? (await groupSettings.get(context.chatId)).antidelete
+    : await automationStore.getGlobal('antidelete');
+  if (rawMessage?.message?.protocolMessage?.type === 0) {
+    if (antiEnabled) await recovery.handleMessageRevocation(socket, rawMessage, [...ownerJids(socket)][0]);
+    return;
+  }
+  if (antiEnabled) await recovery.storeMessage(socket, rawMessage, { download: downloadMediaBuffer, ownerJid: [...ownerJids(socket)][0] });
+  if (!context.fromMe && context.isGroup) await applyGroupProtections(socket, context);
 
   const command = commandFromText(context.text);
   if (!command) {
-    // Quiz answer: number in a group with an active quiz
-    if (context.chatId.endsWith('@g.us') && /^[1-4]$/.test(context.text.trim())) {
-      const quizHandled = await quizModule.handleGroupAnswer(socket, context, context.sender, parseInt(context.text.trim(), 10));
+    // The existing quiz advertises plain "join" and A/B/C/D answers. Keep
+    // numeric answers compatible without stealing idle menu-number replies.
+    if (context.isGroup && /^join$/i.test(context.text.trim()) && (publicMode || isOwner(socket, context.sender))) {
+      if (await quizModule.joinQuiz(socket, context)) return;
+    }
+    if (context.isGroup && /^[a-d1-4]$/i.test(context.text.trim())) {
+      const quizHandled = await quizModule.handleGroupAnswer(socket, context);
       if (quizHandled) return;
     }
 
@@ -1508,12 +1392,9 @@ async function handleMessage(socket, rawMessage) {
       }
     }
 
-    // Auto-write presence
-    if (context.chatId.endsWith('@g.us')) {
-      const autoWrite = await automationStore.getChat(context.chatId, 'autowrite');
-      if (autoWrite && !context.fromMe) {
-        await socket.sendPresenceUpdate('composing', context.chatId).catch(() => {});
-      }
+    if (!context.fromMe) {
+      await handleAutoReact(socket, context, automationStore).catch(error => console.warn('[autoreact]', error.message));
+      await handleAutowriteMessage(socket, context, automationStore).catch(error => console.warn('[autowrite]', error.message));
     }
     return;
   }
@@ -1523,14 +1404,6 @@ async function handleMessage(socket, rawMessage) {
   if (!publicMode && !owner) return;
 
   console.info(`[command] ${command.name} from ${context.sender} in ${context.chatId}`);
-
-  // Auto-write presence for commands
-  if (context.chatId.endsWith('@g.us')) {
-    const autoWrite = await automationStore.getChat(context.chatId, 'autowrite');
-    if (autoWrite) {
-      await socket.sendPresenceUpdate('composing', context.chatId).catch(() => {});
-    }
-  }
 
   // No command may ever fail silently. Anything that escapes a handler's own
   // try/catch is reported to the user with a short message, logged here, and
@@ -1542,7 +1415,19 @@ async function handleMessage(socket, rawMessage) {
       await handleHiddenCommand(socket, context);
       return;
     }
+    if (resolveCommand(command.name) && !['ping', 'p'].includes(command.name)) {
+      await sourceCommands.react(socket, context, '⭐');
+    }
     await dispatchCommand(socket, context, command, rawMessage);
+    if (resolveCommand(command.name)) {
+      try {
+        if (!trackerReady) botTracker.stats.phoneNumber = normalizeJid(socket, socket.user?.id)?.split('@')[0] || 'unknown';
+        trackerReady ||= botTracker.start();
+        await trackerReady;
+        botTracker.incrementCommands(command.name);
+        await botTracker.saveStats();
+      } catch (error) { console.warn('[tracker]', error.message); }
+    }
   } catch (error) {
     console.error(`[command] ${command.name} failed:`, error);
     await socket.sendMessage(context.chatId, {
@@ -1554,6 +1439,27 @@ async function handleMessage(socket, rawMessage) {
 
 async function dispatchCommand(socket, context, command, rawMessage) {
   switch (command.name) {
+    case 'fancy':
+    case 'encrypt':
+    case 'encrypt2':
+    case 'tempmail':
+    case 'getmail':
+      await sourceCommands.tools(socket, context, command);
+      break;
+    case 'store':
+    case 'ad':
+    case 'vd':
+    case 'list':
+    case 'del':
+      // Personal collection uses the existing owner gate and settings store.
+      if (!(await requireOwner(socket, context))) break;
+      await storedMedia(socket, context, command, { settings: settingsStore, download: downloadMediaBuffer });
+      break;
+    case 'upload':
+    case 'mirror':
+    case 'host':
+      await sourceCommands.upload(socket, context, command, handleTourlCommand);
+      break;
     // --- GENERAL ---
     case 'menu':
     case 'help':
@@ -1562,12 +1468,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     case 'ping':
     case 'p': {
-      const started = Date.now();
-      await socket.sendMessage(context.chatId, { text: '⏳ *Measuring…*' }, { quoted: context.raw });
-      await sendResult(socket, context, {
-        text: `🏓 *PONG*\n➜ *${Date.now() - started}ms*`,
-        command: 'ping'
-      });
+      await sourceCommands.ping(socket, context);
       break;
     }
 
@@ -1578,6 +1479,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     // --- MESSAGE MODE ---
     case 'public':
+    case 'private':
     case 'self': {
       if (!(await requireOwner(socket, context))) break;
       publicMode = command.name === 'public';
@@ -1601,18 +1503,20 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     // --- DOWNLOADER ---
     case 'play':
-      await handlePlayCommand(socket, context, command);
+      await sourceCommands.download(socket, context, command);
       break;
 
     case 'ytmp3':
+    case 'mp3':
     case 'audio':
-      await handleYtmp3Command(socket, context, command);
+      await sourceCommands.download(socket, context, command);
       break;
 
     case 'video':
     case 'ytmp4':
+    case 'ytvideo':
     case 'mp4':
-      await handleVideoCommand(socket, context, command);
+      await sourceCommands.download(socket, context, command);
       break;
 
     case 'spotify':
@@ -1637,8 +1541,14 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       await handleSetBotProfilePhoto(socket, context);
       break;
 
-    case 'vv':
     case 'save':
+    case 'savestatus':
+    case 'downloadstatus':
+      await recovery.saveStatus(socket, context, downloadMediaBuffer, [...ownerJids(socket)][0]);
+      break;
+    case 'hey':
+    case 'revealonce':
+    case 'vv':
     case 'retrieve':
     case 'viewonce':
       await handleVVCommand(socket, context);
@@ -1648,7 +1558,8 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'sticker':
     case 's':
     case 'stiker': {
-      const imageMessage = getImageMessage(rawMessage);
+      const videoMessage = rawMessage.message?.videoMessage || getQuotedMessage(rawMessage).videoMessage;
+      const imageMessage = videoMessage || getImageMessage(rawMessage);
       if (!imageMessage) {
         await sendResult(socket, context, {
           text: `*REPLY TO AN IMAGE* 🖼\nThen send ${getCommandPrefix()}sticker.`,
@@ -1657,8 +1568,8 @@ async function dispatchCommand(socket, context, command, rawMessage) {
         break;
       }
       try {
-        const imageBuffer = await downloadMediaBuffer(imageMessage, 'image');
-        const sticker = await createImageSticker(imageBuffer, { packname: config.stickerPackname, author: config.stickerAuthor });
+        const imageBuffer = await downloadMediaBuffer(imageMessage, videoMessage ? 'video' : 'image');
+        const sticker = await (videoMessage ? createVideoSticker : createImageSticker)(imageBuffer, { packname: 'ANIME-MD', author: 'GoatMods' });
         await socket.sendMessage(context.chatId, { sticker }, { quoted: context.raw });
         await sendResult(socket, context, { text: '*STICKER READY* 🎨', command: 'sticker' });
       } catch (error) {
@@ -1668,6 +1579,25 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
     }
 
+    case 'take':
+    case 'steal':
+    case 'tovid':
+    case 'sticker2vid': {
+      const sticker = getStickerMessage(rawMessage);
+      if (!sticker) { await sendResult(socket, context, { text: 'Reply to a sticker.', command: command.name }); break; }
+      try {
+        const buffer = await downloadMediaBuffer(sticker, 'sticker');
+        if (['take', 'steal'].includes(command.name)) {
+          const [packname, author] = command.text.split('|').map(value => value.trim());
+          const result = await takeSticker(buffer, { packname: packname || 'ANIME-MD', author: author || 'GoatMods' });
+          await socket.sendMessage(context.chatId, { sticker: result }, { quoted: context.raw });
+        } else {
+          await socket.sendMessage(context.chatId, { video: await convertToVideo(buffer), mimetype: 'video/mp4', caption: sourceCommands.FOOTER }, { quoted: context.raw });
+        }
+        await sourceCommands.react(socket, context, '✅');
+      } catch (error) { await sendResult(socket, context, { text: `Conversion failed: ${error.message}`, command: command.name }); }
+      break;
+    }
     case 'toimg':
     case 'sticker2img':
     case 'img': {
@@ -1718,12 +1648,16 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     // --- UPLOAD ---
     case 'tourl':
     case 'uploader':
-    case 'upload':
+    case 'imgtourl':
+    case 'imageurl':
     case 'url':
       await handleTourlCommand(socket, context);
       break;
 
     // --- AI ---
+    case 'loveai':
+    case 'love':
+    case 'dark':
     case 'ai':
     case 'ask':
     case 'ia':
@@ -1739,21 +1673,29 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     // --- TOOLS ---
     case 'jid':
-    case 'chatid':
+    case 'chatid': {
+      const metadata = context.isGroup ? await socket.groupMetadata(context.chatId) : undefined;
       await sendResult(socket, context, {
         text: [
           '🔎 *JID INFO*',
           '',
           `*Chat:* ${context.chatId}`,
           `*Sender:* ${context.sender}`,
-          `*Type:* ${context.isGroup ? 'group' : 'private'}`
+          `*Type:* ${context.isGroup ? 'group' : 'private'}`,
+          ...(metadata ? [`*Name:* ${metadata.subject}`, `*Members:* ${metadata.participants.length}`, `*Admins:* ${metadata.participants.filter(p => p.admin).length}`, `*Owner:* ${metadata.owner || 'Not defined'}`, ...(metadata.creation ? [`*Created:* ${new Date(metadata.creation * 1000).toLocaleDateString('fr-FR')}`] : [])] : [])
         ].join('\n'),
         command: 'jid'
       });
       break;
+    }
 
     case 'idch':
     case 'cekidch': {
+      if (!command.text && context.chatId.endsWith('@newsletter')) {
+        const info = await socket.newsletterMetadata('jid', context.chatId).catch(() => ({}));
+        await sendResult(socket, context, { text: `CHANNEL INFO\nID: ${context.chatId}\nName: ${info.name || 'WhatsApp Channel'}`, command: 'idch' });
+        break;
+      }
       if (!command.text) {
         await socket.sendMessage(context.chatId, { text: `Usage: ${getCommandPrefix()}idch <WhatsApp channel URL>` }, { quoted: context.raw });
         break;
@@ -1822,29 +1764,28 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     // --- GROUP ---
     case 'hidetag':
-    case 'ht': {
-      const group = await requireGroupAdmin(socket, context);
-      if (!group) break;
-      const message = context.quotedText || command.text;
-      if (!message) {
-        await sendResult(socket, context, { text: usageLine('hidetag', '<message>', 'hidetag Meeting at 8'), command: 'hidetag' });
-        break;
-      }
-      await socket.sendMessage(context.chatId, { text: message, mentions: group.participants.map((entry) => entry.id) }, { quoted: context.raw });
-      break;
-    }
-
+    case 'ht':
+    case 'tag':
     case 'tagall':
-    case 'tag': {
+    case 'everyone': {
       const group = await requireGroupAdmin(socket, context);
       if (!group) break;
-      if (!command.text) {
-        await sendResult(socket, context, { text: usageLine('tagall', '<message>', 'tagall Attendance'), command: 'tagall' });
-        break;
+      const metadata = await socket.groupMetadata(context.chatId);
+      const groupPic = await socket.profilePictureUrl(context.chatId, 'image').catch(() => 'https://i.ibb.co/SDd09XR9/425104bcd93b.jpg');
+      const mentions = group.participants.map(p => p.id);
+      const visible = ['tagall', 'everyone'].includes(command.name);
+      let text;
+      if (visible) {
+        text = `*ANIME-MD*\n${command.text ? `Message: ${command.text}\n` : ''}Total: ${mentions.length} Members\n${new Date().toLocaleString('fr-FR')}\n`;
+        text += group.participants.slice(0, 30).map((p, i) => `${p.admin ? '👑' : '👤'} ${i + 1}. @${p.id.split('@')[0]}`).join('\n');
+        if (mentions.length > 30) text += `\n... +${mentions.length - 30} others`;
+      } else {
+        text = `*ANIME-MD HIDETAG*\n${context.quotedText || command.text || 'Attention all members!'}\n${mentions.length} Members`;
+        await socket.sendMessage(context.chatId, { delete: context.raw.key }).catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
-      const mentions = group.participants.map((entry) => entry.id);
-      const lines = group.participants.map((entry) => `• @${entry.id.split('@')[0]}`);
-      await socket.sendMessage(context.chatId, { text: `${command.text}\n\n${lines.join('\n')}`, mentions }, { quoted: context.raw });
+      text += `\n\n> ${sourceCommands.FOOTER}`;
+      await socket.sendMessage(context.chatId, { text, mentions, contextInfo: { externalAdReply: { title: metadata.subject, thumbnailUrl: groupPic, mediaType: 1, renderLargerThumbnail: true } } }, visible ? { quoted: context.raw } : {});
       break;
     }
 
@@ -1892,7 +1833,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     case 'warns':
     case 'warnings': {
-      await handleWarnsCommand(socket, context);
+      await handleWarnsCommand(socket, context, command);
       break;
     }
 
@@ -1901,7 +1842,17 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'antispam':
     case 'antimention':
     case 'antitag':
+    case 'antigroupmention':
+    case 'antisupp':
     case 'antidelete': {
+      command = { ...command, name: resolveCommand(command.name)?.name || command.name };
+      if (command.name === 'antidelete' && !context.isGroup) {
+        if (!(await requireOwner(socket, context))) break;
+        const action = command.args[0]?.toLowerCase() || 'status';
+        if (['on', 'enable', 'off', 'disable'].includes(action)) await automationStore.setGlobal('antidelete', ['on', 'enable'].includes(action));
+        await sendResult(socket, context, { text: `Anti-delete: ${await automationStore.getGlobal('antidelete') ? 'ON' : 'OFF'}`, command: 'antidelete' });
+        break;
+      }
       const group = await requireGroupAdmin(socket, context);
       if (!group) break;
       await handleAntiToggleCommand(socket, context, command);
@@ -1909,14 +1860,21 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     }
 
     // --- AUTOMATION ---
+    case 'autoreaction':
+    case 'autotype':
+    case 'fakewrite':
     case 'autoreact':
     case 'autowrite': {
-      const group = await requireGroupAdmin(socket, context);
-      if (!group && command.name !== 'autowrite') break;
+      command = { ...command, name: resolveCommand(command.name)?.name || command.name };
+      const group = context.isGroup ? await requireGroupAdmin(socket, context) : undefined;
+      if (context.isGroup && !group) break;
+      if (!context.isGroup && command.name !== 'autowrite') { await sendResult(socket, context, { text: 'This command is only available in groups.', command: command.name }); break; }
       await handleAutomationToggle(socket, context, command, group);
       break;
     }
 
+    case 'autostatusview':
+    case 'autostatusreact':
     case 'autostatus':
       await handleAutomationToggle(socket, context, command);
       break;
@@ -1981,8 +1939,10 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     }
 
     // --- OWNER ---
-    case 'status':
     case 'alive':
+      await sourceCommands.alive(socket, context);
+      break;
+    case 'status':
     case 'runtime': {
       const text = [
         `📊 *${config.botName.toUpperCase()} STATUS*`,
@@ -2045,12 +2005,16 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     }
 
     // --- SUDO ---
+    case 'addsudo':
+    case 'makesudo':
     case 'sudo': {
       if (!(await requireOwner(socket, context))) break;
       await handleSudoCommand(socket, context, command);
       break;
     }
 
+    case 'removesudo':
+    case 'unsudo':
     case 'delsudo': {
       if (!(await requireOwner(socket, context))) break;
       await handleDelsudoCommand(socket, context, command);
@@ -2058,6 +2022,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     }
 
     case 'sudolist':
+    case 'sudos':
     case 'listsudo': {
       if (!(await requireSudoOrOwner(socket, context))) break;
       await handleSudolistCommand(socket, context);
@@ -2239,14 +2204,18 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       if (command.args[0] === 'stop') {
         await quizModule.stopQuiz(socket, context);
       } else if (command.args[0] === 'join') {
-        await quizModule.joinQuiz(socket, context, context.sender);
+        if (!(await quizModule.joinQuiz(socket, context, context.sender))) {
+          await socket.sendMessage(context.chatId, { text: `No joinable quiz lobby. Start one with ${getCommandPrefix()}quiz.` }, { quoted: context.raw });
+        }
       } else {
         await quizModule.startQuiz(socket, context, command.args);
       }
       break;
 
     case 'quizjoin':
-      await quizModule.joinQuiz(socket, context, context.sender);
+      if (!(await quizModule.joinQuiz(socket, context, context.sender))) {
+        await socket.sendMessage(context.chatId, { text: `No joinable quiz lobby. Start one with ${getCommandPrefix()}quiz.` }, { quoted: context.raw });
+      }
       break;
 
     case 'quizstop':
@@ -2316,50 +2285,44 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     //  ADVANCED GROUP MANAGEMENT
     // ═══════════════════════════════════════════════════════════════
 
+    case 'purge':
     case 'kickall':
-    case 'kickall2': {
-      const gk = await requireGroupAdmin(socket, context);
-      if (!gk) break;
-      if (!(await requireBotAdmin(socket, context, gk))) break;
-      try {
-        const targets = gk.participants.filter(p => !p.admin).map(p => p.id);
-        await socket.sendMessage(context.chatId, { text: '⚡ *[ ANIME CORE ]* — Purging ' + targets.length + ' members...' }, { quoted: context.raw });
+    case 'kickall2':
+    case 'demoteall':
+    case 'promoteall':
+    case 'autopromote': {
+      const group = await requireGroupAdmin(socket, context);
+      if (!group || !(await requireBotAdmin(socket, context, group))) break;
+      const demote = command.name === 'demoteall';
+      const promote = ['promoteall', 'autopromote'].includes(command.name);
+      const bot = normalizeJid(socket, socket.user?.id);
+      const targets = command.name === 'autopromote' ? [context.sender] : group.participants
+        .filter(p => demote ? p.admin === 'admin' && normalizeJid(socket, p.id) !== context.sender && normalizeJid(socket, p.id) !== bot : !p.admin)
+        .map(p => p.id);
+      if (!targets.length) { await sendResult(socket, context, { text: 'No eligible members.', command: command.name }); break; }
+      const action = demote ? 'demote' : promote ? 'promote' : 'remove';
+      if (['purge', 'demoteall', 'autopromote'].includes(command.name)) {
+        await socket.groupParticipantsUpdate(context.chatId, targets, action);
+      } else {
+        let completed = 0;
         for (const target of targets) {
-          try { await socket.groupParticipantsUpdate(context.chatId, [target], 'remove'); } catch {}
-          await new Promise(r => setTimeout(r, 500));
+          try { await socket.groupParticipantsUpdate(context.chatId, [target], action); completed++; }
+          catch (error) { console.warn('[group action]', error.message); }
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        await socket.sendMessage(context.chatId, { text: '✅ Purge complete.' }, { quoted: context.raw });
-      } catch (e) { await socket.sendMessage(context.chatId, { text: '❌ Error: ' + e.message }, { quoted: context.raw }); }
+        await sendResult(socket, context, { text: `Completed ${completed}/${targets.length} actions.`, command: command.name });
+      }
+      await sourceCommands.react(socket, context, '✅');
       break;
     }
-
-    case 'promoteall': {
-      const gp = await requireGroupAdmin(socket, context);
-      if (!gp) break;
-      if (!(await requireBotAdmin(socket, context, gp))) break;
-      try {
-        const targets = gp.participants.filter(p => !p.admin).map(p => p.id);
-        for (const target of targets) {
-          try { await socket.groupParticipantsUpdate(context.chatId, [target], 'promote'); } catch {}
-          await new Promise(r => setTimeout(r, 300));
-        }
-        await socket.sendMessage(context.chatId, { text: '✅ Promoted ' + targets.length + ' members.' }, { quoted: context.raw });
-      } catch (e) { await socket.sendMessage(context.chatId, { text: '❌ Error: ' + e.message }, { quoted: context.raw }); }
-      break;
-    }
-
-    case 'demoteall': {
-      const gd = await requireGroupAdmin(socket, context);
-      if (!gd) break;
-      if (!(await requireBotAdmin(socket, context, gd))) break;
-      try {
-        const targets = gd.participants.filter(p => p.admin === 'admin').map(p => p.id);
-        for (const target of targets) {
-          try { await socket.groupParticipantsUpdate(context.chatId, [target], 'demote'); } catch {}
-          await new Promise(r => setTimeout(r, 300));
-        }
-        await socket.sendMessage(context.chatId, { text: '✅ Demoted ' + targets.length + ' admins.' }, { quoted: context.raw });
-      } catch (e) { await socket.sendMessage(context.chatId, { text: '❌ Error: ' + e.message }, { quoted: context.raw }); }
+    case 'antidemote':
+    case 'antipromote': {
+      const group = await requireGroupAdmin(socket, context);
+      if (!group) break;
+      const action = command.args[0]?.toLowerCase() || 'status';
+      if (['on', 'off'].includes(action)) await automationStore.setChat(context.chatId, command.name, action === 'on');
+      else if (action !== 'status') { await sendResult(socket, context, { text: `Usage: ${command.name} <on|off|status>`, command: command.name }); break; }
+      await sendResult(socket, context, { text: `${command.name}: ${await automationStore.getChat(context.chatId, command.name) ? 'ON' : 'OFF'}`, command: command.name });
       break;
     }
 
@@ -2367,16 +2330,17 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       const go = await requireGroupAdmin(socket, context);
       if (!go) break;
       if (!(await requireBotAdmin(socket, context, go))) break;
-      const duration = parseDuration(command.args.join(' '));
-      if (!duration) {
-        await socket.sendMessage(context.chatId, { text: '❌ Invalid duration.\nUsage: !opentime <30s|5m|1h|1h30m>\nCancel: !opentime cancel' }, { quoted: context.raw });
-        break;
-      }
       if (command.args[0] === 'cancel') {
         if (groupTimers.has(context.chatId + ':open')) { clearTimeout(groupTimers.get(context.chatId + ':open')); groupTimers.delete(context.chatId + ':open'); }
         await socket.sendMessage(context.chatId, { text: '✅ Open timer cancelled.' }, { quoted: context.raw });
         break;
       }
+      const duration = parseDuration(command.args.join(' '));
+      if (!duration) {
+        await socket.sendMessage(context.chatId, { text: '❌ Invalid duration.\nUsage: !opentime <30s|5m|1h|1h30m>\nCancel: !opentime cancel' }, { quoted: context.raw });
+        break;
+      }
+
       await socket.sendMessage(context.chatId, { text: '🔓 Group will open in *' + formatDuration(duration) + '*' }, { quoted: context.raw });
       const timer = setTimeout(async () => {
         try {
@@ -2393,16 +2357,17 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       const gc = await requireGroupAdmin(socket, context);
       if (!gc) break;
       if (!(await requireBotAdmin(socket, context, gc))) break;
-      const duration2 = parseDuration(command.args.join(' '));
-      if (!duration2) {
-        await socket.sendMessage(context.chatId, { text: '❌ Invalid duration.\nUsage: !closetime <30s|5m|1h|1h30m>\nCancel: !closetime cancel' }, { quoted: context.raw });
-        break;
-      }
       if (command.args[0] === 'cancel') {
         if (groupTimers.has(context.chatId + ':close')) { clearTimeout(groupTimers.get(context.chatId + ':close')); groupTimers.delete(context.chatId + ':close'); }
         await socket.sendMessage(context.chatId, { text: '✅ Close timer cancelled.' }, { quoted: context.raw });
         break;
       }
+      const duration2 = parseDuration(command.args.join(' '));
+      if (!duration2) {
+        await socket.sendMessage(context.chatId, { text: '❌ Invalid duration.\nUsage: !closetime <30s|5m|1h|1h30m>\nCancel: !closetime cancel' }, { quoted: context.raw });
+        break;
+      }
+
       await socket.sendMessage(context.chatId, { text: '🔒 Group will close in *' + formatDuration(duration2) + '*' }, { quoted: context.raw });
       const timer2 = setTimeout(async () => {
         try {
@@ -2421,30 +2386,6 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 }
 
 // Handle protocol message (delete events)
-async function handleProtocolDelete(socket, rawMessage) {
-  const chatId = rawMessage?.key?.remoteJid;
-  if (!chatId?.endsWith('@g.us')) return;
-
-  const settings = await groupSettings.get(chatId);
-  if (!settings.antidelete) return;
-
-  const deletedKey = rawMessage.message?.protocolMessage?.key;
-  if (!deletedKey?.id) return;
-
-  const cached = deletedMessageCache.get(`${chatId}:${deletedKey.id}`);
-  if (!cached) return;
-  deletedMessageCache.delete(`${chatId}:${deletedKey.id}`);
-
-  // Skip if too old (>5 min)
-  if (Date.now() - cached.timestamp > 5 * 60 * 1000) return;
-
-  const senderNum = cached.sender?.split('@')[0] || 'unknown';
-  await socket.sendMessage(chatId, {
-    text: `*Anti-delete*\n\nFrom: @${senderNum}\n\n${cached.text}`,
-    mentions: cached.sender ? [cached.sender] : []
-  }).catch(() => {});
-}
-
 module.exports = handleMessage;
 module.exports.commandFromText = commandFromText;
 module.exports.helpText = helpText;

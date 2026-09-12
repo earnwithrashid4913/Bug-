@@ -31,3 +31,6 @@ Thumbs.db
 .idea/
 
 /src/assets/images/*.jpg
+
+# User-supplied welcome videos (keep binary assets out of Git)
+/media/connection/*.mp4
