@@ -1,5 +1,9 @@
 'use strict';
 
+const { AnimeLibraryClient } = require('./anime-library');
+
+const { font } = require('./presentation');
+
 // A small Telegram Bot API client used for remote *control* of the WhatsApp
 // pairing system. It deliberately has no WhatsApp implementation of its own:
 // the TelegramPairingManager owns every socket and session.
@@ -236,7 +240,7 @@ function formatTime(date = new Date()) {
 
 function box(title, lines) {
   const body = lines.map((line) => (line ? `┃ ${line}` : '┃')).join('\n');
-  return `╭━━〔 ${title} 〕━╮\n${body}\n╰${'━'.repeat(24)}╯`;
+  return `╭━━〔 ${font(title)} 〕━╮\n${body}\n╰${'━'.repeat(24)}╯`;
 }
 
 const CODE_SOURCE_LABEL = 'WhatsApp-generated';
@@ -258,13 +262,8 @@ function formatRemainingDuration(milliseconds) {
 
 // The ANIME MD intro / main-menu header.
 //
-// This is deliberately plain Latin text inside the standard ANIME MD box.
-// Decorative "fancy font" characters (MATHEMATICAL ALPHANUMERIC SYMBOLS, the
-// U+1D400-U+1D7FF block) live in the Unicode supplementary planes: most
-// Telegram clients have no font for them, so they render mirrored, inverted or
-// as empty boxes — text that reads backwards/garbled on the user's screen.
-// Plain ASCII renders identically on every client, which is exactly what the
-// ANIME MD style is for.
+// Only display titles use the requested mathematical-bold font. Body text,
+// pairing codes, command strings and callback IDs remain unchanged.
 //
 // It never claims a WhatsApp connection: the connected notification is a
 // separate, real event.
@@ -499,6 +498,8 @@ function guideBox() {
 function connectedBox(numberDisplay, username) {
   const lines = [
     '',
+    '✦ ANIME-MD • LINK COMPLETE ✦',
+    '✅ Pairing Completed Successfully',
     '✅ WhatsApp Connected',
     '',
     `📱 ${numberDisplay}`
@@ -507,6 +508,8 @@ function connectedBox(numberDisplay, username) {
   lines.push(
     '',
     '🟢 Session: ACTIVE',
+    '🔐 Secure Session',
+    '⚡ System Ready',
     '',
     'Your ANIME MD session is ready.',
     '',
@@ -1082,7 +1085,7 @@ function friendlyReasonLine(error) {
 
 function helpText() {
   return [
-    '╭━━〔 ANIME MD • HELP 〕━╮',
+    `╭━━〔 ${font('ANIME MD • HELP')} 〕━╮`,
     '┃',
     '┃ /start — open the bot',
     '┃ /verify — complete verification',
@@ -1183,7 +1186,7 @@ function formatUptime(totalSeconds = 0) {
 // Management commands are shown only to the roles that may run them.
 function helpTextForRole(role = 'normal') {
   const lines = [
-    '╭━━〔 ANIME MD • HELP 〕━╮',
+    `╭━━〔 ${font('ANIME MD • HELP')} 〕━╮`,
     '┃',
     '┃ 📱 PAIRING',
     '┃ /pair <number> — pair a WhatsApp number',
@@ -1549,7 +1552,7 @@ class TelegramController {
   constructor({
     token, owners = [], controllerStore, pairing, startImage = '', connectedImage = '',
     publicMode = false, premiumOnly = false, requiredChannels = [], sessionLimit = 5, codeSource = '',
-    identity = {}, commandPrefix = '!',
+    identity = {}, commandPrefix = '!', animeEdit = {},
     fetchImpl = globalThis.fetch, log = console, activityLogger
   }) {
     this.token = token;
@@ -1588,6 +1591,8 @@ class TelegramController {
     this.commandPrefix = String(commandPrefix || '!').slice(0, 4);
     this.fetch = fetchImpl;
     this.log = log;
+    this.animeLibrary = new AnimeLibraryClient(animeEdit, { fetchImpl, log });
+    this.animeNotifiedSessions = new Set();
     // Optional owner-activity hook. index.js wires this to the bootstrap owner
     // notification path; when absent (unit tests) activity logging is a no-op.
     this.activityLogger = typeof activityLogger === 'function' ? activityLogger : undefined;
@@ -2084,6 +2089,23 @@ class TelegramController {
   async replyPhoto(chatId, image, caption, replyMarkup) {
     if (!image) return this.reply(chatId, caption, replyMarkup);
     return this.api('sendPhoto', { chat_id: chatId, photo: image, caption: escapeTelegramHtml(caption), parse_mode: 'HTML', ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+  }
+
+  async replyVideo(chatId, video, caption) {
+    // Reuse the existing Telegram API transport, escaping and bounded timeout.
+    // Telegram fetches the authorized hosted video; no local library download.
+    return this.api('sendVideo', { chat_id: chatId, video, caption: escapeTelegramHtml(caption), parse_mode: 'HTML', supports_streaming: true });
+  }
+
+  scheduleAnimeEdit(ownerId, session, chatId) {
+    if (!this.animeLibrary.enabled) return;
+    const key = `${ownerId}:${session?.number || ''}`;
+    if (this.animeNotifiedSessions.has(key)) return;
+    this.animeNotifiedSessions.add(key);
+    // This runs only AFTER the success message has been delivered. Never await
+    // it from the connection callback. Reconnects do not repeat optional media.
+    void this.animeLibrary.deliver(session?.number, (url, label) => this.replyVideo(chatId, url, label))
+      .catch(() => this.log.warn?.('[anime-edit] Optional delivery failed.'));
   }
 
   // Edits an existing message when it is still editable; otherwise sends a
@@ -3670,15 +3692,27 @@ class TelegramController {
       // One message, edited in place — the group sees the masked number, a
       // private chat sees the full one.
       const successText = connectedBox(flow.public ? flow.publicDisplay : (session?.numberDisplay || flow.numberDisplay), flow.actor?.username);
-      await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, successText, connectedMarkup())).catch((error) => {
-        this.log.warn?.(`[telegram] Could not update the connected state in chat ${flow.chatId}: ${error.message}`);
-      });
+      try {
+        await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, successText, connectedMarkup()));
+        this.scheduleAnimeEdit(ownerId, session, flow.chatId);
+      } catch {
+        this.log.warn?.('[telegram] Could not update the connected state; trying text fallback.');
+        try {
+          await this.reply(flow.chatId, successText, connectedMarkup());
+          this.scheduleAnimeEdit(ownerId, session, flow.chatId);
+        } catch { this.log.warn?.('[telegram] Could not deliver the connected notification.'); }
+      }
       return;
     }
     try {
       await this.replyPhoto(ownerId, this.connectedImage, connectedBox(session?.numberDisplay || session?.number || ''), connectedMarkup());
-    } catch (error) {
-      this.log.warn?.(`[telegram] Could not deliver the connected notification to ${ownerId}: ${error.message}`);
+      this.scheduleAnimeEdit(ownerId, session, ownerId);
+    } catch {
+      this.log.warn?.('[telegram] Connected image unavailable; trying text fallback.');
+      try {
+        await this.reply(ownerId, connectedBox(session?.numberDisplay || session?.number || ''), connectedMarkup());
+        this.scheduleAnimeEdit(ownerId, session, ownerId);
+      } catch { this.log.warn?.('[telegram] Could not deliver the connected notification.'); }
     }
   }
 

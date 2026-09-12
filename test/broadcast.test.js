@@ -88,11 +88,11 @@ test('!broadcast reports the real delivery count instead of a fake success', asy
   const sent = [];
   await handler(ownerSocket(sent), ownerMessage('!broadcast Maintenance tonight'));
 
-  const reply = sent.find((entry) => /BROADCAST FINISHED/.test(entry.payload.text || ''));
+  const reply = sent.find((entry) => /BROADCAST FINISHED/.test((entry.payload.text || '').normalize('NFKC')));
   assert.ok(reply, `the owner got a real report: ${JSON.stringify(sent.map((entry) => entry.payload.text))}`);
-  assert.match(reply.payload.text, /\*Delivered:\* \d+/);
-  assert.match(reply.payload.text, /\*Failed:\* \d+/);
-  const delivered = Number(reply.payload.text.match(/\*Delivered:\* (\d+)/)[1]);
+  assert.match(reply.payload.text.normalize('NFKC'), /\*Delivered:\* \d+/);
+  assert.match(reply.payload.text.normalize('NFKC'), /\*Failed:\* \d+/);
+  const delivered = Number(reply.payload.text.normalize('NFKC').match(/\*Delivered:\* (\d+)/)[1]);
   const echoed = sent.filter((entry) => /Announcement/.test(entry.payload.text || '')).length;
   assert.equal(delivered, echoed, 'the reported count matches what was actually sent');
   // The owner never receives their own broadcast twice.
@@ -103,7 +103,7 @@ test('!broadcast without a message shows the usage, not a fake confirmation', as
   const sent = [];
   await handler(ownerSocket(sent), ownerMessage('!broadcast'));
   const text = sent.map((entry) => entry.payload.text || '').join('\n');
-  assert.match(text, /USAGE/);
+  assert.match(text.normalize('NFKC'), /USAGE/);
   assert.doesNotMatch(text, /BROADCAST FINISHED/);
 });
 

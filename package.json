@@ -33,6 +33,7 @@
     "@whiskeysockets/baileys": "7.0.0-rc14",
     "axios": "^1.20.0",
     "chalk": "^4.1.2",
+    "libphonenumber-js": "1.13.13",
     "node-webpmux": "^3.2.1",
     "pino": "^9.9.4",
     "qrcode": "^1.5.4",

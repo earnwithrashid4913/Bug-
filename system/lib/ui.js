@@ -2,6 +2,8 @@
 
 const { generateWAMessageFromContent, proto } = require('@whiskeysockets/baileys');
 
+const { styleHeaders } = require('./presentation');
+
 const MAX_QUICK_BUTTONS = 3;
 
 function cleanText(value) {
@@ -43,7 +45,7 @@ async function relayInteractive(socket, chatId, { text, footer = '', buttons = [
   }
 
   const content = proto.Message.InteractiveMessage.create({
-    body: proto.Message.InteractiveMessage.Body.create({ text: cleanText(text) }),
+    body: proto.Message.InteractiveMessage.Body.create({ text: cleanText(styleHeaders(text)) }),
     footer: proto.Message.InteractiveMessage.Footer.create({ text: cleanText(footer) }),
     header: proto.Message.InteractiveMessage.Header.create({ title: '', subtitle: '', hasMediaAttachment: false }),
     nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
@@ -72,7 +74,7 @@ async function sendButtons(socket, chatId, { text, footer = '', buttons = [], fa
     });
   } catch (error) {
     const fallback = fallbackText || [text, '', ...buttons.map((button) => `${button.label} — ${button.id}`), footer].filter(Boolean).join('\n');
-    return socket.sendMessage(chatId, { text: fallback }, { quoted });
+    return socket.sendMessage(chatId, { text: styleHeaders(fallback) }, { quoted });
   }
 }
 
@@ -93,7 +95,7 @@ async function sendList(socket, chatId, { text, footer = '', title, sections = [
   } catch (error) {
     const rows = sections.flatMap((section) => section.rows || []);
     const fallback = fallbackText || [text, '', ...rows.map((row) => `${row.title} — ${row.id}`), ...actions.map((action) => `${action.label} — ${action.id}`), footer].filter(Boolean).join('\n');
-    return socket.sendMessage(chatId, { text: fallback }, { quoted });
+    return socket.sendMessage(chatId, { text: styleHeaders(fallback) }, { quoted });
   }
 }
 
