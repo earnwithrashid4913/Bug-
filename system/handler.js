@@ -1833,6 +1833,11 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     case 'warns':
     case 'warnings': {
+      // The menu declares this command admin-only; enforce it like the rest of
+      // the warning family so a regular member cannot list group warnings.
+      const group = await requireGroupAdmin(socket, context);
+      if (!group) break;
+      await handleWarnsCommand(socket, context);
       await handleWarnsCommand(socket, context, command);
       break;
     }

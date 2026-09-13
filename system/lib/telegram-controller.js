@@ -243,6 +243,31 @@ function box(title, lines) {
   return `╭━━〔 ${font(title)} 〕━╮\n${body}\n╰${'━'.repeat(24)}╯`;
 }
 
+// ---------------------------------------------------------------------------
+// ANIME SYSTEM card style — used ONLY by the three dashboard cards (main
+// menu, /status, /settings). Purely visual: `bold()` maps ASCII letters and
+// digits to MATHEMATICAL BOLD glyphs at render time; every other character
+// (emoji, JIDs, +, /, ∞, …) passes through untouched, so dynamic values can
+// never be corrupted. Nothing here mutates stored data or identifiers.
+// ---------------------------------------------------------------------------
+const BOLD_UPPER_BASE = 0x1D400; // 𝐀
+const BOLD_LOWER_BASE = 0x1D41A; // 𝐚
+const BOLD_DIGIT_BASE = 0x1D7CE; // 𝟎
+
+function bold(text = '') {
+  return String(text).replace(/[A-Za-z0-9]/g, (ch) => {
+    const code = ch.charCodeAt(0);
+    if (code >= 65 && code <= 90) return String.fromCodePoint(BOLD_UPPER_BASE + code - 65);
+    if (code >= 97 && code <= 122) return String.fromCodePoint(BOLD_LOWER_BASE + code - 97);
+    return String.fromCodePoint(BOLD_DIGIT_BASE + code - 48);
+  });
+}
+
+function animeBox(title, lines) {
+  const body = lines.map((line) => (line ? `┃   ${line}` : '┃')).join('\n');
+  return `╭━━━〔 ${title} 〕━━━╮\n┃\n${body}\n╰${'━'.repeat(25)}╯`;
+}
+
 const CODE_SOURCE_LABEL = 'WhatsApp-generated';
 
 const _two = (value) => String(value).padStart(2, '0');
@@ -260,27 +285,42 @@ function formatRemainingDuration(milliseconds) {
   return `${_two(hours)}h ${_two(minutes)}m`;
 }
 
-// The ANIME MD intro / main-menu header.
+// The ANIME MD intro / main-menu header, in the ANIME SYSTEM card style.
 //
+// NOTE (rendering trade-off, kept from the previous design): decorative
+// "fancy font" characters (MATHEMATICAL ALPHABETIC SYMBOLS, U+1D400-U+1D7FF)
+// live in the Unicode supplementary planes. Some Telegram clients without a
+// matching font render them mirrored or as empty boxes. The owner has chosen
+// this style deliberately for the dashboard cards; `bold()` only transforms
+// ASCII letters/digits at render time, so all data and logic stay intact.
 // Only display titles use the requested mathematical-bold font. Body text,
 // pairing codes, command strings and callback IDs remain unchanged.
 //
 // It never claims a WhatsApp connection: the connected notification is a
 // separate, real event.
 function startupBox() {
-  return box('ANIME MD • MAIN MENU', [
+  return animeBox(`⚡ ${bold('ANIME MD')} • ${bold('MAIN MENU')}`, [
+    `  ✦ ${bold('ANIME MD')} ✦`,
     '',
-    '⚡ ANIME MD',
-    '🤖 System: Online',
-    '⚡ Status: Operational'
+    `「 🤖 」 ${bold('SYSTEM')} 〢 🟢 ${bold('ONLINE')}`,
+    `「 ⚡ 」 ${bold('STATUS')} 〢 ${bold('OPERATIONAL')}`,
+    '',
+    `════「 ${bold('SYSTEM READY')} 」════`
   ]);
 }
 
 // The action prompt is kept outside the box: it belongs to the dashboard
 // render (next to the buttons), not to the status box itself, and keeping it
 // in one place avoids the header and the footer repeating the same line.
+// Presentation only — tierLabel/used/limitDisplay stay fully dynamic.
 function menuPrompt(tierLabel, used, limitDisplay) {
-  return `👇 Choose an action below, or use /help.\n\n${tierLabel} • Sessions: ${used}/${limitDisplay}`;
+  return [
+    `⚔️ ${bold('CHOOSE YOUR PATH')} ⚔️`,
+    `〘 /help 〙 ${bold('FOR ALL COMMANDS')}`,
+    '',
+    tierLabel,
+    `📱 ${bold('SESSIONS')} 〢 ${bold(String(used))} / ${bold(String(limitDisplay))}`
+  ].join('\n');
 }
 
 // The visible acknowledgement posted the moment a pairing request is
@@ -663,6 +703,19 @@ function premiumRequiredBox() {
   ]);
 }
 
+// Shown when public pairing is OFF and premium-only is also OFF: the public
+// toggle's documented policy ("Only authorized controllers can pair") applies.
+function pairingDisabledBox() {
+  return box('ANIME MD • PAIRING', [
+    '',
+    '🔒 Public pairing is disabled.',
+    'Only authorized controllers can',
+    'pair numbers right now.',
+    '',
+    'Contact the bot owner for access.'
+  ]);
+}
+
 function myIdBox({ id, premium, vip, owner, verified }) {
   return box('ANIME MD • MY ID', [
     '',
@@ -863,11 +916,15 @@ function overallStatusBox(sessions, controllerUptimeSeconds, user = {}, publicCh
       ? 'Not Verified'
       : 'Unknown';
   const lines = [
+    `✦ ${bold('ANIME MD')} ✦`,
+    `「 🤖 」 ${bold('CONTROLLER')} 〢 🟢 ${bold('ONLINE')}`,
+    `「 ⏱️ 」 ${bold('UPTIME')} 〢 ${uptimeClock(controllerUptimeSeconds)}`,
+    `「 📱 」 ${bold('WHATSAPP')} 〢 ${bold(String(sessions.length))} ${bold(sessions.length === 1 ? 'SESSION' : 'SESSIONS')}`,
     '',
-    `🤖 Controller: Online (${Math.floor(controllerUptimeSeconds / 60)}m uptime)`,
-    `📱 WhatsApp sessions: ${sessions.length}`,
-    `${tier.icon} Tier: ${tier.label}`,
-    `🔐 Membership: ${membership}`
+    `${tier.icon} ${bold('TIER')} 〢 ${bold(tier.label)}`,
+    `🔐 ${bold('MEMBERSHIP')} 〢 ${bold(membership.toUpperCase())}`,
+    '',
+    `═══「 ${bold('SYSTEM READY')} 」═══`
   ];
   if (sessions.length) {
     lines.push('', ...sessions.map((session) => {
@@ -875,32 +932,36 @@ function overallStatusBox(sessions, controllerUptimeSeconds, user = {}, publicCh
       return `${icon} ${displayNumber(session, publicChat)} — ${label || session.status}`;
     }));
   } else {
-    lines.push('', 'No WhatsApp sessions yet.', 'Telegram online ≠ WhatsApp connected.', 'Use /pair <number> to pair.');
+    lines.push('', '⚡ Telegram Online', '◇ No WhatsApp session connected', `〘 /pair <number> 〙 ${bold('TO CONNECT')}`);
   }
-  return box('ANIME MD • STATUS', lines);
+  return animeBox(`⚡ ${bold('ANIME MD')} • ${bold('SYSTEM')}`, lines);
 }
 
 function settingsBox({ id, premium, owner, sessionsUsed, sessionLimit, publicMode, premiumOnly, brand, controllers, premiumUsers }) {
   if (owner) {
-    return box('ANIME MD • SETTINGS', [
+    return animeBox(`⚡ ${bold('ANIME MD')} • ${bold('SYSTEM SETTINGS')}`, [
+      `👑 ${bold('MASTER CONTROL')}`,
+      `⚡ ${bold('SORCERERS')} 〢 ${bold(String(controllers))}`,
+      `💎 ${bold('PREMIUM USERS')} 〢 ${bold(String(premiumUsers))}`,
       '',
-      '👑 Master Control',
-      `🤖 Controllers: ${controllers}`,
-      `💎 Premium users: ${premiumUsers}`,
-      `🌍 Public pairing: ${publicMode ? 'ON 🌍' : 'OFF 🔒'}`,
-      `💎 Premium-only pairing: ${premiumOnly ? 'ON 🔒' : 'OFF 🌍'}`,
-      `🔐 Pairing code: ${brand || 'WhatsApp-generated'}`,
+      `🌍 ${bold('PUBLIC PAIRING')} 〢 ${publicMode ? `${bold('ON')} 🌍` : `${bold('OFF')} 🔒`}`,
+      `💎 ${bold('PREMIUM ONLY')} 〢 ${premiumOnly ? `${bold('ON')} 🔒` : `${bold('OFF')} 🌍`}`,
+      `🔐 ${bold('PAIRING CODE')} 〢 ${bold(String(brand || CODE_SOURCE_LABEL))}`,
       '',
-      'Toggle with the buttons below.'
+      `═══「 ${bold('SYSTEM CONTROL')} 」═══`,
+      '',
+      '✦ Toggle settings using the buttons below.'
     ]);
   }
-  return box('ANIME MD • SETTINGS', [
+  return animeBox(`⚡ ${bold('ANIME MD')} • ${bold('SYSTEM SETTINGS')}`, [
+    `👤 ${bold('USER')} 〢 ${bold(String(id))}`,
+    `💎 ${bold('PREMIUM')} 〢 ${premium ? `${bold('ACTIVE')} ✅` : `${bold('INACTIVE')} ❌`}`,
+    `📱 ${bold('SESSIONS')} 〢 ${bold(String(sessionsUsed))} / ${Number.isFinite(sessionLimit) ? bold(String(sessionLimit)) : '∞'}`,
     '',
-    `👤 User: ${id}`,
-    `💎 Premium: ${premium ? 'Active ✅' : 'Inactive ❌'}`,
-    `📱 Sessions: ${sessionsUsed}/${Number.isFinite(sessionLimit) ? sessionLimit : '∞'}`,
-    `🌍 Public pairing: ${publicMode ? 'ON 🌍' : 'OFF 🔒'}`,
-    `💎 Premium-only pairing: ${premiumOnly ? 'ON 🔒' : 'OFF 🌍'}`
+    `🌍 ${bold('PUBLIC PAIRING')} 〢 ${publicMode ? `${bold('ON')} 🌍` : `${bold('OFF')} 🔒`}`,
+    `💎 ${bold('PREMIUM ONLY')} 〢 ${premiumOnly ? `${bold('ON')} 🔒` : `${bold('OFF')} 🌍`}`,
+    '',
+    `═══「 ${bold('SYSTEM CONTROL')} 」═══`
   ]);
 }
 
@@ -1180,6 +1241,17 @@ function formatUptime(totalSeconds = 0) {
   const hours = Math.floor((total % 86400) / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   return `${days}d ${hours}h ${minutes}m`;
+}
+
+// Display-only clock for the /status card: always "Xd / Xh / Xm" with every
+// unit visible (e.g. 0 seconds renders as 𝟎𝐝 / 𝟎𝐡 / 𝟎𝐦). Same live input as
+// formatUptime — the canonical formatter and its logic are unchanged.
+function uptimeClock(totalSeconds = 0) {
+  const total = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return `${bold(`${days}d`)} / ${bold(`${hours}h`)} / ${bold(`${minutes}m`)}`;
 }
 
 // Role-filtered help: normal/premium/vip users only ever see user commands.
@@ -2504,7 +2576,24 @@ class TelegramController {
     // Public chats only ever see the masked form of the number.
     const publicDisplay = publicChat ? maskInternationalNumber(number) : numberDisplay;
 
-    if (this.premiumOnly) {
+    // -----------------------------------------------------------------------
+    // Pairing access matrix — the single gate for the whole /pair flow.
+    //   publicMode ON   → any verified user may pair; the premium-only
+    //                     restriction deliberately does NOT execute.
+    //   publicMode OFF  → pairing is controller/owner territory ("Only
+    //                     authorized controllers can pair" — the toggle's own
+    //                     documented policy). With premiumOnly also ON, a
+    //                     non-bootstrap user additionally needs premium/VIP;
+    //                     non-premium controllers stay blocked (existing,
+    //                     test-enforced policy — bootstrap owners bypass).
+    // -----------------------------------------------------------------------
+    const accessLevel = await this.accessOf(senderId);
+    const isPrivilegedPairer = accessLevel === 'bootstrap' || accessLevel === 'controller';
+    if (!this.publicMode && !isPrivilegedPairer && !this.premiumOnly) {
+      await this.reply(chatId, pairingDisabledBox());
+      return;
+    }
+    if (!this.publicMode && this.premiumOnly) {
       const premium = await this.premiumStatusOf(senderId);
       const vip = await this.vipStatusOf(senderId);
       if (!premium.premium && !vip.vip) {
@@ -3055,7 +3144,7 @@ class TelegramController {
           const limit = await this.pairingLimitOf(command.senderId);
           const used = await this.pairingUsageOf(command.senderId);
           const limitDisplay = Number.isFinite(limit) ? limit : '∞';
-          await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\n${menuPrompt(`${tier.icon} Role: ${tier.label}`, used, limitDisplay)}`, roleHomeMarkup(role));
+          await this.replyPhoto(command.chatId, this.startImage, `${startupBox()}\n\n${menuPrompt(`${tier.icon} ${bold('ROLE')} 〢 ${bold(tier.label)}`, used, limitDisplay)}`, roleHomeMarkup(role));
           return;
         }
         case 'guide':
@@ -3405,7 +3494,7 @@ class TelegramController {
         const limit = await this.pairingLimitOf(senderId);
         const used = await this.pairingUsageOf(senderId);
         const limitDisplay = Number.isFinite(limit) ? limit : '∞';
-        return await this.present(chatId, messageId, `${startupBox()}\n\n${menuPrompt(`${tier.icon} Role: ${tier.label}`, used, limitDisplay)}`, roleHomeMarkup(role));
+        return await this.present(chatId, messageId, `${startupBox()}\n\n${menuPrompt(`${tier.icon} ${bold('ROLE')} 〢 ${bold(tier.label)}`, used, limitDisplay)}`, roleHomeMarkup(role));
       }
       if (action === 'pair:new') {
         return await this.beginPairPrompt(chatId, senderId);
@@ -3925,6 +4014,7 @@ module.exports = {
   GROUP_PAIRING_COOLDOWN_MS,
   MAX_GROUP_PAIRING_FLOWS,
   premiumRequiredBox,
+  pairingDisabledBox,
   sessionsBox,
   sessionsMarkup,
   sessionMenuMarkup,

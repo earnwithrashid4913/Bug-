@@ -73,11 +73,16 @@ test('the Telegram controller wiring starts, greets with the ANIME MD intro, and
 
   // The startup greeting reaches the configured bootstrap owner first
   // (as a photo caption because a start image is configured).
+  await waitFor((entry) => /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/.test(entry.payload.text || entry.payload.caption || ''), 'the anime md intro');
+  const greeting = sent.find((entry) => /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/.test(entry.payload.text || entry.payload.caption || ''));
   await waitFor((entry) => /ANIME MD • MAIN MENU/.test(normalizeTelegramHeadings(entry.payload.text || entry.payload.caption || '')), 'the anime md intro');
   const greeting = sent.find((entry) => /ANIME MD • MAIN MENU/.test(normalizeTelegramHeadings(entry.payload.text || entry.payload.caption || '')));
   const greetingText = greeting.payload.text || greeting.payload.caption;
-  assert.match(greetingText, /🤖 System: Online/);
+  assert.match(greetingText, /「 🤖 」 𝐒𝐘𝐒𝐓𝐄𝐌 〢 🟢 𝐎𝐍𝐋𝐈𝐍𝐄/);
   assert.doesNotMatch(greetingText, /WhatsApp Connected/);
+  // ANIME SYSTEM style: supplementary-plane mathematical-bold glyphs are the
+  // owner-chosen presentation for the dashboard cards.
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(greetingText), 'the intro uses the anime-system bold style');
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(greetingText.split('\n')[0]), 'styled title');
   assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(greetingText.split('\n').slice(1).join('\n')), 'body is unchanged');
 
@@ -87,9 +92,9 @@ test('the Telegram controller wiring starts, greets with the ANIME MD intro, and
   assert.match(sessionsText, /No sessions yet/);
 
   // /status never claims a WhatsApp connection.
-  await waitFor((entry) => /WhatsApp sessions: 0/.test(entry.payload.text || ''), '/status');
-  const statusText = sent.find((entry) => /WhatsApp sessions: 0/.test(entry.payload.text || '')).payload.text;
-  assert.match(statusText, /Telegram online ≠ WhatsApp connected/);
+  await waitFor((entry) => /𝐖𝐇𝐀𝐓𝐒𝐀𝐏𝐏 〢 𝟎 𝐒𝐄𝐒𝐒𝐈𝐎𝐍𝐒/.test(entry.payload.text || ''), '/status');
+  const statusText = sent.find((entry) => /𝐖𝐇𝐀𝐓𝐒𝐀𝐏𝐏 〢 𝟎 𝐒𝐄𝐒𝐒𝐈𝐎𝐍𝐒/.test(entry.payload.text || '')).payload.text;
+  assert.match(statusText, /◇ No WhatsApp session connected/);
 
   // /pair with an invalid number fails fast with a friendly box and no socket.
   await waitFor((entry) => /number format is invalid/.test(entry.payload.text || ''), '/pair rejection');

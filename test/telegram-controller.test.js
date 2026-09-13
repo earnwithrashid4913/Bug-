@@ -140,10 +140,11 @@ test('/status without arguments never claims WhatsApp is connected', async () =>
   });
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/status' } });
   const status = replies.pop().text;
-  assert.match(status, /ANIME MD • STATUS/);
-  assert.match(status, /Controller: Online/);
-  assert.match(status, /WhatsApp sessions: 0/);
-  assert.match(status, /Telegram online ≠ WhatsApp connected/);
+  assert.match(status, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐒𝐘𝐒𝐓𝐄𝐌/);
+  assert.match(status, /𝐂𝐎𝐍𝐓𝐑𝐎𝐋𝐋𝐄𝐑 〢 🟢 𝐎𝐍𝐋𝐈𝐍𝐄/);
+  assert.match(status, /𝐔𝐏𝐓𝐈𝐌𝐄 〢 𝟎𝐝 \/ 𝟎𝐡 \/ 𝟎𝐦/);
+  assert.match(status, /𝐖𝐇𝐀𝐓𝐒𝐀𝐏𝐏 〢 𝟎 𝐒𝐄𝐒𝐒𝐈𝐎𝐍𝐒/);
+  assert.match(status, /◇ No WhatsApp session connected/);
 });
 
 test('/status <number> shows one session and /restart asks for a number', async () => {
@@ -240,9 +241,12 @@ test('Telegram startup shows the ANIME MD intro, verifies the token, and starts 
   assert.deepEqual(methods.slice(0, 2), ['getMe', 'deleteWebhook']);
   assert.equal(await controller.start(), false, 'a second listener is never started');
     const intro = captions[0];
-  assert.match(intro, /ANIME MD • MAIN MENU/);
-  assert.match(intro, /🤖 System: Online/);
+  assert.match(intro, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
+  assert.match(intro, /「 🤖 」 𝐒𝐘𝐒𝐓𝐄𝐌 〢 🟢 𝐎𝐍𝐋𝐈𝐍𝐄/);
   assert.match(intro, /buttons below/);
+  // ANIME SYSTEM style: mathematical-bold glyphs (U+1D400-U+1D7FF) are the
+  // owner-chosen presentation for the dashboard cards.
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(intro), 'the intro uses the anime-system bold style');
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(intro.split('\n')[0]), 'styled title');
   assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(intro.split('\n').slice(1).join('\n')), 'body is unchanged');
   // No server-dashboard jargon in the intro.
@@ -258,12 +262,15 @@ test('Telegram startup shows the ANIME MD intro, verifies the token, and starts 
 
 test('the startup box never claims a WhatsApp connection by itself', () => {
   const text = startupBox();
-  assert.match(text, /╭━━〔 ANIME MD • MAIN MENU 〕━╮/);
-  assert.match(text, /⚡ ANIME MD/);
-  assert.match(text, /🤖 System: Online/);
-  assert.match(text, /⚡ Status: Operational/);
+  assert.match(text, /╭━━━〔 ⚡ 𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔 〕━━━╮/);
+  assert.match(text, /✦ 𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 ✦/);
+  assert.match(text, /「 🤖 」 𝐒𝐘𝐒𝐓𝐄𝐌 〢 🟢 𝐎𝐍𝐋𝐈𝐍𝐄/);
+  assert.match(text, /「 ⚡ 」 𝐒𝐓𝐀𝐓𝐔𝐒 〢 𝐎𝐏𝐄𝐑𝐀𝐓𝐈𝐎𝐍𝐀𝐋/);
   assert.doesNotMatch(text, /WhatsApp Connected/);
   assert.doesNotMatch(text, /Session is active/);
+  // ANIME SYSTEM style uses decorative mathematical-bold glyphs on purpose —
+  // an owner-chosen, visual-only presentation; values and logic stay intact.
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(text), 'the startup box uses the anime-system bold style');
   const [heading, ...body] = text.split('\n');
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(heading), 'requested bold Unicode title');
   assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(body.join('\n')), 'body and identifiers remain unchanged');
@@ -422,7 +429,7 @@ test('public mode lets any Telegram user verify, pair and manage only their own 
   });
   // A stranger receives the intro plus a verify prompt (no access-denied box).
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/start' } });
-  assert.match(replies.at(-1).caption || replies.at(-1).text, /ANIME MD • MAIN MENU/);
+  assert.match(replies.at(-1).caption || replies.at(-1).text, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
   // Restricted commands require self-verification before they run.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match((replies.at(-1).caption || replies.at(-1).text) || '', /VERIFICATION/);
@@ -467,6 +474,49 @@ test('premium-only pairing blocks non-premium controllers and bootstrap owners b
   controller.sensitiveRequests.clear();
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/pair 12025550123' } });
   assert.match(replies.at(-1).text, /CODE: KJ4M-NP2X/);
+});
+
+test('pairing access matrix: public ON skips premium-only; public OFF+premium OFF is controller-only', async () => {
+  const baseStore = {
+    has: async () => false,
+    getUser: async () => ({ verified: true, pairedNumbers: [] }),
+    updateUser: async () => ({}),
+    pairedNumbersOf: async () => [],
+    addPairedNumber: async () => {},
+    removePairedNumber: async () => {},
+    isVerified: async () => true,
+    markVerified: async () => {},
+    blockStatus: async () => ({ blocked: false }),
+    users: async () => ({}),
+    getSettings: async () => ({}),
+    setSetting: async (_key, value) => value,
+    hasPremium: async (id) => (String(id) === '30' ? { premium: true, expiresAt: Date.now() + 86_400_000 } : { premium: false }),
+    vipStatus: async () => ({ vip: false })
+  };
+  const codePairing = fakePairing({ requestPairing: async (_ownerId, number) => ({ code: 'KJ4MNP2X', displayCode: 'KJ4M-NP2X', brand: 'WhatsApp-generated', number, numberDisplay: `+${number}`, expiresAt: Date.now() + 300_000 }) });
+
+  // Public ON + premium ON: a normal verified user may pair — the premium-only
+  // restriction must not execute while public pairing is ON.
+  const pub = makeController({ publicMode: true, premiumOnly: true, controllerStore: baseStore, pairing: codePairing });
+  await pub.controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/pair 923001234567' } });
+  assert.match(pub.replies.at(-1).text, /CODE: KJ4M-NP2X/);
+
+  // Public OFF + premium OFF: a normal user is denied (controller-only), while
+  // an authorized controller still pairs.
+  const closedStore = { ...baseStore, has: async (id) => String(id) === '20' };
+  const closed = makeController({ publicMode: false, premiumOnly: false, controllerStore: closedStore, pairing: codePairing });
+  await closed.controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/pair 923001234567' } });
+  assert.match(closed.replies.at(-1).text, /Public pairing is disabled/);
+  await closed.controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 20 }, text: '/pair 923001234567' } });
+  assert.match(closed.replies.at(-1).text, /CODE: KJ4M-NP2X/);
+
+  // Public OFF + premium ON: premium users pair, normal users need premium.
+  const premGate = makeController({ publicMode: false, premiumOnly: true, controllerStore: { ...baseStore }, pairing: codePairing });
+  await premGate.controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 30 }, text: '/pair 923001234567' } });
+  assert.match(premGate.replies.at(-1).text, /CODE: KJ4M-NP2X/);
+  await premGate.controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/pair 923001234567' } });
+  assert.match(premGate.replies.at(-1).text, /PREMIUM/);
+  assert.match(premGate.replies.at(-1).text, /premium users/);
 });
 
 test('required channels gate pairing until joined; bootstrap owners skip the check', async () => {
@@ -621,7 +671,7 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
   // The home view is the dashboard with its navigation buttons.
   await callback('home');
   const home = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(home.payload.text, /ANIME MD • MAIN MENU/);
+  assert.match(home.payload.text, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
   // Home now includes role-aware buttons, check that core buttons exist
   const flat = home.payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data);
   for (const expected of ['pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help', 'nav:allmenu', 'nav:developer', 'nav:thanks', 'nav:premium', 'nav:account']) {
@@ -700,7 +750,7 @@ test('settings toggles are bootstrap-only and persist through the controller sto
   await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: 'set:public:on', message: { chat: { id: 1 }, message_id: 5 } } });
   assert.deepEqual(settings, [{ key: 'publicMode', value: true }]);
   const view = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(view.payload.text, /Public pairing: ON/);
+  assert.match(view.payload.text, /𝐏𝐔𝐁𝐋𝐈𝐂 𝐏𝐀𝐈𝐑𝐈𝐍𝐆 〢 𝐎𝐍 🌍/);
   assert.equal(controller.publicMode, true);
 });
 
@@ -779,12 +829,16 @@ function flowPairing(overrides = {}) {
   };
 }
 
-function flowController({ calls, fetchImpl, pairing = flowPairing(), store } = {}) {
+function flowController({ calls, fetchImpl, pairing = flowPairing(), store, publicMode } = {}) {
   const controller = new TelegramController({
     token: 'token', owners: ['10'],
     controllerStore: store || memoryUserStore(),
     pairing,
     fetchImpl,
+    // Public grouping/UX tests pass publicMode explicitly; the pairing access
+    // matrix (publicMode/premiumOnly) decides who may pair, this helper only
+    // defaults to the constructor behavior when unset.
+    ...(publicMode === undefined ? {} : { publicMode }),
     log: { info: () => {}, warn: () => {}, error: () => {} }
   });
   return { calls, fetchImpl, controller };
@@ -900,7 +954,10 @@ test('a premium user at the unique-number cap is refused before any socket opens
 test('pairing works from groups and supergroups with the code visible in the group', async () => {
   const { calls, fetchImpl } = flowApi();
   const store = memoryUserStore({ verified: new Set(['20']) });
-  const { controller } = flowController({ calls, fetchImpl, store });
+  // Group placement/UX test: public pairing is ON so verified members may pair.
+  // (Who may pair is governed by the pairing access matrix — see the
+  // 'pairing access matrix' test.)
+  const { controller } = flowController({ calls, fetchImpl, store, publicMode: true });
   controller.running = true;
 
   // A supergroup user pairs: the request is ACCEPTED and stays in the group —
@@ -1301,21 +1358,21 @@ test('/status shows the requesting user\'s database tier and membership', async 
   const { controller, replies } = makeController({ controllerStore: store, owners: ['10'], pairing: fakePairing({ listSessions: async () => [] }) });
 
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/status' } });
-  assert.match(replies.at(-1).text, /👑 Tier: OWNER/);
-  assert.match(replies.at(-1).text, /🔐 Membership: Verified/);
+  assert.match(replies.at(-1).text, /👑 𝐓𝐈𝐄𝐑 〢 𝐎𝐖𝐍𝐄𝐑/);
+  assert.match(replies.at(-1).text, /🔐 𝐌𝐄𝐌𝐁𝐄𝐑𝐒𝐇𝐈𝐏 〢 𝐕𝐄𝐑𝐈𝐅𝐈𝐄𝐃/);
 
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 20 }, text: '/status' } });
-  assert.match(replies.at(-1).text, /🛡 Tier: ADMIN/);
+  assert.match(replies.at(-1).text, /🛡 𝐓𝐈𝐄𝐑 〢 𝐀𝐃𝐌𝐈𝐍/);
 
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 30 }, text: '/status' } });
-  assert.match(replies.at(-1).text, /⭐ Tier: PREMIUM/);
+  assert.match(replies.at(-1).text, /⭐ 𝐓𝐈𝐄𝐑 〢 𝐏𝐑𝐄𝐌𝐈𝐔𝐌/);
 
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 40 }, text: '/status' } });
-  assert.match(replies.at(-1).text, /👑 Tier: VIP PREMIUM/);
+  assert.match(replies.at(-1).text, /👑 𝐓𝐈𝐄𝐑 〢 𝐕𝐈𝐏 𝐏𝐑𝐄𝐌𝐈𝐔𝐌/);
 
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 50 }, text: '/status' } });
-  assert.match(replies.at(-1).text, /👤 Tier: FREE/);
-  assert.match(replies.at(-1).text, /🔐 Membership: Verified/);
+  assert.match(replies.at(-1).text, /👤 𝐓𝐈𝐄𝐑 〢 𝐅𝐑𝐄𝐄/);
+  assert.match(replies.at(-1).text, /🔐 𝐌𝐄𝐌𝐁𝐄𝐑𝐒𝐇𝐈𝐏 〢 𝐕𝐄𝐑𝐈𝐅𝐈𝐄𝐃/);
 });
 
 test('owner activity notifications carry only non-sensitive fields', async () => {
@@ -1514,7 +1571,7 @@ test('a completely normal user can verify and is not blocked by owner/admin-only
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/start' } });
   const result = replies.at(-1);
   const intro = result.caption || result.text;
-  assert.match(intro, /ANIME MD • MAIN MENU/);
+  assert.match(intro, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
   assert.equal(await store.isVerified('42'), true, 'a normal user who is a member is verified');
   // The normal user can then use a protected command.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/sessions' } });
