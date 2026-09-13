@@ -1124,9 +1124,15 @@ class TelegramPairingManager {
       return { cancelled: false, number, numberDisplay: session.numberDisplay };
     }
     if (session.request) {
-      // Reject the in-flight request so its error path does not race this
-      // cleanup, then clean up the unpaired session.
-      const request = session.request;
+      // Wake a pending pairing handshake immediately instead of letting it run
+      // into its timeout. The in-flight request promise logs its own failure;
+      // its rejection is consumed here so it can never surface as an
+      // unhandledRejection while the regenerate flow starts a new request.
+      const rejectReady = session.readyReject;
+      session.readyResolve = undefined;
+      session.readyReject = undefined;
+      if (rejectReady) rejectReady(pairingError('The pairing request was cancelled.', 'CANCELLED', 410));
+      void session.request.catch(() => {});
       session.request = undefined;
     }
     await this.cleanupSession(session, { deleteCreds: true });
