@@ -23,6 +23,7 @@ const { MemoryCache } = require('./system/lib/cache');
 const { formatPairingCodeDisplay: formatPairingCode } = require('./system/lib/pairing-number');
 const { hasSession, prepareSession } = require('./system/session');
 const { sendButtons } = require('./system/lib/ui');
+const { authenticatedSelfJid, sendWelcomeVideo, welcomeCaption } = require('./system/lib/connection-welcome');
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
 const { TelegramPairingManager } = require('./system/lib/telegram-pairing-manager');
@@ -290,7 +291,7 @@ function startTelegramController() {
       socket.ev.on('messages.upsert', (upsert) => {
         if (upsert.type !== 'notify') return;
         for (const rawMessage of upsert.messages || []) {
-          if (!rawMessage?.message || rawMessage.key?.remoteJid === 'status@broadcast') continue;
+          if (!rawMessage?.message) continue;
           void handleMessage(socket, rawMessage).catch((error) => console.error('[message] Failed to process Telegram-paired session message:', error));
         }
       });
@@ -316,6 +317,7 @@ function startTelegramController() {
     },
     startImage: config.telegramStartImage,
     connectedImage: config.telegramConnectedImage,
+    animeEdit: config.telegramAnimeEdit,
     publicMode: config.telegramPublicMode,
     premiumOnly: config.telegramPremiumOnly,
     requiredChannels: config.telegramRequiredChannels,
@@ -343,7 +345,9 @@ function startTelegramController() {
   telegramPairingManager.onConnected = async (ownerId, session, socket) => {
     // This notification is scoped to the Telegram owner whose isolated
     // WhatsApp socket authenticated. It is never broadcast to other owners.
-    await telegramController?.notifySessionConnected(ownerId, session);
+    await telegramController?.notifySessionConnected(ownerId, session).catch(() => {
+      console.warn('[telegram] Could not send the connected notification.');
+    });
 
     // The paired account, not the Telegram owner or a configured developer,
     // receives the WhatsApp-side welcome. `socket.user.id` is Baileys' own
@@ -353,7 +357,7 @@ function startTelegramController() {
     pairedSelfWelcomeSent.add(sessionKey);
     await sendConnectionSuccess(socket).catch((error) => {
       pairedSelfWelcomeSent.delete(sessionKey);
-      console.warn(`[connection] Could not send paired self-chat welcome: ${error.message}`);
+      console.warn('[connection] Could not send paired self-chat welcome.');
     });
   };
   telegramPairingManager.onDisconnected = async (ownerId, session, classification) => {
@@ -404,18 +408,20 @@ async function startTelegramWithRetry() {
 }
 
 async function sendConnectionSuccess(socket) {
-  const target = normalizeSelfJid(socket.user?.id);
-  if (!target) throw new Error('Connected socket did not expose a user JID.');
+  const target = authenticatedSelfJid(socket);
+  if (!target) throw new Error('Connected socket did not expose an authenticated private user JID.');
 
-  try {
-    await socket.sendMessage(target, {
-      image: { url: config.connectionSuccessImage },
-      caption: '*ANIME MD*'
-    });
-  } catch (error) {
-    // A remote welcome image must never prevent the text welcome/menu from
-    // reaching the connected account's own chat.
-    console.warn(`[connection] Welcome image could not be sent: ${error.message}`);
+  const video = await sendWelcomeVideo(socket, config.connectionWelcomeVideo);
+  if (video.status !== 'sent') {
+    try {
+      await socket.sendMessage(target, {
+        image: { url: config.connectionSuccessImage },
+        caption: config.connectionWelcomeVideo.enabled ? welcomeCaption(socket) : '*ANIME MD*'
+      });
+    } catch {
+      // A remote image must never prevent the existing text/menu fallback.
+      console.warn('[connection] Welcome image could not be sent.');
+    }
   }
 
   const text = [
@@ -424,23 +430,23 @@ async function sendConnectionSuccess(socket) {
     '*Connected Successfully* ✓',
     '',
     'Your WhatsApp session is now active and ready to use.',
-    '',
-    `Developer: ${config.developerName}`
+    '🔐 Secure Session • 🟢 System Ready'
   ].join('\n');
 
   // The menu button follows the live prefix (!setprefix changes it at runtime).
   const prefix = handleMessage.getCommandPrefix();
-  await sendButtons(socket, target, {
-    text,
-    footer: `${config.botName} · ${config.ownerName}`,
-    buttons: [{ label: '📖 MENU', id: `${prefix}menu home` }],
-    fallbackText: `${text}\n\nType ${prefix}menu to open the command menu.`
-  });
-}
-
-function normalizeSelfJid(jid) {
-  if (!jid) return undefined;
-  return jid.includes(':') ? jid.replace(/:\d+@/, '@') : jid;
+  try {
+    await sendButtons(socket, target, {
+      text,
+      footer: config.botName,
+      buttons: [{ label: '📖 MENU', id: `${prefix}menu home` }],
+      fallbackText: `${text}\n\nType ${prefix}menu to open the command menu.`
+    });
+  } catch {
+    // Keep the existing once-per-lifecycle flag after a media attempt. A
+    // failed menu must not cause the successful video to repeat on reconnect.
+    console.warn('[connection] Welcome menu could not be sent.');
+  }
 }
 
 async function handleConnectionUpdate(socket, update, pairingState) {
@@ -478,7 +484,7 @@ async function handleConnectionUpdate(socket, update, pairingState) {
         .then(() => console.log('[connection] Connection success card sent.'))
         .catch((error) => {
           connectionCardSent = false;
-          console.warn(`[connection] Could not send the connection success card: ${error.message}`);
+          console.warn('[connection] Could not send the connection success card.');
         });
     }
     void telegramController?.notifyConnected().catch((error) => {
@@ -535,7 +541,7 @@ async function handleMessages(socket, upsert) {
   if (socket !== activeSocket || upsert.type !== 'notify') return;
 
   for (const rawMessage of upsert.messages || []) {
-    if (!rawMessage?.message || rawMessage.key?.remoteJid === 'status@broadcast') continue;
+    if (!rawMessage?.message) continue;
     try {
       await handleMessage(socket, rawMessage);
     } catch (error) {

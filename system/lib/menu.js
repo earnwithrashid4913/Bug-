@@ -33,32 +33,42 @@ function command(name, category, description, { aliases = [], usage = '', permis
 }
 
 const COMMANDS = Object.freeze([
+  ...['fancy', 'encrypt', 'encrypt2', 'tempmail', 'getmail'].map(name => command(name, 'tools', 'Source API tool.', { usage: name === 'tempmail' ? '' : '<input>' })),
+  command('upload', 'upload', 'Mirror a URL or upload replied media.', { aliases: ['mirror', 'host'], usage: '<url|reply>' }),
+  command('store', 'media', 'Save replied audio/video.', { permission: 'owner', usage: '<name>' }),
+  command('ad', 'media', 'Send stored audio.', { permission: 'owner', usage: '<name>' }),
+  command('vd', 'media', 'Send stored video.', { permission: 'owner', usage: '<name> [-c]' }),
+  command('list', 'media', 'List stored media.', { permission: 'owner' }),
+  command('del', 'media', 'Delete stored media.', { permission: 'owner', usage: 'audio|video <name>' }),
   command('menu', 'general', 'Open the interactive command menu.', { aliases: ['help'], usage: '[category]' }),
   command('ping', 'general', 'Check bot latency.', { aliases: ['p'] }),
   command('request', 'general', 'Send a request or bug report to the owner.', { aliases: ['reportbug'], usage: '<message>' }),
 
   command('public', 'mode', 'Switch the bot to public mode.', { permission: 'owner' }),
-  command('self', 'mode', 'Switch the bot to self/owner-only mode.', { permission: 'owner' }),
+  command('self', 'mode', 'Switch the bot to self/owner-only mode.', { aliases: ['private'], permission: 'owner' }),
   command('mode', 'mode', 'Show or change message mode.', { permission: 'owner', aliases: ['botmode'], usage: '<public|self>' }),
 
   command('play', 'downloader', 'Search and download audio from a supported video link or YouTube query.', { usage: '<query|url>' }),
-  command('ytmp3', 'downloader', 'Download audio from a supported video URL.', { aliases: ['audio'], usage: '<url>' }),
-  command('video', 'downloader', 'Download video from a supported video URL.', { aliases: ['ytmp4', 'mp4'], usage: '<query|url>' }),
+  command('ytmp3', 'downloader', 'Download audio from a supported video URL.', { aliases: ['audio', 'mp3'], usage: '<url>' }),
+  command('video', 'downloader', 'Download video from a supported video URL.', { aliases: ['ytmp4', 'mp4', 'ytvideo'], usage: '<query|url>' }),
   command('spotify', 'downloader', 'Search Spotify and return official track information/links.', { usage: '<query>' }),
   command('media', 'downloader', 'Download media from supported TikTok/Instagram/Facebook/video links.', { aliases: ['download', 'dl'], usage: '<url>' }),
 
   command('getpp', 'media', 'Get a user or group profile picture.', { aliases: ['pp', 'profilepic', 'avatar'], usage: '[number|mention|reply]' }),
   command('setpp', 'media', 'Update the bot profile picture from a replied image.', { permission: 'owner' }),
-  command('vv', 'media', 'Reveal a replied view-once photo or video.', { aliases: ['save', 'retrieve', 'viewonce'] }),
+  command('vv', 'media', 'Reveal a replied view-once photo or video.', { aliases: ['hey', 'revealonce', 'retrieve', 'viewonce'] }),
 
+  command('save', 'media', 'Save a replied status and send it to the connected owner.', { aliases: ['savestatus', 'downloadstatus'] }),
+  command('tovid', 'converter', 'Convert a sticker to MP4 video (FFmpeg required).', { aliases: ['sticker2vid'] }),
+  command('take', 'sticker', 'Change sticker pack and author without losing animation.', { aliases: ['steal'], usage: '[pack|author]' }),
   command('toimg', 'converter', 'Convert a replied sticker to an image.', { aliases: ['sticker2img', 'img'] }),
   command('convert', 'converter', 'Show conversion options.', { aliases: ['converter'] }),
   command('tts', 'converter', 'Convert text to speech audio.', { usage: '<text>' }),
   command('qr', 'converter', 'Create a QR code from text or a URL.', { aliases: ['qrcode'], usage: '<text>' }),
 
-  command('tourl', 'upload', 'Upload a replied image/video/document and get a public URL.', { aliases: ['uploader', 'upload', 'url'], usage: '<reply>' }),
+  command('tourl', 'upload', 'Upload a replied image/video/document and get a public URL.', { aliases: ['uploader', 'url', 'imgtourl', 'imageurl'], usage: '<reply>' }),
 
-  command('ai', 'ai', 'Ask the configured Groq AI provider.', { aliases: ['ask', 'ia', 'groq'], usage: '<question>' }),
+  command('ai', 'ai', 'Ask the configured Groq AI provider.', { aliases: ['ask', 'ia', 'groq', 'loveai', 'love', 'dark'], usage: '<question>' }),
   command('translate', 'ai', 'Translate text; replies are auto-detected and translated to English by default.', { aliases: ['tr', 'trans'], usage: '[lang] <text>' }),
 
   command('jid', 'tools', 'Show current chat and sender JIDs.', { aliases: ['chatid'] }),
@@ -69,8 +79,8 @@ const COMMANDS = Object.freeze([
   command('uid', 'tools', 'Show your WhatsApp UID/JID.'),
   command('tools', 'tools', 'Show available tools.', { aliases: ['utils'] }),
 
-  command('hidetag', 'group', 'Send a message mentioning every group member without visible tags.', { aliases: ['ht'], usage: '<message>', permission: 'admin' }),
-  command('tagall', 'group', 'Mention every group member with a visible list.', { aliases: ['tag'], usage: '<message>', permission: 'admin' }),
+  command('hidetag', 'group', 'Send a message mentioning every group member without visible tags.', { aliases: ['ht', 'tag'], usage: '<message>', permission: 'admin' }),
+  command('tagall', 'group', 'Mention every group member with a visible list.', { aliases: ['everyone'], usage: '<message>', permission: 'admin' }),
   command('greet', 'group', 'Show welcome/goodbye status.', { permission: 'admin' }),
   command('welcome', 'group', 'Enable, disable, or check welcome messages.', { usage: '<on|off|status>', permission: 'admin' }),
   command('goodbye', 'group', 'Enable, disable, or check goodbye messages.', { usage: '<on|off|status>', permission: 'admin' }),
@@ -90,14 +100,18 @@ const COMMANDS = Object.freeze([
 
   command('antilink', 'anti', 'Toggle harmful-link protection.', { usage: '<on|off|status>', permission: 'admin' }),
   command('antispam', 'anti', 'Toggle repeated-message flood protection.', { usage: '<on|off|status>', permission: 'admin' }),
-  command('antimention', 'anti', 'Toggle excessive-mention protection.', { usage: '<on|off|status>', permission: 'admin' }),
+  command('antimention', 'anti', 'Toggle excessive-mention protection.', { aliases: ['antigroupmention'], usage: '<on|off|status>', permission: 'admin' }),
   command('antitag', 'anti', 'Toggle mass-tag protection.', { usage: '<on|off|status>', permission: 'admin' }),
-  command('antidelete', 'anti', 'Forward deleted messages to owner/admins.', { usage: '<on|off|status>', permission: 'admin' }),
+  command('antidelete', 'anti', 'Recover deleted text/media to connected owner.', { aliases: ['antisupp'], usage: '<on|off|status>', permission: 'admin' }),
 
-  command('autoreact', 'automation', 'Toggle automatic emoji reactions in this chat.', { usage: '<on|off|status>', permission: 'admin' }),
-  command('autowrite', 'automation', 'Toggle automatic typing presence while processing.', { usage: '<on|off|status>' }),
-  command('autostatus', 'automation', 'Automatically read status updates (owner setting).', { usage: '<on|off|status>', permission: 'owner' }),
+  command('autoreact', 'automation', 'Toggle automatic emoji reactions in this chat.', { aliases: ['autoreaction'], usage: '<on|off|status>', permission: 'admin' }),
+  command('autowrite', 'automation', 'Toggle automatic typing presence for incoming non-command messages.', { aliases: ['autotype', 'fakewrite'], usage: '<on|off|status>' }),
+  command('autostatus', 'automation', 'Status settings (status event routing requires approval).', { aliases: ['autostatusview', 'autostatusreact'], usage: '<on|off|status>', permission: 'owner' }),
 
+  command('purge', 'group', 'Remove non-admin members in one batch.', { permission: 'admin' }),
+  command('autopromote', 'group', 'Promote the caller (existing admin gate preserved).', { permission: 'admin' }),
+  command('antidemote', 'anti', 'Restore demoted administrators.', { usage: '<on|off|status>', permission: 'admin' }),
+  command('antipromote', 'anti', 'Reverse promotions.', { usage: '<on|off|status>', permission: 'admin' }),
   command('sticker', 'sticker', 'Create a sticker from a replied image.', { aliases: ['s', 'stiker'] }),
 
   command('dice', 'games', 'Roll a six-sided die.', { aliases: ['roll'] }),
@@ -116,26 +130,27 @@ const COMMANDS = Object.freeze([
   command('setprefix', 'owner', 'Set a custom command prefix.', { usage: '<prefix>', permission: 'owner' }),
   command('broadcast', 'owner', 'Send a global owner announcement to known private/session chat.', { aliases: ['bc'], usage: '<message>', permission: 'owner' }),
 
-  command('sudo', 'sudo', 'Add a sudo number allowed to use elevated bot commands.', { usage: '<number>', permission: 'owner' }),
-  command('delsudo', 'sudo', 'Remove a sudo number.', { usage: '<number>', permission: 'owner' }),
-  command('sudolist', 'sudo', 'List sudo numbers.', { aliases: ['listsudo'], permission: 'sudo' }),
+  command('sudo', 'sudo', 'Add a sudo number using number, mention or reply.', { aliases: ['addsudo', 'makesudo'], usage: '<number>', permission: 'owner' }),
+  command('delsudo', 'sudo', 'Remove a sudo number or list current sudo users.', { aliases: ['removesudo', 'unsudo'], usage: '<number>', permission: 'owner' }),
+  command('sudolist', 'sudo', 'List sudo numbers.', { aliases: ['listsudo', 'sudos'], permission: 'sudo' }),
 
   command('addprem', 'premium', 'Add premium access.', { usage: '<number> [30d]', permission: 'owner' }),
   command('delprem', 'premium', 'Remove premium access.', { usage: '<number>', permission: 'owner' }),
   command('listprem', 'premium', 'List active premium users.', { permission: 'owner' }),
   command('premium', 'premium', 'Show premium status for this chat/number.'),
 
-  command('status', 'info', 'Show bot status and uptime.', { aliases: ['alive', 'runtime'] }),
+  command('alive', 'info', 'Check uptime with an image and text fallback.'),
+  command('status', 'info', 'Show bot status and uptime.', { aliases: ['runtime'] }),
   command('owner', 'info', 'Show owner and developer details.', { aliases: ['creator'] }),
 
   command('sessions', 'sessions', 'Show the active ANIME MD WhatsApp session.'),
-  command('stopsession', 'sessions', 'Owner-only safe unpaired-session cleanup command.', { aliases: ['stop'], usage: '<number>', permission: 'owner' }),
+  command('stopsession', 'sessions', 'Show the Telegram session-cleanup instructions.', { aliases: ['stop'], usage: '<number>', permission: 'owner' }),
 
   command('pairing', 'telegram', 'Show the authorized Telegram pairing controller link.', { aliases: ['tgpair'] }),
   command('telegram', 'telegram', 'Show Telegram controller setup status.', { aliases: ['tg'] }),
 
   // --- ANIME / OTAKU ---
-  command('anime', 'anime', 'Search for an anime on MyAnimeList.', { usage: '<title>' }),
+  command('anime', 'anime', 'Search for an anime on MyAnimeList.', { usage: 'search|info|download <title> | top|trending|season|new|random|genres' }),
   command('manga', 'anime', 'Search for a manga on MyAnimeList.', { usage: '<title>' }),
   command('character', 'anime', 'Look up an anime character.', { aliases: ['char'], usage: '<name>' }),
   command('waifu', 'anime', 'Get a random waifu image.'),
@@ -148,7 +163,14 @@ const COMMANDS = Object.freeze([
   command('leaderboard', 'anime', 'View the top otaku leaderboard.', { aliases: ['lb', 'topplayers'] }),
 
   // --- QUIZ ---
-  command('quiz', 'quiz', 'Start an anime quiz session.', { aliases: ['startquiz'], usage: '[category] [maxPlayers]' }),
+  command('quizjoin', 'quiz', 'Join the active group quiz.'),
+  command('quizstop', 'quiz', 'Stop the active group quiz.'),
+  command('kickall', 'group', 'Remove non-admins progressively.', { aliases: ['kickall2'], permission: 'admin' }),
+  command('demoteall', 'group', 'Demote eligible administrators except the caller and bot.', { permission: 'admin' }),
+  command('promoteall', 'group', 'Promote non-admin members.', { permission: 'admin' }),
+  command('opentime', 'group', 'Schedule opening the group.', { permission: 'admin', usage: '<duration|cancel>' }),
+  command('closetime', 'group', 'Schedule closing the group.', { permission: 'admin', usage: '<duration|cancel>' }),
+  command('quiz', 'quiz', 'Start an anime quiz session.', { aliases: ['startquiz'], usage: '[category] [easy|hard] | join | stop' }),
 
   // --- FUN EXTRAS ---
   command('couple', 'funextra', 'Match two random group members as a couple.', { aliases: ['lovemeter'] }),
@@ -170,7 +192,7 @@ const ALIAS_MAP = COMMANDS.reduce((map, entry) => {
     map[value] = entry;
   }
   return map;
-}, {});
+}, Object.create(null));
 
 function categoriesWithCommands() {
   const map = new Map();
@@ -200,7 +222,7 @@ function helpText(prefix = '!', categoryId = '') {
       `*${configSafeName(category)}*`,
       '',
       ...category.commands.flatMap((entry) => [
-        `${prefix}${entry.name}${entry.usage ? ` ${entry.usage}` : ''}${entry.aliases.length ? `  (${entry.aliases.join(', ')})` : ''}`,
+        `${prefix}${entry.name}${entry.usage ? ` ${entry.usage}` : ''}${entry.aliases.length ? `  (${entry.aliases.map(alias => `${prefix}${alias}`).join(', ')})` : ''}`,
         entry.description,
         ''
       ]),

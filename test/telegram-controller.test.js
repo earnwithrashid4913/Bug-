@@ -1,6 +1,6 @@
 'use strict';
 
-const assert = require('node:assert/strict');
+const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -247,6 +247,8 @@ test('Telegram startup shows the ANIME MD intro, verifies the token, and starts 
   // ANIME SYSTEM style: mathematical-bold glyphs (U+1D400-U+1D7FF) are the
   // owner-chosen presentation for the dashboard cards.
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(intro), 'the intro uses the anime-system bold style');
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(intro.split('\n')[0]), 'styled title');
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(intro.split('\n').slice(1).join('\n')), 'body is unchanged');
   // No server-dashboard jargon in the intro.
   assert.doesNotMatch(intro, /Telegram Controller/);
   assert.doesNotMatch(intro, /Pairing System/);
@@ -269,6 +271,9 @@ test('the startup box never claims a WhatsApp connection by itself', () => {
   // ANIME SYSTEM style uses decorative mathematical-bold glyphs on purpose —
   // an owner-chosen, visual-only presentation; values and logic stay intact.
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(text), 'the startup box uses the anime-system bold style');
+  const [heading, ...body] = text.split('\n');
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(heading), 'requested bold Unicode title');
+  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(body.join('\n')), 'body and identifiers remain unchanged');
 });
 
 test('Telegram callbacks stay authorized and route status through owner-scoped sessions', async () => {
@@ -971,7 +976,7 @@ test('pairing works from groups and supergroups with the code visible in the gro
   assert.ok(!groupTexts.some((text) => /only works in a private chat/i.test(text)), 'no private-chat-only rejection');
   assert.ok(!groupTexts.some((text) => /92355817646/.test(text)), 'the full phone number is never broadcast to the group');
   assert.ok(groupTexts.some((text) => /••••• 646/.test(text)), 'the group only ever sees the masked number');
-  assert.ok(groupTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && /🔐 CODE: CODE-1/.test(text)), 'the real pairing code is shown in the group');
+  assert.ok(groupTexts.some((text) => /ANIME MD • PAIRING CODE/.test(normalizeTelegramHeadings(text)) && /🔐 CODE: CODE-1/.test(text)), 'the real pairing code is shown in the group');
   assert.ok(groupTexts.some((text) => /Single use/.test(text)), 'the public code box warns it is single use');
   // Nothing is quietly moved to a private chat.
   assert.deepEqual(privateTexts, [], 'the flow stays entirely in the group');

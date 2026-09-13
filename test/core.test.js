@@ -204,7 +204,7 @@ test('command handler dispatches a menu response', async () => {
     user: { id: '15551234567@s.whatsapp.net' },
     decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
     sendMessage: async (chatId, payload, options) => {
-      sent.push({ chatId, payload, options });
+      if (!payload.react) sent.push({ chatId, payload, options });
       return { key: { id: 'test-message' } };
     }
   };
@@ -242,7 +242,7 @@ test('sticker command provides usage text when no image is supplied', async () =
     user: { id: '15551234567@s.whatsapp.net' },
     decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
     sendMessage: async (chatId, payload, options) => {
-      sent.push({ chatId, payload, options });
+      if (!payload.react) sent.push({ chatId, payload, options });
       return { key: { id: 'test-message' } };
     }
   };
@@ -257,7 +257,7 @@ test('sticker command provides usage text when no image is supplied', async () =
   });
 
   assert.equal(sent.length, 1);
-  assert.match(sent[0].payload.text, /REPLY TO AN IMAGE/);
+  assert.match(sent[0].payload.text.normalize('NFKC'), /REPLY TO AN IMAGE/);
 });
 
 test('profile picture command uses the current Baileys profile picture API', async () => {
@@ -267,7 +267,7 @@ test('profile picture command uses the current Baileys profile picture API', asy
     decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
     profilePictureUrl: async () => 'https://example.invalid/profile.jpg',
     sendMessage: async (chatId, payload, options) => {
-      sent.push({ chatId, payload, options });
+      if (!payload.react) sent.push({ chatId, payload, options });
       return { key: { id: 'test-message' } };
     }
   };
@@ -302,7 +302,7 @@ test('group management help is available only to a group admin', async () => {
       ]
     }),
     sendMessage: async (chatId, payload, options) => {
-      sent.push({ chatId, payload, options });
+      if (!payload.react) sent.push({ chatId, payload, options });
       return { key: { id: 'test-message' } };
     }
   };
@@ -317,7 +317,7 @@ test('group management help is available only to a group admin', async () => {
   });
 
   assert.equal(sent.length, 1);
-  assert.match(sent[0].payload.text, /GROUP MANAGEMENT/);
+  assert.match(sent[0].payload.text.normalize('NFKC'), /GROUP MANAGEMENT/);
 });
 
 test('premium duration parser validates supported units', () => {

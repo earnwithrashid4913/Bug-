@@ -14,7 +14,7 @@
 // TelegramPairingManager under test are the real production modules.
 // ---------------------------------------------------------------------------
 
-const assert = require('node:assert/strict');
+const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -160,7 +160,7 @@ test('ACCEPTANCE: /pair returns the real WhatsApp code and reports CONNECTED onl
   const sends = replies.filter((entry) => !entry.edited);
   assert.equal(sends.length, 1, 'exactly one message is sent for the whole lifecycle');
   assert.match(sends[0].text, /Preparing WhatsApp pairing/);
-  const codeEntry = replies.find((entry) => /ANIME MD • PAIRING CODE/.test(entry.text || ''));
+  const codeEntry = replies.find((entry) => /ANIME MD • PAIRING CODE/.test(normalizeTelegramHeadings(entry.text || '')));
   assert.ok(codeEntry, 'the pairing code box is produced');
   assert.equal(codeEntry.edited, true, 'the code arrives as an edit, not a new message');
   assert.equal(codeEntry.messageId, sends[0].messageId, 'the same message is edited in place');
@@ -226,7 +226,7 @@ test('ACCEPTANCE: /pair from a supergroup pairs with the real code visible in th
   // Baileys socket returned, formatted XXXX-XXXX.
   const realCode = whatsappStyleCode(NUMBER);
   assert.ok(
-    groupTexts.some((text) => /ANIME MD • PAIRING CODE/.test(text) && text.includes(`${realCode.slice(0, 4)}-${realCode.slice(4)}`)),
+    groupTexts.some((text) => /ANIME MD • PAIRING CODE/.test(normalizeTelegramHeadings(text)) && text.includes(`${realCode.slice(0, 4)}-${realCode.slice(4)}`)),
     'the real WhatsApp code is shown in the group'
   );
   assert.equal(fake.pairingCalls.length, 1, 'exactly one real pairing code was generated');

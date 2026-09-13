@@ -3,6 +3,8 @@
 const path = require('node:path');
 const userConfig = require('../config');
 const { CANONICAL_IDENTITY } = require('./security');
+const { normalizeAnimeConfig } = require('./lib/anime-library');
+const { normalizeWelcomeConfig } = require('./lib/connection-welcome');
 
 const PLACEHOLDER = /^YOUR_[A-Z0-9_]+$/;
 const PHONE_NUMBER_HELP = 'Enter your WhatsApp number with country code, without + (for example 923001234567).';
@@ -100,6 +102,9 @@ function loadConfig(source = userConfig) {
   if (!['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'].includes(logLevel)) throw configurationError('deployment.logLevel must be a valid pino log level.');
   const db = (key, file) => optionalPath(database[key], path.join(dataDir, file), `database.${key}`);
   return Object.freeze({
+    // Optional media is validated at delivery, never a boot/pairing dependency.
+    telegramAnimeEdit: normalizeAnimeConfig(source.telegramAnimeEdit),
+    connectionWelcomeVideo: normalizeWelcomeConfig(source.connectionWelcomeVideo),
     botName: string(bot.name, 'bot.name', { required: true }), ownerName: string(bot.ownerName, 'bot.ownerName', { required: true }),
     projectName: CANONICAL_IDENTITY.projectName, developerName: CANONICAL_IDENTITY.developer, developerBrand: CANONICAL_IDENTITY.organization, authorName: CANONICAL_IDENTITY.author,
     whatsappChannel: url(owner.whatsappChannel, 'owner.whatsappChannel'), commandPrefix: prefix,

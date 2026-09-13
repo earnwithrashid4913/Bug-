@@ -16,7 +16,7 @@
 //     dashboard pages, and the plain-text (non-garbled) ANIME MD style.
 // ---------------------------------------------------------------------------
 
-const assert = require('node:assert/strict');
+const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
 const test = require('node:test');
 const {
   CANONICAL_IDENTITY
@@ -175,7 +175,7 @@ test('a public supergroup pairing is visible, edits ONE message, and shows the r
   assert.match(texts[0], /ANIME MD • PAIRING/);
   assert.match(texts[0], /Pairing request received/);
   assert.ok(texts.some((text) => /Preparing WhatsApp pairing/.test(text)), 'the group shows the preparing state');
-  const codeText = texts.find((text) => /ANIME MD • PAIRING CODE/.test(text));
+  const codeText = texts.find((text) => /ANIME MD • PAIRING CODE/.test(normalizeTelegramHeadings(text)));
   assert.ok(codeText, 'the group shows the pairing code state');
   assert.match(codeText, /🔐 CODE: KJ4M-NP1X/);
 
@@ -286,7 +286,7 @@ test('the same number twice in one group is acknowledged instead of opening a se
     .map((call) => call.payload.text || '');
   assert.equal(sends.filter((text) => /Pairing request received/.test(text)).length, 1, 'only one pairing flow was started');
   const all = textsIn(calls, GROUP_ID);
-  assert.equal(all.filter((text) => /ANIME MD • PAIRING CODE/.test(text)).length, 1, 'only one code was ever shown');
+  assert.equal(all.filter((text) => /ANIME MD • PAIRING CODE/.test(normalizeTelegramHeadings(text))).length, 1, 'only one code was ever shown');
 });
 
 test('a group is paced: a second pairing inside the cooldown window is refused without a socket', async () => {
@@ -360,8 +360,8 @@ test('no secret ever reaches a public chat', async () => {
   // user's number.)
   const pairingText = calls
     .filter((call) => Number(call.payload.chat_id) === GROUP_ID
-      && /ANIME MD • (PAIRING|PAIRING CODE|CODE EXPIRED) 〕/.test(call.payload.text || '')
-      && !/PAIRING GUIDE/.test(call.payload.text || ''))
+      && /ANIME MD • (PAIRING|PAIRING CODE|CODE EXPIRED) 〕/.test(normalizeTelegramHeadings(call.payload.text || ''))
+      && !/PAIRING GUIDE/.test(normalizeTelegramHeadings(call.payload.text || '')))
     .map((call) => call.payload.text || '')
     .join('\n');
   assert.ok(pairingText.length > 0, 'pairing messages were produced');
@@ -477,7 +477,7 @@ test('an unknown category id falls back safely instead of rendering an empty pag
 // 5. Text style: plain, readable, never mirrored/garbled.
 // ---------------------------------------------------------------------------
 
-test('no ANIME MD surface uses fancy-font Unicode that renders mirrored or as boxes', () => {
+test('Telegram boxed titles use the requested font without changing body text or bidi order', () => {
   const samples = [
     allMenuBox('!'),
     developerBox({ owner: 'Rashid Hussain', developer: 'F!xa Dev', channel: '' }),
@@ -486,9 +486,9 @@ test('no ANIME MD surface uses fancy-font Unicode that renders mirrored or as bo
     menuCategoryBox(categoriesWithCommands()[0], '!')
   ];
   for (const text of samples) {
-    // MATHEMATICAL ALPHANUMERIC SYMBOLS (𝐀-𝟿) are the "fancy font" glyphs that
-    // clients without a matching font draw mirrored, inverted or as tofu.
-    assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(text), 'plain text only');
+    const [heading, ...body] = text.split('\n');
+    assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(heading), 'styled title');
+    assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(body.join('\n')), 'plain body text');
     // Right-to-left / bidi override controls would flip the reading order.
     assert.ok(!/[\u{202A}-\u{202E}\u{2066}-\u{2069}\u{200E}\u{200F}]/u.test(text), 'no bidi override characters');
     assert.doesNotMatch(text, /undefined|NaN|\[object Object\]/);

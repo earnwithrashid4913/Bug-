@@ -90,6 +90,28 @@ module.exports = {
     connectedImage: 'https://files.catbox.moe/uuuqdm.png'
   },
 
+  // Optional external Anime Library. OFF means no library/API/video requests.
+  // Use your authorized server's complete HTTPS /api/anime/random endpoint.
+  telegramAnimeEdit: {
+    enabled: false,
+    libraryApi: '',
+    apiKey: '', // Optional Authorization: Bearer header; never commit a real key.
+    gender: 'mixed', // male | female | mixed
+    quality: 'top', // top (quality/views weighted) | normal (random)
+    avoidRecent: 5, // 0..50 IDs in process memory only
+    timeoutMs: 15000
+  },
+
+  // Independent WhatsApp OWN-chat video. Supply an authorized H.264/AAC MP4.
+  // Missing/invalid video falls back to the existing welcome image/text/menu.
+  connectionWelcomeVideo: {
+    enabled: true,
+    source: 'local', // local | url
+    path: './media/connection/welcome.mp4',
+    url: '', // Public HTTPS MP4 when source is 'url'; no credentials in the URL.
+    timeoutMs: 15000
+  },
+
   // ========================================= API SETTINGS ==================
   api: {
     // Groq key for !ai. OPTIONAL. Get it from https://console.groq.com.

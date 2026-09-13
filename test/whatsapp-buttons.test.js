@@ -190,7 +190,7 @@ test('clicking a button executes the real handler and returns a result', async (
   const clicks = [
     { id: '!menu home', expect: /Choose a category|ANIME MD/ },
     { id: '!menu downloader', expect: /DOWNLOADER/ },
-    { id: '!ping', expect: /PONG/ },
+    { id: '!ping', expect: /PONG|𝐏𝐎𝐍𝐆/ },
     { id: '!balance', expect: /BALANCE/ },
     { id: '!daily', expect: /DAILY REWARD CLAIMED|ALREADY CLAIMED/ },
     { id: '!work', expect: /WORK COMPLETE|YOU NEED TO REST/ },
@@ -211,7 +211,7 @@ test('clicking a button executes the real handler and returns a result', async (
     await handler(makeSocket(sent), clickMessage(click.id));
     const text = sent.map((entry) => entry.payload.text || entry.payload.caption || '').join('\n');
     assert.ok(sent.length > 0, `"${click.id}" produced no reply at all`);
-    assert.match(text, click.expect, `"${click.id}" produced an unexpected reply: ${text.slice(0, 160)}`);
+    assert.match(text.normalize('NFKC'), click.expect, `"${click.id}" produced an unexpected reply: ${text.slice(0, 160)}`);
   }
 });
 
@@ -229,9 +229,9 @@ test('a button that needs input replies with a short tutorial instead of failing
   for (const id of ['!play', '!video', '!media', '!tts', '!qr', '!translate', '!ai', '!calc', '!ss', '!short']) {
     const sent = [];
     await handler(makeSocket(sent), clickMessage(id));
-    const text = sent.map((entry) => entry.payload.text || '').join('\n');
+    const text = sent.map((entry) => entry.payload.text || entry.payload.caption || '').join('\n');
     assert.ok(sent.length > 0, `"${id}" produced no reply`);
-    assert.match(text, /USAGE|Usage|Example/, `"${id}" did not guide the user: ${text.slice(0, 160)}`);
+    assert.match(text.normalize('NFKC'), /USAGE|Usage|Example/, `"${id}" did not guide the user: ${text.slice(0, 160)}`);
   }
 });
 
@@ -252,6 +252,6 @@ test('legacy button payload shapes are still understood after a client update', 
       key: { remoteJid: '15551234568@s.whatsapp.net', participant: '15551234568@s.whatsapp.net', fromMe: false },
       message
     });
-    assert.match(sent.map((entry) => entry.payload.text || '').join('\n'), /PONG/);
+    assert.match(sent.map((entry) => entry.payload.text || entry.payload.caption || '').join('\n').normalize('NFKC'), /PONG/);
   }
 });

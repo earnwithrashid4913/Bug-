@@ -122,7 +122,7 @@ async function handleGroupAnswer(socket, context) {
   if (playerData.answered) return false;
 
   const body = (context.raw?.message?.conversation || context.raw?.message?.extendedTextMessage?.text || '').trim().toUpperCase();
-  const answer = body.charAt(0);
+  const answer = /^[1-4]$/.test(body) ? 'ABCD'[Number(body) - 1] : body.charAt(0);
   if (!['A', 'B', 'C', 'D'].includes(answer)) return false;
 
   const q = session.questions[session.currentIndex];
