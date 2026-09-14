@@ -2,7 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeHarness } = require('../test-support/command-harness');
-const { COMMANDS, categoriesWithCommands, helpText, resolveCommand } = require('../system/lib/menu');
+const { COMMANDS, STATIC_COMMANDS, categoriesWithCommands, helpText, resolveCommand } = require('../system/lib/menu');
+const executeAfter = require('../system/execute-after/registry');
 const { audit, inspect, markdown } = require('../scripts/command-registry-check');
 const { styleHeaders } = require('../system/lib/presentation');
 
@@ -25,9 +26,18 @@ function textOf(socket) {
 
 test('complete public registry, alias branches, menu bounds and hidden exclusion audit', () => {
   const result = audit();
-  assert.equal(result.routes.length, 235);
-  assert.equal(COMMANDS.length, 130);
-  assert.equal(result.categories.length, 23);
+  // The static AnimeMD surface is frozen (261 dispatcher names/aliases, 140
+  // declared commands). ExecuteAfter provider commands are extension commands:
+  // they are registered into the same registry through one dispatcher bridge,
+  // so they add exactly one route per registered provider command.
+  const extensionEntries = executeAfter.entries();
+  assert.equal(result.staticRoutes, 261);
+  assert.equal(STATIC_COMMANDS.length, 140);
+  assert.equal(result.extensionNames.length, extensionEntries.length);
+  assert.equal(result.routes.length, 261 + extensionEntries.length);
+  assert.equal(COMMANDS.length, 140 + extensionEntries.length);
+  const extensionCategories = categoriesWithCommands().filter(category => category.id === executeAfter.framework.category.id).length;
+  assert.equal(result.categories.length, 23 + extensionCategories);
   assert.equal(result.hidden.length, 2);
   assert.doesNotMatch(markdown(result), /\| h \||\| hidden \||davidcaril|davinci/i);
 });

@@ -28,11 +28,14 @@ const CATEGORY_META = Object.freeze({
   other: { id: 'other', label: 'OTHER', icon: '✨', title: 'Other' }
 });
 
-function command(name, category, description, { aliases = [], usage = '', permission = 'public' } = {}) {
-  return Object.freeze({ name, category, description, aliases: Object.freeze([...new Set(aliases)]), usage, permission });
+function command(name, category, description, { aliases = [], usage = '', permission = 'public', hidden = false } = {}) {
+  return Object.freeze({ name, category, description, aliases: Object.freeze([...new Set(aliases)]), usage, permission, hidden });
 }
 
-const COMMANDS = Object.freeze([
+// The existing AnimeMD commands are the immutable seed of the live registry.
+// External frameworks (ExecuteAfter) append their own commands through
+// registerCommands() below; static entries are never modified.
+const STATIC_COMMANDS = Object.freeze([
   ...['fancy', 'encrypt', 'encrypt2', 'tempmail', 'getmail'].map(name => command(name, 'tools', 'Source API tool.', { usage: name === 'tempmail' ? '' : '<input>' })),
   command('upload', 'upload', 'Mirror a URL or upload replied media.', { aliases: ['mirror', 'host'], usage: '<url|reply>' }),
   command('store', 'media', 'Save replied audio/video.', { permission: 'owner', usage: '<name>' }),
@@ -196,7 +199,15 @@ const COMMANDS = Object.freeze([
   command('serieslatest', 'downloader', 'Get latest TV series.', { aliases: ['latestseries', 'newseries'] })
 ]);
 
-const ALIAS_MAP = COMMANDS.reduce((map, entry) => {
+// Live command list. The array identity is stable (menu.js consumers destructure
+// it once) while dynamic registration appends to it.
+const COMMANDS = [...STATIC_COMMANDS];
+
+// Live category metadata: static categories plus any category registered by an
+// extension. CATEGORY_META (the frozen static map) stays untouched.
+const CATEGORIES = { ...CATEGORY_META };
+
+const ALIAS_MAP = STATIC_COMMANDS.reduce((map, entry) => {
   for (const value of [entry.name, ...entry.aliases]) {
     if (map[value]) throw new Error(`Duplicate command or alias: ${value}`);
     map[value] = entry;
@@ -204,10 +215,52 @@ const ALIAS_MAP = COMMANDS.reduce((map, entry) => {
   return map;
 }, Object.create(null));
 
+/**
+ * Registers extension commands into the SAME registry and the SAME alias map the
+ * existing dispatcher already resolves through. There is deliberately no second
+ * command parser and no second dispatcher.
+ *
+ * Duplicate names are refused (never overwritten) and reported back.
+ */
+function registerCommands(descriptors, { category } = {}) {
+  const registered = [];
+  const rejected = [];
+  if (category?.id) {
+    CATEGORIES[category.id] = {
+      icon: String(category.icon || CATEGORY_META.other.icon),
+      id: String(category.id),
+      label: String(category.label || category.id),
+      title: String(category.title || category.label || category.id)
+    };
+  }
+  for (const descriptor of Array.isArray(descriptors) ? descriptors : []) {
+    const name = String(descriptor?.name || '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9]{0,29}$/.test(name)) {
+      rejected.push({ name: name || '(empty)', reason: 'invalid-name' });
+      continue;
+    }
+    if (ALIAS_MAP[name]) {
+      rejected.push({ name, reason: 'duplicate' });
+      continue;
+    }
+    const entry = command(name, category?.id || 'other', String(descriptor?.description || 'Extension command.'), {
+      hidden: descriptor?.hidden === true,
+      permission: ['admin', 'owner', 'sudo'].includes(descriptor?.permission) ? descriptor.permission : 'public',
+      usage: String(descriptor?.usage || '')
+    });
+    COMMANDS.push(entry);
+    ALIAS_MAP[entry.name] = entry;
+    registered.push(entry);
+  }
+  return { registered, rejected };
+}
+
 function categoriesWithCommands() {
   const map = new Map();
   for (const entry of COMMANDS) {
-    if (!map.has(entry.category)) map.set(entry.category, { ...CATEGORY_META[entry.category], commands: [] });
+    // Hidden extension commands stay fully usable but are not listed.
+    if (entry.hidden === true) continue;
+    if (!map.has(entry.category)) map.set(entry.category, { ...CATEGORIES[entry.category], commands: [] });
     map.get(entry.category).commands.push(entry);
   }
   return [...map.values()].map((category) => ({ ...category, commands: [...category.commands] }));
@@ -261,9 +314,38 @@ function configSafeName(category) {
 module.exports = {
   CATEGORY_META,
   COMMANDS,
+  STATIC_COMMANDS,
+  allCategories: () => Object.values(CATEGORIES).map((category) => ({ ...category })),
   allAliases,
   categoriesWithCommands,
   getCategory,
   helpText,
+  registerCommands,
   resolveCommand
 };
+
+// ---------------------------------------------------------------------------
+// EXTENSION BRIDGE — ExecuteAfter provider commands
+// ---------------------------------------------------------------------------
+// The framework appends its provider commands to this same registry. It is a
+// single line on purpose: removing the framework later means deleting
+// system/execute-after/, commands/... and this block. A failure here can never
+// stop AnimeMD from booting — it only disables the extension.
+// ---------------------------------------------------------------------------
+try {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const extension = path.join(__dirname, '..', 'execute-after', 'registry.js');
+  if (fs.existsSync(extension)) {
+    // While the extension module is still loading it self-registers when it
+    // finishes, so touching its exports here is unnecessary (and would warn
+    // about a circular dependency).
+    const cached = require.cache?.[extension];
+    if (!cached || cached.loaded) {
+      const loaded = require(extension);
+      if (loaded && typeof loaded.registerInto === 'function') loaded.registerInto(module.exports);
+    }
+  }
+} catch (error) {
+  console.warn('[execute-after] extension registry unavailable:', error?.message || error);
+}

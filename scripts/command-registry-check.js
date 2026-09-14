@@ -6,8 +6,14 @@ const assert = require('node:assert/strict');
 const { COMMANDS, allAliases, categoriesWithCommands, helpText, resolveCommand } = require('../system/lib/menu');
 const { styleHeaders } = require('../system/lib/presentation');
 const source = fs.readFileSync(path.join(__dirname, '../system/handler.js'), 'utf8');
+// ExecuteAfter (extension) provider commands live in the same registry and use
+// the same dispatcher through one explicit bridge branch. They are audited here
+// exactly like static commands, so registry and dispatcher still have to agree
+// in both directions.
+const executeAfter = require('../system/execute-after/registry');
+const startOfDispatch = source.indexOf('async function dispatchCommand(');
 function inspect() {
-  const start = source.indexOf('async function dispatchCommand(');
+  const start = startOfDispatch;
   const end = source.indexOf('// Handle protocol message', start);
   assert.ok(start >= 0 && end > start, 'Existing dispatcher must be present');
   const dispatch = source.slice(start, end);
@@ -20,10 +26,29 @@ function inspect() {
     return { name: label[1], line, body, targets: [...new Set(target)] };
   });
   const hidden = [...(source.match(/const HIDDEN_TRIGGERS = new Set\(\[([^\]]+)\]\)/)?.[1] || '').matchAll(/'([^']+)'/g)].map(m => m[1]);
-  return { routes, hidden };
+  const bridge = dispatch.match(/if \(executeAfterRouter\.owns\(command\.name\)\) \{[\s\S]*?await executeAfterRouter\.dispatch\(([^)]*)\)/);
+  return {
+    bridge: bridge ? { body: bridge[0], index: bridge.index, target: 'executeAfterRouter.dispatch' } : null,
+    hidden,
+    routes
+  };
 }
 function audit() {
-  const { routes, hidden } = inspect();
+  const { routes, hidden, bridge } = inspect();
+  const extensionNames = executeAfter.entries().map(entry => entry.command);
+  const staticRoutes = routes.length;
+  if (extensionNames.length) {
+    assert.ok(bridge, 'ExecuteAfter commands exist but the dispatcher bridge is missing');
+    for (const name of extensionNames) {
+      routes.push({
+        body: bridge.body,
+        extension: true,
+        line: source.slice(0, startOfDispatch + bridge.index).split('\n').length,
+        name,
+        targets: [bridge.target]
+      });
+    }
+  }
   const names = routes.map(route => route.name);
   const declared = COMMANDS.flatMap(command => [command.name, ...command.aliases]);
   assert.equal(new Set(names).size, names.length, 'Duplicate switch cases');
@@ -53,7 +78,7 @@ function audit() {
     }
   }
   for (const name of ['constructor', '__proto__', 'toString', 'notacommand']) assert.equal(resolveCommand(name), undefined);
-  return { routes, hidden, categories };
+  return { bridge, routes, hidden, categories, extensionNames, staticRoutes };
 }
 function markdown(result = audit()) {
   return [
@@ -64,7 +89,8 @@ function markdown(result = audit()) {
     '| --- | --- | --- | --- | --- | --- |',
     ...COMMANDS.map(command => {
       const route = result.routes.find(r => r.name === command.name);
-      return `| ${command.name} | ${command.aliases.join(', ') || '—'} | !menu ${command.category} | ${command.permission} | ${route.targets.map(t => `\`${t}\``).join(', ')} | system/handler.js:${route.line} |`;
+      const scope = route.extension ? ' (extension)' : '';
+      return `| ${command.name} | ${command.aliases.join(', ') || '—'} | !menu ${command.category}${scope} | ${command.permission} | ${route.targets.map(t => `\`${t}\``).join(', ')} | system/handler.js:${route.line} |`;
     })
   ].join('\n');
 }
