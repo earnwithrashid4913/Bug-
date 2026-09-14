@@ -4,6 +4,7 @@ const path = require('node:path');
 const { font } = require('./presentation');
 const { cleanText, publicHttpsUrl } = require('./anime-library');
 const { readLimitedBuffer } = require('./net-tools');
+const { maskInternationalNumber } = require('./pairing-number');
 
 function normalizeWelcomeConfig(value = {}) {
   return Object.freeze({
@@ -21,7 +22,7 @@ function authenticatedSelfJid(socket) {
 }
 function welcomeCaption(socket) {
   const jid = authenticatedSelfJid(socket);
-  const number = jid?.endsWith('@s.whatsapp.net') ? `+${jid.split('@')[0]}` : 'Unavailable';
+  const number = jid?.endsWith('@s.whatsapp.net') ? maskInternationalNumber(jid.split('@')[0]) : 'Unavailable';
   const name = cleanText(socket?.user?.name, 80) || 'WhatsApp User';
   return [
     `╭━━━〔 🌀 ${font('LIMITLESS • ACTIVE')} 〕━━━╮`,

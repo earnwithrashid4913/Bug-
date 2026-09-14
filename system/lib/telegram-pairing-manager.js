@@ -30,6 +30,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const {
@@ -43,6 +44,16 @@ const {
 const { normalizeTelegramId } = require('./telegram-controller');
 const { formatInternationalNumber, formatPairingCodeDisplay, normalizeWhatsAppNumber } = require('./pairing-number');
 const { MemoryCache } = require('./cache');
+const { createSessionStatus, safeSessionNumber, transitionSessionStatus } = require('./session-status');
+
+function sessionLogLabel(session) {
+  const value = `${session?.ownerId || 'unknown'}:${session?.number || session?.id || 'unknown'}`;
+  return `session:${crypto.createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
+}
+
+function numberLogLabel(number) {
+  return `session:${crypto.createHash('sha256').update(String(number || 'unknown')).digest('hex').slice(0, 12)}`;
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle states and traffic defaults.
@@ -267,6 +278,9 @@ class PairingSession {
     this.socketReserved = false;
     this.cleanupState = 'none';
     this.cleanupPromise = undefined;
+    this.sessionStatus = createSessionStatus(this.id);
+    this.sessionStatus.safeNumber = this.number;
+    this.sessionStatus.sessionLabel = 'paired';
     // Live { state, saveCreds } pair of the current socket, so a reconnect
     // after a server-forced restart reuses the in-memory credentials instead
     // of racing a saveCreds() disk write.
@@ -277,6 +291,12 @@ class PairingSession {
     this.status = status;
     this.updatedAt = Date.now();
     this.lastActivity = this.updatedAt;
+    const mapped = status === STATUS.CONNECTED ? 'connected'
+      : status === STATUS.RECONNECTING ? 'reconnecting'
+        : status === STATUS.CONNECTING || status === STATUS.INITIALIZING || status === STATUS.PAIRING_READY || status === STATUS.WAITING_FOR_LINK ? 'connecting'
+          : status === STATUS.LOGGED_OUT ? 'logged_out'
+            : status === STATUS.FAILED || status === STATUS.OFFLINE ? 'disconnected' : 'pairing';
+    transitionSessionStatus(this.sessionStatus, mapped, status);
   }
 }
 
@@ -339,6 +359,7 @@ class TelegramPairingManager {
       id: session.id,
       number: session.number,
       numberDisplay: session.numberDisplay,
+      safeNumberDisplay: session.sessionStatus ? safeSessionNumber(session.number) : 'Unavailable',
       status: session.status,
       state: STATUS_TO_STATE[session.status] || session.status.toLowerCase(),
       connected: session.status === STATUS.CONNECTED,
@@ -348,7 +369,10 @@ class TelegramPairingManager {
       pairingCode: null,
       startedAt: session.createdAt,
       updatedAt: session.updatedAt,
-      reconnects: session.reconnectAttempts,
+      connectedAt: session.sessionStatus?.connectedAt || null,
+      lastEvent: session.sessionStatus?.lastEvent || session.status,
+      lastUpdate: session.sessionStatus?.lastUpdate || session.updatedAt,
+      reconnects: session.sessionStatus?.reconnects || 0,
       codeExpiresAt: session.codeExpiresAt,
       lastDisconnect: session.lastDisconnectType
     };
@@ -558,6 +582,7 @@ class TelegramPairingManager {
     });
     this.reserveSocketSlot(session);
     session.socket = socket;
+    socket.animeSessionStatus = session.sessionStatus;
     session.authState = { state, saveCreds };
     session.closeExpected = false;
     socket.ev.on('creds.update', (updatedCreds) => {
@@ -567,18 +592,18 @@ class TelegramPairingManager {
       // for a failed pairing.
       if (updatedCreds?.registered === true && !session.registered) {
         session.registered = true;
-        this.log.info?.(`[telegram-pairing] ${session.numberDisplay} completed the WhatsApp link; waiting for the authenticated connection.`);
+        this.log.info?.(`[telegram-pairing] ${sessionLogLabel(session)} completed the WhatsApp link; waiting for the authenticated connection.`);
       }
       // saveCreds() persists the in-memory `state.creds` object that this
       // socket was created with, so credentials can never be written into
       // another session's directory.
-      void saveCreds().catch(() => this.log.error?.(`[telegram-pairing] Could not save WhatsApp credentials for ${session.numberDisplay}.`));
+      void saveCreds().catch(() => this.log.error?.(`[telegram-pairing] Could not save WhatsApp credentials for ${sessionLogLabel(session)}.`));
     });
     socket.ev.on('connection.update', (update) => {
       try {
         this.connectionUpdate(session, update, socket);
       } catch (error) {
-        this.log.error?.(`[telegram-pairing] Connection update handler failed for ${session.numberDisplay}: ${error.message}`);
+        this.log.error?.(`[telegram-pairing] Connection update handler failed for ${sessionLogLabel(session)}: ${error.message}`);
       }
     });
     await this.onSocket?.(socket, session.ownerId, this.sessionSnapshot(session));
@@ -657,7 +682,7 @@ class TelegramPairingManager {
       try {
         this.onConnected?.(session.ownerId, snapshot, session.socket);
       } catch (error) {
-        this.log.error?.(`[telegram-pairing] onConnected callback failed for ${session.numberDisplay}: ${error.message}`);
+        this.log.error?.(`[telegram-pairing] onConnected callback failed for ${sessionLogLabel(session)}: ${error.message}`);
       }
       return;
     }
@@ -694,7 +719,7 @@ class TelegramPairingManager {
     if (linked && !session.registered) session.registered = true;
 
     const statusCode = update.lastDisconnect?.error?.output?.statusCode;
-    this.log.warn?.(`[telegram-pairing] ${session.numberDisplay} disconnected (${classification.type}${statusCode ? `, status ${statusCode}` : ''}, linked=${linked}).`);
+    this.log.warn?.(`[telegram-pairing] ${sessionLogLabel(session)} disconnected (${classification.type}${statusCode ? `, status ${statusCode}` : ''}, linked=${linked}).`);
 
     if (classification.terminal) {
       session.setStatus(classification.type === 'LOGGED_OUT' ? STATUS.LOGGED_OUT : STATUS.FAILED);
@@ -711,7 +736,7 @@ class TelegramPairingManager {
           }
         })
         .catch((error) => {
-          this.log.error?.(`[telegram-pairing] Cleanup after disconnect failed for ${session.numberDisplay}: ${error.message}`);
+          this.log.error?.(`[telegram-pairing] Cleanup after disconnect failed for ${sessionLogLabel(session)}: ${error.message}`);
         });
       return;
     }
@@ -734,7 +759,7 @@ class TelegramPairingManager {
             }
           })
           .catch((error) => {
-            this.log.error?.(`[telegram-pairing] Cleanup after disconnect failed for ${session.numberDisplay}: ${error.message}`);
+            this.log.error?.(`[telegram-pairing] Cleanup after disconnect failed for ${sessionLogLabel(session)}: ${error.message}`);
           });
       } else {
         session.setStatus(STATUS.FAILED);
@@ -746,7 +771,7 @@ class TelegramPairingManager {
     // (normal right after linking) reconnects immediately.
     if (session.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       session.setStatus(STATUS.FAILED);
-      this.log.error?.(`[telegram-pairing] ${session.numberDisplay} exhausted ${MAX_RECONNECT_ATTEMPTS} reconnect attempts; session is offline. Use /restart to try again.`);
+      this.log.error?.(`[telegram-pairing] ${sessionLogLabel(session)} exhausted ${MAX_RECONNECT_ATTEMPTS} reconnect attempts; session is offline. Use /restart to try again.`);
       return;
     }
 
@@ -768,7 +793,7 @@ class TelegramPairingManager {
         ? this.restartRegisteredSession(session, liveState)
         : this.connectRegistered(session)
       ).catch((error) => {
-        this.log.error?.(`[telegram-pairing] Reconnect failed for ${session.numberDisplay}: ${error.message}`);
+        this.log.error?.(`[telegram-pairing] Reconnect failed for ${sessionLogLabel(session)}: ${error.message}`);
         if (!session.socket) session.setStatus(STATUS.FAILED);
       });
     }, delay);
@@ -781,18 +806,18 @@ class TelegramPairingManager {
       session.expiryTimer = undefined;
       if (session.stopped || session.registered || session.status === STATUS.CONNECTED) return;
       session.setStatus(STATUS.EXPIRED);
-      this.log.info?.(`[telegram-pairing] Pairing code for ${session.numberDisplay} expired without a link.`);
+      this.log.info?.(`[telegram-pairing] Pairing code for ${sessionLogLabel(session)} expired without a link.`);
       const snapshot = this.sessionSnapshot(session);
       void this.cleanupSession(session, { deleteCreds: true })
         .then(() => {
           try {
             this.onCodeExpired?.(session.ownerId, snapshot);
           } catch (error) {
-            this.log.error?.(`[telegram-pairing] onCodeExpired callback failed for ${session.numberDisplay}: ${error.message}`);
+            this.log.error?.(`[telegram-pairing] onCodeExpired callback failed for ${sessionLogLabel(session)}: ${error.message}`);
           }
         })
         .catch((error) => {
-          this.log.error?.(`[telegram-pairing] Cleanup after code expiry failed for ${session.numberDisplay}: ${error.message}`);
+          this.log.error?.(`[telegram-pairing] Cleanup after code expiry failed for ${sessionLogLabel(session)}: ${error.message}`);
         });
     }, this.limits.pairingCodeTtlMs);
     session.expiryTimer.unref();
@@ -880,7 +905,7 @@ class TelegramPairingManager {
       try {
         onProgress?.(stage, this.sessionSnapshot(session));
       } catch (error) {
-        this.log.warn?.(`[telegram-pairing] Progress callback failed for ${session.numberDisplay}: ${error.message}`);
+        this.log.warn?.(`[telegram-pairing] Progress callback failed for ${sessionLogLabel(session)}: ${error.message}`);
       }
     };
 
@@ -926,7 +951,7 @@ class TelegramPairingManager {
           try {
             await saveCreds();
           } catch (error) {
-            this.log.warn?.(`[telegram-pairing] Could not persist the credential reset for ${session.numberDisplay}: ${error.message}`);
+            this.log.warn?.(`[telegram-pairing] Could not persist the credential reset for ${sessionLogLabel(session)}: ${error.message}`);
           }
         }
 
@@ -971,7 +996,7 @@ class TelegramPairingManager {
         session.setStatus(STATUS.CODE_GENERATED);
         session.setStatus(STATUS.WAITING_FOR_LINK);
         this.armExpiryTimer(session);
-        this.log.info?.(`[telegram-pairing] WhatsApp issued a pairing code for ${session.numberDisplay}; the socket stays open waiting for the link.`);
+        this.log.info?.(`[telegram-pairing] WhatsApp issued a pairing code for ${sessionLogLabel(session)}; the socket stays open waiting for the link.`);
 
         const result = {
           code,
@@ -995,7 +1020,7 @@ class TelegramPairingManager {
           ? error
           : pairingError('Pairing could not be completed.', 'PAIRING_FAILED', 502);
         if (!known) {
-          this.log.error?.(`[telegram-pairing] Pairing ${session.numberDisplay} failed: ${error?.message || error}`);
+          this.log.error?.(`[telegram-pairing] Pairing ${sessionLogLabel(session)} failed: ${error?.message || error}`);
         }
         if (!session.registered && session.status !== STATUS.RECONNECTING) {
           session.setStatus(STATUS.FAILED);
@@ -1088,7 +1113,7 @@ class TelegramPairingManager {
       try {
         await fs.rm(authDir, { recursive: true, force: true });
       } catch (error) {
-        this.log.warn?.(`[telegram-pairing] Could not remove credentials for ${number}: ${error.message}`);
+        this.log.warn?.(`[telegram-pairing] Could not remove credentials for ${numberLogLabel(number)}: ${error.message}`);
         throw pairingError('The stored session could not be removed. Please try again.', 'PAIRING_FAILED', 500);
       }
       return { number, numberDisplay: formatInternationalNumber(number), status: STATUS.CLEANUP, ownerId: credsOwner, registered: false, connected: false };
@@ -1165,7 +1190,7 @@ class TelegramPairingManager {
         try {
           await fs.rm(session.authDir, { recursive: true, force: true });
         } catch (error) {
-          this.log.warn?.(`[telegram-pairing] Could not remove credentials for ${session.numberDisplay}: ${error.message}`);
+          this.log.warn?.(`[telegram-pairing] Could not remove credentials for ${sessionLogLabel(session)}: ${error.message}`);
         }
       }
       session.cleanupState = 'done';
@@ -1223,12 +1248,12 @@ class TelegramPairingManager {
             if (!existing) this.sessions.set(session.id, session);
             if (!this.canCreateSocket()) {
               session.setStatus(STATUS.OFFLINE);
-              this.log.warn?.(`[telegram-pairing] ${session.numberDisplay} stays offline: the socket limit (${this.limits.maxActiveSockets}) is reached. Use /restart to bring it online later.`);
+              this.log.warn?.(`[telegram-pairing] ${sessionLogLabel(session)} stays offline: the socket limit (${this.limits.maxActiveSockets}) is reached. Use /restart to bring it online later.`);
               continue;
             }
             session.setStatus(STATUS.CONNECTING);
             await this.connectRegistered(session).catch((error) => {
-              this.log.error?.(`[telegram-pairing] Could not restore ${session.numberDisplay}: ${error.message}`);
+              this.log.error?.(`[telegram-pairing] Could not restore ${sessionLogLabel(session)}: ${error.message}`);
               if (!session.socket) session.setStatus(STATUS.FAILED);
             });
           } catch (error) {
@@ -1263,7 +1288,7 @@ class TelegramPairingManager {
       if (entry.name === number) continue;
       await fs.rename(path.join(ownerDir, entry.name), path.join(targetDir, entry.name));
     }
-    this.log.info?.(`[telegram-pairing] Migrated legacy session for controller ${ownerId} to ${number}.`);
+    this.log.info?.(`[telegram-pairing] Migrated legacy session for controller ${ownerId} to ${numberLogLabel(number)}.`);
   }
 
   async sweepStaleDir(dir) {
