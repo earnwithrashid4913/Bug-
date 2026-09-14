@@ -2,8 +2,8 @@
 
 const { BotTracker } = require('./lib/bot-tracker');
 const recovery = require('./lib/message-recovery');
-const sourceCommands = require('./lib/source-commands');
-const { storedMedia } = require('./lib/stored-media');
+const sourceCommands = require('../commands/source-commands');
+const { storedMedia } = require('../commands/stored-media');
 const QRCode = require('qrcode');
 const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const { config, normalizePhoneNumber } = require('./config');
@@ -40,13 +40,26 @@ const {
   handleLeaderboardCommand,
   handleWaifuCommand,
   handleQuoteCommand,
-} = require('./lib/anime-otaku');
-const quizModule = require('./lib/quiz');
+} = require('../commands/anime-otaku');
+const quizModule = require('../commands/quiz');
 const {
   handleTiktokCommand,
   handleFacebookCommand,
   handleXdlCommand,
-} = require('./lib/downloader-extended');
+  handleInstagramCommand,
+  handlePinterestCommand,
+  handleSoundcloudCommand,
+  handleMediafireCommand,
+  handleGdriveCommand,
+  handleTeraboxCommand,
+} = require('../commands/downloader-extended');
+const dc = require('../commands/davidcyril-api');
+const {
+  handleMovieSearchCommand,
+  handleMovieLatestCommand,
+  handleSeriesSearchCommand,
+  handleSeriesLatestCommand,
+} = require('../commands/movies');
 const {
   handleCoupleCommand,
   handleTruthCommand,
@@ -57,7 +70,7 @@ const {
   handleShipCommand,
   handleMeteoCommand,
   handleLyricsCommand,
-} = require('./lib/fun-commands');
+} = require('../commands/fun-commands');
 const {
   requestCobalt,
   spotifySearch,
@@ -699,14 +712,11 @@ async function handleMenuCommand(socket, context, command) {
 
 async function handleSpotifyCommand(socket, context, command) {
   if (!command.text) {
-    await sendResult(socket, context, { text: usageLine('spotify', '<song name>', 'spotify Faded'), command: 'spotify' });
+    await sendResult(socket, context, { text: usageLine('spotify', '<song name or Spotify URL>', 'spotify Faded'), command: 'spotify' });
     return;
   }
   let loading;
   const finish = async text => {
-    // Baileys supports editing a sent message by reusing its key. If a socket
-    // implementation cannot edit, sendResult is the bounded fallback so the
-    // loading state is never the last visible response.
     if (loading?.key && typeof socket.sendMessage === 'function') {
       try {
         await socket.sendMessage(context.chatId, { text, edit: loading.key });
@@ -719,8 +729,47 @@ async function handleSpotifyCommand(socket, context, command) {
   };
   try {
     loading = await socket.sendMessage(context.chatId, { text: '⏳ *Searching Spotify…*' }, { quoted: context.raw });
-    const results = await spotifySearch(command.text, 5);
-    if (!results.length) {
+    const input = command.text.trim();
+
+    // If input is a Spotify URL, download directly via DavidCyril Spotify pool
+    if (/spotify\.com/i.test(input)) {
+      try {
+        const result = await dc.spotifyDownload(input);
+        const mediaUrl = result.url || result.audioUrl;
+        if (mediaUrl) {
+          const buf = await dc.dlBuffer(mediaUrl, 120_000);
+          const title = result.title || 'Spotify Track';
+          await socket.sendMessage(context.chatId, { text: `🎵 ${title}` }, { quoted: context.raw });
+          await socket.sendMessage(context.chatId, { audio: buf, mimetype: 'audio/mpeg', ptt: false, fileName: `${title}.mp3` }, { quoted: context.raw });
+          await finish(`*SPOTIFY AUDIO READY* 🎧\n*Title:* ${title}\n*Source:* Spotify`);
+          return;
+        }
+      } catch (e) { console.warn('[Spotify] Direct URL download failed:', e?.message); }
+    }
+
+    // Search for metadata first (iTunes/Deezer)
+    let results;
+    try {
+      results = await spotifySearch(input, 5);
+    } catch (e) { console.warn('[Spotify] iTunes/Deezer search failed:', e?.message); }
+    // Fallback: Spotify V2 search
+    if (!results || !results.length) {
+      try {
+        const v2Data = await dc.spotifyV2Search(input);
+        const v2Items = dc.pickItems(v2Data);
+        if (v2Items.length) {
+          results = v2Items.map(item => ({
+            title: item.title || item.name || '',
+            artist: item.artist || item.artists || '',
+            album: item.album || '',
+            duration: item.duration || 0,
+            images: item.image || item.thumbnail ? [{ url: item.image || item.thumbnail }] : [],
+            url: item.url || item.link || '',
+          }));
+        }
+      } catch (e) { console.warn('[Spotify] V2 search failed:', e?.message); }
+    }
+    if (!results || !results.length) {
       await finish('*SPOTIFY RESULTS* 🎧\nNo tracks found for that query.');
       return;
     }
@@ -733,19 +782,47 @@ async function handleSpotifyCommand(socket, context, command) {
 
     const selected = results[0];
     const audioQuery = `${selected.title} ${selected.artist || ''}`.trim();
-    const audio = await sourceCommands.download(socket, context, {
-      name: 'play',
-      text: audioQuery,
-      args: audioQuery.split(/\s+/),
-      quiet: true
-    });
-    if (!audio?.ok) {
-      const reason = audio?.error?.message || '';
-      if (/no media|not found|no search results|refused|unsupported/i.test(reason)) {
-        await finish('*SPOTIFY AUDIO* ❌\nAudio not found for this track.');
-      } else {
-        await finish('*SPOTIFY AUDIO* ❌\nAudio download is temporarily unavailable. Please try again later.');
+
+    // Try DavidCyril play music first
+    let sent = false;
+    try {
+      const playResult = await dc.playMusic(audioQuery);
+      const mediaUrl = playResult.url || playResult.audioUrl;
+      if (mediaUrl) {
+        const buf = await dc.dlBuffer(mediaUrl, 120_000);
+        await socket.sendMessage(context.chatId, { text: `🎵 ${selected.title} — ${selected.artist || 'Unknown'}` }, { quoted: context.raw });
+        await socket.sendMessage(context.chatId, { audio: buf, mimetype: 'audio/mpeg', ptt: false, fileName: `${selected.title}.mp3` }, { quoted: context.raw });
+        sent = true;
       }
+    } catch (e) { console.warn('[Spotify] DavidCyril playMusic failed:', e?.message); }
+
+    // Fallback: DavidCyril song download
+    if (!sent) {
+      try {
+        const songData = await dc.songDownload(audioQuery);
+        const mediaUrl = dc.pickUrl(songData) || dc.pickAudioUrl(songData);
+        if (mediaUrl) {
+          const buf = await dc.dlBuffer(mediaUrl, 120_000);
+          await socket.sendMessage(context.chatId, { text: `🎵 ${selected.title} — ${selected.artist || 'Unknown'}` }, { quoted: context.raw });
+          await socket.sendMessage(context.chatId, { audio: buf, mimetype: 'audio/mpeg', ptt: false, fileName: `${selected.title}.mp3` }, { quoted: context.raw });
+          sent = true;
+        }
+      } catch (e) { console.warn('[Spotify] DavidCyril songDownload failed:', e?.message); }
+    }
+
+    // Fallback: sourceCommands.download (YouTube search → Cobalt)
+    if (!sent) {
+      const audio = await sourceCommands.download(socket, context, {
+        name: 'play',
+        text: audioQuery,
+        args: audioQuery.split(/\s+/),
+        quiet: true
+      });
+      if (audio?.ok) sent = true;
+    }
+
+    if (!sent) {
+      await finish('*SPOTIFY AUDIO* ❌\nAudio download is temporarily unavailable. Please try again later.');
       return;
     }
     await finish(`*SPOTIFY AUDIO READY* 🎧\n*Title:* ${selected.title}\n*Artist:* ${selected.artist || 'Unknown'}\n*Source:* ${selected.url}`);
@@ -762,6 +839,65 @@ async function handleMediaCommand(socket, context, command) {
   }
   await socket.sendMessage(context.chatId, { text: '⏳ *Downloading…*' }, { quoted: context.raw });
   const url = command.text.trim();
+
+  // Detect platform for specialised fallback before generic AIO
+  const isTikTok = /tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com/i.test(url);
+  const isFacebook = /facebook\.com|fb\.com|fb\.watch/i.test(url);
+  const isTwitter = /twitter\.com|x\.com|t\.co/i.test(url);
+  const isInstagram = /instagram\.com|instagr\.am/i.test(url);
+  const isPinterest = /pinterest\.com|pin\.it/i.test(url);
+  const isSoundCloud = /soundcloud\.com|snd\.sc/i.test(url);
+
+  let result = null;
+
+  // Try platform-specific DavidCyril endpoints first
+  try {
+    if (isTikTok) {
+      result = await dc.tiktokDownload(url);
+    } else if (isFacebook) {
+      result = await dc.facebookDownload(url);
+    } else if (isTwitter) {
+      result = await dc.twitterDownload(url);
+    } else if (isInstagram) {
+      const data = await dc.instagramDownload(url);
+      result = { url: dc.pickUrl(data), title: dc.pickTitle(data), data };
+    } else if (isPinterest) {
+      const data = await dc.pinterestDownload(url);
+      result = { url: dc.pickUrl(data), title: dc.pickTitle(data), data };
+    } else if (isSoundCloud) {
+      result = await dc.soundcloudDownload(url);
+    }
+    if (result?.url) {
+      const mediaUrl = result.url;
+      const buf = await dc.dlBuffer(mediaUrl);
+      const type = buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA8 ? 'video'
+        : buf[0] === 0xFF && buf[1] === 0xD8 ? 'image' : 'video';
+      const caption = `*DOWNLOAD COMPLETE* ✅\n${result.title ? '📝 ' + result.title + '\n' : ''}\n*Size:* ${(buf.length / 1024).toFixed(1)} KB`;
+      if (type === 'image') {
+        await socket.sendMessage(context.chatId, { image: buf, caption }, { quoted: context.raw });
+      } else {
+        await socket.sendMessage(context.chatId, { video: buf, mimetype: 'video/mp4', caption }, { quoted: context.raw });
+      }
+      await sendResult(socket, context, { text: caption, command: 'media', ctx: { url } });
+      return;
+    }
+  } catch (e) { console.warn('[media] Platform-specific DavidCyril failed:', e?.message); }
+
+  // Fallback: DavidCyril AIO (3 endpoints)
+  try {
+    const aioResult = await dc.aioDownload(url);
+    const mediaUrl = dc.pickUrl(aioResult?.data || aioResult);
+    if (mediaUrl) {
+      const buf = await dc.dlBuffer(mediaUrl);
+      const title = dc.pickTitle(aioResult?.data || aioResult);
+      const caption = `*DOWNLOAD COMPLETE* ✅\n${title ? '📝 ' + title + '\n' : ''}\n*Size:* ${(buf.length / 1024).toFixed(1)} KB`;
+      await socket.sendMessage(context.chatId, { video: buf, mimetype: 'video/mp4', caption }, { quoted: context.raw });
+      await sendResult(socket, context, { text: caption, command: 'media', ctx: { url } });
+      return;
+    }
+  } catch (e) { console.warn('[media] AIO failed:', e?.message); }
+
+  // Final fallback: Cobalt (existing provider)
   try {
     const result = await requestCobalt(config.cobaltApiUrl, url);
     if (!result?.url) throw new Error('The download service returned no file for that link.');
@@ -1901,7 +2037,6 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       // the warning family so a regular member cannot list group warnings.
       const group = await requireGroupAdmin(socket, context);
       if (!group) break;
-      await handleWarnsCommand(socket, context);
       await handleWarnsCommand(socket, context, command);
       break;
     }
@@ -2314,6 +2449,66 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'twdl':
     case 'twitter':
       await handleXdlCommand(socket, context, command.text);
+      break;
+
+    case 'ig':
+    case 'igdl':
+    case 'instagram':
+      await handleInstagramCommand(socket, context, command.text);
+      break;
+
+    case 'pin':
+    case 'pinterest':
+    case 'pindl':
+      await handlePinterestCommand(socket, context, command.text);
+      break;
+
+    case 'soundcloud':
+    case 'scdl':
+      await handleSoundcloudCommand(socket, context, command.text);
+      break;
+
+    case 'mediafire':
+    case 'mfdl':
+      await handleMediafireCommand(socket, context, command.text);
+      break;
+
+    case 'gdrive':
+    case 'gddl':
+      await handleGdriveCommand(socket, context, command.text);
+      break;
+
+    case 'terabox':
+    case 'tbdl':
+      await handleTeraboxCommand(socket, context, command.text);
+      break;
+
+    // ═══════════════════════════════════════════════════════════════
+    //  MOVIE / SERIES
+    // ═══════════════════════════════════════════════════════════════
+
+    case 'movie':
+    case 'film':
+    case 'moviesearch':
+      await handleMovieSearchCommand(socket, context, command.args);
+      break;
+
+    case 'movielatest':
+    case 'latestmovies':
+    case 'newmovies':
+      await handleMovieLatestCommand(socket, context);
+      break;
+
+    case 'series':
+    case 'tv':
+    case 'tvseries':
+      await handleSeriesSearchCommand(socket, context, command.args);
+      break;
+
+    case 'serieslatest':
+    case 'latestseries':
+    case 'newseries':
+      await handleSeriesLatestCommand(socket, context);
       break;
 
     // ═══════════════════════════════════════════════════════════════

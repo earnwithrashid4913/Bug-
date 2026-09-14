@@ -1,7 +1,7 @@
 'use strict';
 
 const { getQuestions } = require('./quiz-data');
-const otaku = require('./otaku');
+const otaku = require('../system/lib/otaku');
 
 const groupSessions = new Map();
 const JOIN_TIMEOUT = 45000;
