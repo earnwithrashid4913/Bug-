@@ -1,6 +1,6 @@
 'use strict';
 const { unwrapMessage, getQuotedMessage, getContextInfo } = require('./message');
-const { FOOTER } = require('./source-commands');
+const { FOOTER } = require('../../commands/source-commands');
 
 // Replaces the dispatcher's text-only cache. Socket isolation prevents media
 // from one connected account being recovered through another account.

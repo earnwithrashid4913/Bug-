@@ -2,7 +2,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { getQuotedMessage } = require('./message');
+const { getQuotedMessage } = require('../system/lib/message');
 
 // Metadata lives in RuntimeSettingsStore; no second database or replacement schema.
 async function storedMedia(socket, context, command, { settings, download }) {

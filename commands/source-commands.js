@@ -2,9 +2,10 @@
 
 // Source command flows adapted to AnimeMD's existing dispatcher and transport.
 const { performance } = require('node:perf_hooks');
-const { downloadRemoteFile, requestCobalt, youtubeSearch } = require('./net-tools');
-const { FOOTER, font } = require('./presentation');
-const { sessionDashboard } = require('./session-status');
+const { downloadRemoteFile, requestCobalt, youtubeSearch } = require('../system/lib/net-tools');
+const { FOOTER, font } = require('../system/lib/presentation');
+const { sessionDashboard } = require('../system/lib/session-status');
+const dc = require('./davidcyril-api');
 async function react(socket, context, text) {
   try { await socket.sendMessage(context.chatId, { react: { text, key: context.raw.key } }); } catch { /* Reactions must not prevent the actual response. */ }
 }
@@ -53,36 +54,86 @@ async function download(socket, context, command) {
       url = video.url;
     }
     await react(socket, context, '⬇️');
-    // The former third-party download endpoint was returning provider HTTP 500
-    // and is intentionally no longer used.
-    // Use the configured Cobalt-compatible service, which returns a short-lived
-    // authorized media URL instead of pretending Spotify or YouTube provide MP3s.
-    const providers = [...new Set([
-      process.env.COBALT_API_URL || 'https://cobalt-api.kwiatekmiki.com',
-      process.env.COBALT_FALLBACK_API_URL
-    ].filter(Boolean))];
-    let result;
-    let providerError;
-    for (const provider of providers) {
-      try {
-        result = await requestCobalt(provider, url, { audio: !videoMode });
-        break;
-      } catch (error) {
-        providerError = error;
-        console.warn('[Play] Configured audio provider failed:', error?.message || error);
-      }
-    }
-    if (!result) throw providerError || new Error('No audio provider is available.');
-    if (!result?.url) throw new Error('The download service returned no media.');
+
     if (videoMode) {
-      await socket.sendMessage(context.chatId, { video: { url: result.url }, mimetype: 'video/mp4', caption: `✅ ${video?.title || result.filename || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
+      // ── VIDEO: !video — keep existing Cobalt working, add DavidCyril as fallback ──
+      let sent = false;
+      // Primary: Cobalt (existing working provider)
+      const providers = [...new Set([
+        process.env.COBALT_API_URL || 'https://cobalt-api.kwiatekmiki.com',
+        process.env.COBALT_FALLBACK_API_URL
+      ].filter(Boolean))];
+      for (const provider of providers) {
+        try {
+          const result = await requestCobalt(provider, url, { audio: false });
+          if (result?.url) {
+            await socket.sendMessage(context.chatId, { video: { url: result.url }, mimetype: 'video/mp4', caption: `✅ ${video?.title || result.filename || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
+            sent = true;
+            break;
+          }
+        } catch (err) { console.warn('[Video] Cobalt provider failed:', err?.message || err); }
+      }
+      // Fallback: DavidCyril YouTube MP4 pool
+      if (!sent) {
+        console.info('[Video] Cobalt failed, trying DavidCyril YouTube MP4 fallback.');
+        const dcResult = await dc.downloadYtVideo(url);
+        if (dcResult?.ok && dcResult.url) {
+          await socket.sendMessage(context.chatId, { video: { url: dcResult.url }, mimetype: 'video/mp4', caption: `✅ ${video?.title || dcResult.title || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
+          sent = true;
+        }
+      }
+      // Fallback: DavidCyril AIO
+      if (!sent) {
+        console.info('[Video] YouTube MP4 pool failed, trying DavidCyril AIO fallback.');
+        try {
+          const aioResult = await dc.aioDownload(url);
+          const aioUrl = dc.pickUrl(aioResult?.data || aioResult);
+          if (aioUrl) {
+            await socket.sendMessage(context.chatId, { video: { url: aioUrl }, mimetype: 'video/mp4', caption: `✅ ${video?.title || dc.pickTitle(aioResult?.data || aioResult) || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
+            sent = true;
+          }
+        } catch (err) { console.warn('[Video] AIO fallback failed:', err?.message || err); }
+      }
+      if (!sent) throw new Error('All video download sources failed.');
     } else {
-      if (video?.title) await socket.sendMessage(context.chatId, { text: `🎵 ${video.title}` }, { quoted: context.raw });
-      const media = await downloadRemoteFile(result.url, 25 * 1024 * 1024);
-      await socket.sendMessage(context.chatId, { audio: media.buffer, mimetype: media.type || 'audio/mpeg', ptt: false, fileName: result.filename || `${video?.title || 'audio'}.mp3` }, { quoted: context.raw });
+      // ── AUDIO: !play — DavidCyril YouTube MP3 pool as primary, Cobalt as fallback ──
+      let sent = false;
+      let audioTitle = video?.title || 'audio';
+      // Primary: DavidCyril YouTube MP3 complete fallback pool
+      try {
+        const dcResult = await dc.downloadYtAudio(url);
+        if (dcResult?.ok && dcResult.url) {
+          audioTitle = dcResult.title || audioTitle;
+          if (audioTitle && audioTitle !== 'audio') await socket.sendMessage(context.chatId, { text: `🎵 ${audioTitle}` }, { quoted: context.raw });
+          const media = await dc.dlBuffer(dcResult.url, 120_000);
+          await socket.sendMessage(context.chatId, { audio: media, mimetype: 'audio/mpeg', ptt: false, fileName: `${audioTitle}.mp3` }, { quoted: context.raw });
+          sent = true;
+        }
+      } catch (err) { console.warn('[Play] DavidCyril YouTube MP3 failed:', err?.message || err); }
+      // Fallback: Cobalt (existing provider)
+      if (!sent) {
+        console.info('[Play] DavidCyril failed, trying Cobalt fallback.');
+        const cobaltProviders = [...new Set([
+          process.env.COBALT_API_URL || 'https://cobalt-api.kwiatekmiki.com',
+          process.env.COBALT_FALLBACK_API_URL
+        ].filter(Boolean))];
+        for (const provider of cobaltProviders) {
+          try {
+            const result = await requestCobalt(provider, url, { audio: true });
+            if (result?.url) {
+              if (video?.title) await socket.sendMessage(context.chatId, { text: `🎵 ${video.title}` }, { quoted: context.raw });
+              const media = await downloadRemoteFile(result.url, 25 * 1024 * 1024);
+              await socket.sendMessage(context.chatId, { audio: media.buffer, mimetype: media.type || 'audio/mpeg', ptt: false, fileName: result.filename || `${video?.title || 'audio'}.mp3` }, { quoted: context.raw });
+              sent = true;
+              break;
+            }
+          } catch (err) { console.warn('[Play] Cobalt fallback failed:', err?.message || err); }
+        }
+      }
+      if (!sent) throw new Error('All audio download sources failed.');
     }
     await react(socket, context, '✅');
-    return { ok: true, title: video?.title || result.filename || 'audio' };
+    return { ok: true, title: video?.title || 'audio' };
   } catch (error) {
     console.error('[Play] Download failed:', error?.message || error);
     await react(socket, context, '❌');

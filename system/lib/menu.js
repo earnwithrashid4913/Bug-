@@ -183,7 +183,17 @@ const COMMANDS = Object.freeze([
   command('lyrics', 'funextra', 'Search for song lyrics.', { aliases: ['lyric'], usage: '<song title>' }),
   command('tiktok', 'downloader', 'Download a TikTok video without watermark.', { aliases: ['tt', 'ttdl'], usage: '<link>' }),
   command('facebook', 'downloader', 'Download a Facebook video.', { aliases: ['fb', 'fbdl'], usage: '<link>' }),
-  command('twitter', 'downloader', 'Download a Twitter/X video.', { aliases: ['xdl', 'twdl'], usage: '<link>' })
+  command('twitter', 'downloader', 'Download a Twitter/X video.', { aliases: ['xdl', 'twdl'], usage: '<link>' }),
+  command('instagram', 'downloader', 'Download an Instagram reel/post/story.', { aliases: ['ig', 'igdl'], usage: '<link>' }),
+  command('pinterest', 'downloader', 'Download a Pinterest pin image or video.', { aliases: ['pin', 'pindl'], usage: '<link>' }),
+  command('soundcloud', 'downloader', 'Download audio from SoundCloud.', { aliases: ['scdl'], usage: '<link>' }),
+  command('mediafire', 'downloader', 'Download a file from Mediafire.', { aliases: ['mfdl'], usage: '<link>' }),
+  command('gdrive', 'downloader', 'Download a file from Google Drive.', { aliases: ['gddl'], usage: '<link>' }),
+  command('terabox', 'downloader', 'Download a file from Terabox.', { aliases: ['tbdl'], usage: '<link>' }),
+  command('movie', 'downloader', 'Search for a movie across multiple sources.', { aliases: ['film', 'moviesearch'], usage: '<title>' }),
+  command('movielatest', 'downloader', 'Get latest movies from multiple sources.', { aliases: ['latestmovies', 'newmovies'] }),
+  command('series', 'downloader', 'Search for a TV series.', { aliases: ['tv', 'tvseries'], usage: '<title>' }),
+  command('serieslatest', 'downloader', 'Get latest TV series.', { aliases: ['latestseries', 'newseries'] })
 ]);
 
 const ALIAS_MAP = COMMANDS.reduce((map, entry) => {

@@ -1,7 +1,7 @@
 'use strict';
 
 const axios = require('axios');
-const otaku = require('./otaku');
+const otaku = require('../system/lib/otaku');
 
 const JIKAN_API = 'https://api.jikan.moe/v4';
 const cache = new Map();
