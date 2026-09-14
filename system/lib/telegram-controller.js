@@ -40,6 +40,7 @@ const SENSITIVE_COOLDOWN_MS = 20_000;
 const SENSITIVE_LOCK_TTL_MS = 2 * 60_000;
 const PENDING_NUMBER_TTL_MS = 5 * 60_000;
 const MAX_SESSION_BUTTONS = 8;
+const SESSION_CALLBACK_TTL_MS = 15 * 60_000;
 
 // Public-chat (group / supergroup) pairing abuse protection. A group is a
 // shared surface, so on top of the per-user gates (20s sensitive-operation
@@ -103,11 +104,17 @@ const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', 
 const SPINNER_INTERVAL_MS = 800;
 
 const { formatInternationalNumber, maskInternationalNumber, normalizeWhatsAppNumber } = require('./pairing-number');
+
+function safeLogNumber(number) {
+  try { return maskInternationalNumber(number); } catch { return 'redacted-session'; }
+}
+
 const { parseDuration } = require('./premium');
 // Real WhatsApp command directory. The Telegram ALL MENU page is a READ-ONLY
 // listing of the commands the WhatsApp handler actually registers — nothing is
 // invented here, so a command can never appear in the menu without existing.
 const { categoriesWithCommands } = require('./menu');
+const { sessionDashboard } = require('./session-status');
 // Canonical project identity (never deployment configuration). Used by the
 // DEVELOPER and THANKS TO pages so they always report the project's real
 // protected identity instead of a copied one.
@@ -535,14 +542,21 @@ function guideBox() {
   ]);
 }
 
-function connectedBox(numberDisplay, username) {
+function connectedBox(numberDisplay, username, session) {
   const lines = [
     '',
     '✦ ANIME-MD • LINK COMPLETE ✦',
     '✅ Pairing Completed Successfully',
     '✅ WhatsApp Connected',
     '',
-    `📱 ${numberDisplay}`
+    session ? sessionDashboard({
+      state: session.state || (session.connected ? 'connected' : 'disconnected'),
+      connected: session.connected,
+      connectedAt: session.connectedAt,
+      reconnects: session.reconnects,
+      lastEvent: session.lastEvent,
+      lastUpdate: session.lastUpdate
+    }, { number: session.number || String(numberDisplay || '').replace(/\D/g, '') }) : `📱 ${numberDisplay}`
   ];
   if (username) lines.push(`👤 @${username}`);
   lines.push(
@@ -821,7 +835,7 @@ function systemStatusBox({ uptime, sessions, queued = 0, publicMode, premiumOnly
     `📊 Active Sessions: ${sessions}`,
     `🔄 Queued Pairings: ${queued}`,
     '',
-    `⏱ Uptime: ${formatUptime(uptime)}`,
+    `⏱ Controller Uptime: ${formatUptime(uptime)}`,
     `🤖 Bot Version: ${version}`,
     `🌍 Public Mode: ${publicMode ? 'ON' : 'OFF'}`,
     `💎 Premium Only: ${premiumOnly ? 'ON' : 'OFF'}`,
@@ -895,13 +909,18 @@ function sessionsBox(sessions, publicChat = false) {
 }
 
 function statusBox(session, { ownerId, publicChat = false } = {}) {
-  const { icon, label } = badgeParts(session.status);
+  const dashboard = sessionDashboard({
+    state: session.state || (session.connected ? 'connected' : 'disconnected'),
+    connected: session.connected,
+    connectedAt: session.connectedAt,
+    reconnects: session.reconnects,
+    lastEvent: session.lastEvent,
+    lastUpdate: session.lastUpdate
+  }, { number: session.number || String(session.numberDisplay || '').replace(/\D/g, ''), compact: false });
   const lines = [
     '',
-    `📱 Number: ${displayNumber(session, publicChat)}`,
-    `${icon} Status: ${label || session.status}`,
-    `🔗 Paired: ${session.registered ? 'yes' : 'no'}`,
-    `🔄 Reconnects: ${session.reconnects}`
+    ...dashboard.split('\\n'),
+    `🔗 Paired: ${session.registered ? 'yes' : 'no'}`
   ];
   if (ownerId) lines.push(`👤 Owner: ${ownerId}`);
   lines.push('', 'Your ANIME MD session.');
@@ -918,7 +937,7 @@ function overallStatusBox(sessions, controllerUptimeSeconds, user = {}, publicCh
   const lines = [
     `✦ ${bold('ANIME MD')} ✦`,
     `「 🤖 」 ${bold('CONTROLLER')} 〢 🟢 ${bold('ONLINE')}`,
-    `「 ⏱️ 」 ${bold('UPTIME')} 〢 ${uptimeClock(controllerUptimeSeconds)}`,
+    `「 ⏱️ 」 ${bold('CONTROLLER UPTIME')} 〢 ${uptimeClock(controllerUptimeSeconds)}`,
     `「 📱 」 ${bold('WHATSAPP')} 〢 ${bold(String(sessions.length))} ${bold(sessions.length === 1 ? 'SESSION' : 'SESSIONS')}`,
     '',
     `${tier.icon} ${bold('TIER')} 〢 ${bold(tier.label)}`,
@@ -1474,12 +1493,13 @@ function guideMarkup() {
   ]] };
 }
 
-function sessionsMarkup(sessions, publicChat = false) {
+function sessionsMarkup(sessions, publicChat = false, tokenForSession = (session) => session.number) {
   // Button labels are visible in the chat, so they follow the same
-  // public-chat masking rule as the box text.
+  // public-chat masking rule as the box text. Callback data carries only an
+  // opaque server-side token, never a WhatsApp number.
   const rows = sessions.slice(0, MAX_SESSION_BUTTONS).map((session) => [{
     text: `📱 ${displayNumber(session, publicChat)}`,
-    callback_data: `ses:menu:${session.number}`
+    callback_data: `ses:menu:${tokenForSession(session)}`
   }]);
   rows.push([
     { text: '🔄 Refresh', callback_data: 'nav:sessions' },
@@ -1488,20 +1508,20 @@ function sessionsMarkup(sessions, publicChat = false) {
   return { inline_keyboard: rows };
 }
 
-function sessionMenuMarkup(number) {
+function sessionMenuMarkup(token) {
   return { inline_keyboard: [[
-    { text: '🔄 Restart', callback_data: `ses:restart:${number}` },
-    { text: '🗑 Remove', callback_data: `ses:stop:${number}` }
+    { text: '🔄 Restart', callback_data: `ses:restart:${token}` },
+    { text: '🗑 Remove', callback_data: `ses:stop:${token}` }
   ], [
     { text: '⬅️ Back', callback_data: 'nav:sessions' },
     { text: '🏠 Home', callback_data: 'home' }
   ]] };
 }
 
-function stopConfirmMarkup(number) {
+function stopConfirmMarkup(token) {
   return { inline_keyboard: [[
-    { text: '🗑 Yes, remove it', callback_data: `ses:stopok:${number}` },
-    { text: '❌ Cancel', callback_data: `ses:menu:${number}` }
+    { text: '🗑 Yes, remove it', callback_data: `ses:stopok:${token}` },
+    { text: '❌ Cancel', callback_data: `ses:menu:${token}` }
   ]] };
 }
 
@@ -1690,6 +1710,33 @@ class TelegramController {
     this.actors = new Map();
     this.pendingActions = new Map();
     this.verificationFailures = new Map();
+    this.sessionCallbackTokens = new Map();
+  }
+
+  issueSessionCallbackToken(ownerId, number) {
+    const now = Date.now();
+    for (const [existingToken, record] of this.sessionCallbackTokens) {
+      if (record.expiresAt <= now) this.sessionCallbackTokens.delete(existingToken);
+    }
+    const token = crypto.randomBytes(18).toString('base64url');
+    this.sessionCallbackTokens.set(token, {
+      ownerId: normalizeTelegramId(ownerId),
+      number: String(number),
+      expiresAt: Date.now() + SESSION_CALLBACK_TTL_MS
+    });
+    return token;
+  }
+
+  resolveSessionCallbackToken(senderId, token, { admin = false } = {}) {
+    const record = this.sessionCallbackTokens.get(String(token || ''));
+    if (!record || record.expiresAt <= Date.now()) {
+      this.sessionCallbackTokens.delete(String(token || ''));
+      throw Object.assign(new Error('This session button has expired. Open My Sessions again.'), { code: 'EXPIRED' });
+    }
+    if (!admin && record.ownerId !== normalizeTelegramId(senderId)) {
+      throw Object.assign(new Error('You do not have permission to manage this session.'), { code: 'DENIED' });
+    }
+    return record.number;
   }
 
   // ------------------------------ access ----------------------------------
@@ -2470,7 +2517,7 @@ class TelegramController {
       action: 'Pairing Code Generated',
       actor: flow.actor,
       userId: flow.senderKey,
-      details: [`📱 Number: ${flow.numberDisplay}`]
+      details: [`📱 Number: ${safeLogNumber(flow.number)}`]
     });
     // Do NOT record paired number here — only on successful WhatsApp connection
     // to avoid consuming slots for failed attempts.
@@ -2487,7 +2534,7 @@ class TelegramController {
     // connection timeout still renders the exact ANIME MD FAILED box.
     const lines = error?.code && friendly.lines?.length ? friendly.lines : [friendlyReasonLine(error)];
     // The real reason is always logged server-side, whatever the chat type.
-    this.log.warn?.(`[telegram] Pairing failed for ${flow.numberDisplay} in chat ${flow.chatId}: ${error?.code || 'UNKNOWN'} — ${error?.message || error}`);
+    this.log.warn?.(`[telegram] Pairing failed for ${safeLogNumber(flow.number)} in chat ${flow.chatId}: ${error?.code || 'UNKNOWN'} — ${error?.message || error}`);
     if (flow.public) {
       // PUBLIC ERROR UX: a group/supergroup never receives validation detail,
       // Baileys wording, disconnect reasons or any technical text. It gets one
@@ -2507,7 +2554,7 @@ class TelegramController {
       action: 'Pairing Failed',
       actor: flow.actor,
       userId: flow.senderKey,
-      details: [`📱 Number: ${flow.numberDisplay}`, `⚠️ ${friendly.lines?.[0] || friendlyReasonLine(error)}`]
+      details: [`📱 Number: ${safeLogNumber(flow.number)}`, `⚠️ ${friendly.lines?.[0] || friendlyReasonLine(error)}`]
     });
   }
 
@@ -2608,7 +2655,7 @@ class TelegramController {
       action: 'Pair Request',
       actor: command.actor,
       userId: senderId,
-      details: [`📱 Number: ${numberDisplay}`]
+      details: [`📱 Number: ${safeLogNumber(number)}`]
     });
 
     // Check if number already paired — same number must not consume additional slot
@@ -2807,7 +2854,7 @@ class TelegramController {
 
   async sendSessionsView(chatId, senderId, { messageId, admin = false, publicChat = false } = {}) {
     const sessions = await this.pairing.listSessions(senderId);
-    return this.present(chatId, messageId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat));
+    return this.present(chatId, messageId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId, session.number)));
   }
 
   async sendStatusView(chatId, senderId, { messageId, publicChat = false } = {}) {
@@ -2824,7 +2871,8 @@ class TelegramController {
   async sendSessionMenuView(chatId, senderId, number, { messageId, admin = false, publicChat = false } = {}) {
     const session = await this.pairing.statusOf(senderId, number, { admin });
     const foreign = admin && String(session.ownerId) !== String(senderId);
-    return this.present(chatId, messageId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(session.number));
+    const token = this.issueSessionCallbackToken(session.ownerId, session.number);
+    return this.present(chatId, messageId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(token));
   }
 
   async sendSettingsView(chatId, senderId, { messageId, admin = false } = {}) {
@@ -3183,14 +3231,15 @@ class TelegramController {
         case 'sessions':
         case 'listsessions': {
           const sessions = await this.pairing.listSessions(command.senderId);
-          await this.reply(command.chatId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat));
+          await this.reply(command.chatId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId, session.number)));
           return;
         }
         case 'status': {
           if (command.args[0]) {
             const session = await this.pairing.statusOf(command.senderId, command.args[0], { admin: access === 'bootstrap' });
             const foreign = access === 'bootstrap' && String(session.ownerId) !== String(command.senderId);
-            await this.reply(command.chatId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(session.number));
+            const token = this.issueSessionCallbackToken(session.ownerId, session.number);
+            await this.reply(command.chatId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(token));
             return;
           }
           const sessions = await this.pairing.listSessions(command.senderId);
@@ -3211,7 +3260,7 @@ class TelegramController {
           try {
             const session = await this.pairing.restartSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
             await this.reply(command.chatId, box('ANIME MD • RESTARTING', ['', `📱 ${displayNumber(session, publicChat)}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
-            await this.notifyActivity({ action: 'Restart Request', actor, userId: command.senderId, details: [`📱 Number: ${session.numberDisplay}`] });
+            await this.notifyActivity({ action: 'Restart Request', actor, userId: command.senderId, details: [`📱 Number: ${safeLogNumber(session.number)}`] });
           } finally {
             release();
           }
@@ -3386,7 +3435,7 @@ class TelegramController {
               : (session.numberDisplay || formatInternationalNumber(command.args[0]));
             await this.reply(command.chatId, stoppedBox(removedDisplay), pairAgainMarkup());
             await this.maybeRemovePairedNumber(command.senderId, command.args[0]);
-            await this.notifyActivity({ action: 'Session Removed', actor, userId: command.senderId, details: [`📱 Number: ${session.numberDisplay || formatInternationalNumber(command.args[0])}`] });
+            await this.notifyActivity({ action: 'Session Removed', actor, userId: command.senderId, details: [`📱 Number: ${safeLogNumber(session.number)}`] });
           } finally {
             release();
           }
@@ -3618,9 +3667,9 @@ class TelegramController {
       }
 
       if (scope === 'ses') {
-        // Numbers are re-validated; ownership is resolved server-side by the
-        // pairing manager, never trusted from the callback data.
-        const number = normalizeWhatsAppNumber(argument);
+        // Callback data carries only an opaque token. Resolve the number
+        // server-side and retain the pairing manager's ownership checks.
+        const number = this.resolveSessionCallbackToken(senderId, argument, { admin: isOwner });
         if (verb === 'menu') {
           return await this.sendSessionMenuView(chatId, senderId, number, { messageId, admin: isOwner, publicChat });
         }
@@ -3644,7 +3693,7 @@ class TelegramController {
             'for this number goes offline.',
             '',
             'Remove it?'
-          ]), stopConfirmMarkup(number));
+          ]), stopConfirmMarkup(argument));
         }
         if (verb === 'stopok') {
           const release = this.reserveSensitiveRequest(senderId, 'stop');
@@ -3768,7 +3817,7 @@ class TelegramController {
     await this.notifyActivity({
       action: 'WhatsApp Session Connected',
       userId: ownerId,
-      details: [`📱 Number: ${session?.numberDisplay || session?.number || ''}`]
+      details: [`📱 Number: ${safeLogNumber(session?.number)}`]
     });
     const flow = this.getFlow(ownerId);
     const number = String(session?.number || '');
@@ -3780,7 +3829,7 @@ class TelegramController {
       this.endChatPairing(flow.chatId, flow.senderKey);
       // One message, edited in place — the group sees the masked number, a
       // private chat sees the full one.
-      const successText = connectedBox(flow.public ? flow.publicDisplay : (session?.numberDisplay || flow.numberDisplay), flow.actor?.username);
+      const successText = connectedBox(session?.numberDisplay || flow.publicDisplay || flow.numberDisplay, flow.actor?.username, session);
       try {
         await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, successText, connectedMarkup()));
         this.scheduleAnimeEdit(ownerId, session, flow.chatId);
@@ -3794,12 +3843,12 @@ class TelegramController {
       return;
     }
     try {
-      await this.replyPhoto(ownerId, this.connectedImage, connectedBox(session?.numberDisplay || session?.number || ''), connectedMarkup());
+      await this.replyPhoto(ownerId, this.connectedImage, connectedBox(session?.numberDisplay || session?.number || '', undefined, session), connectedMarkup());
       this.scheduleAnimeEdit(ownerId, session, ownerId);
     } catch {
       this.log.warn?.('[telegram] Connected image unavailable; trying text fallback.');
       try {
-        await this.reply(ownerId, connectedBox(session?.numberDisplay || session?.number || ''), connectedMarkup());
+        await this.reply(ownerId, connectedBox(session?.numberDisplay || session?.number || '', undefined, session), connectedMarkup());
         this.scheduleAnimeEdit(ownerId, session, ownerId);
       } catch { this.log.warn?.('[telegram] Could not deliver the connected notification.'); }
     }
@@ -3810,7 +3859,7 @@ class TelegramController {
     await this.notifyActivity({
       action: 'WhatsApp Session Disconnected',
       userId: ownerId,
-      details: [`📱 Number: ${session?.numberDisplay || session?.number || ''}`]
+      details: [`📱 Number: ${safeLogNumber(session?.number)}`]
     });
     const flow = this.getFlow(ownerId);
     const failedBeforeLink = !session?.registered;
@@ -3823,7 +3872,7 @@ class TelegramController {
       const reasonLine = classification?.userMessage || 'The WhatsApp connection timed out.';
       // The classified reason is logged; a public chat only ever gets the
       // short clean line.
-      this.log.warn?.(`[telegram] Session ${session?.numberDisplay || session?.number || ''} disconnected (${classification?.type || 'UNKNOWN'}) for ${ownerId}: ${reasonLine}`);
+      this.log.warn?.(`[telegram] Session ${safeLogNumber(session?.number)} disconnected (${classification?.type || 'UNKNOWN'}) for ${ownerId}: ${reasonLine}`);
       if (flow.public) {
         await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, publicPairingFailureBox(), pairingFailureMarkup(flow.token))).catch((error) => {
           this.log.warn?.(`[telegram] Could not update the public failure state: ${error.message}`);

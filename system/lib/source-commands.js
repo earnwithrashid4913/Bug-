@@ -2,8 +2,9 @@
 
 // Source command flows adapted to AnimeMD's existing dispatcher and transport.
 const { performance } = require('node:perf_hooks');
-const { youtubeSearch } = require('./net-tools');
+const { downloadRemoteFile, requestCobalt, youtubeSearch } = require('./net-tools');
 const { FOOTER, font } = require('./presentation');
+const { sessionDashboard } = require('./session-status');
 async function react(socket, context, text) {
   try { await socket.sendMessage(context.chatId, { react: { text, key: context.raw.key } }); } catch { /* Reactions must not prevent the actual response. */ }
 }
@@ -24,10 +25,11 @@ async function ping(socket, context) {
   await imageOrText(socket, context, urls[index], `> *${font('PONG!')}* ${['⚡', '📡', '🐢', '😴'][index]}\n\n> Latence: ${latency}ms\n> Message-send latency\n\n> ${FOOTER}`);
 }
 async function alive(socket, context) {
-  const uptime = Math.floor(process.uptime());
-  const text = `❤️ *${font('ANIME-MD')}*\n\n🎉 ${font('Uptime')}: ${Math.floor(uptime / 3600)}h ${Math.floor(uptime % 3600 / 60)}m ${uptime % 60}s\n⚡ ${font('Status')}: Active\n\n> ${FOOTER}`;
+  const number = socket.user?.id?.split(':')[0]?.split('@')[0];
+  const text = `❤️ *${font('ANIME-MD')}*\n\n${sessionDashboard(socket.animeSessionStatus || { state: 'error', lastEvent: 'Unavailable', lastUpdate: Date.now() }, { number, compact: true })}\n\n> ${FOOTER}`;
   await imageOrText(socket, context, 'https://i.ibb.co/5WN6ZV1h/a17b5bc5feb6.jpg', text);
 }
+
 async function request(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`API HTTP ${response.status}`);
@@ -51,21 +53,44 @@ async function download(socket, context, command) {
       url = video.url;
     }
     await react(socket, context, '⬇️');
-    const data = await request(`https://yt-dl.officialhectormanuel.workers.dev/?url=${encodeURIComponent(url)}`);
-    if (!data.status) throw new Error('Invalid download API response');
+    // The former third-party download endpoint was returning provider HTTP 500
+    // and is intentionally no longer used.
+    // Use the configured Cobalt-compatible service, which returns a short-lived
+    // authorized media URL instead of pretending Spotify or YouTube provide MP3s.
+    const providers = [...new Set([
+      process.env.COBALT_API_URL || 'https://cobalt-api.kwiatekmiki.com',
+      process.env.COBALT_FALLBACK_API_URL
+    ].filter(Boolean))];
+    let result;
+    let providerError;
+    for (const provider of providers) {
+      try {
+        result = await requestCobalt(provider, url, { audio: !videoMode });
+        break;
+      } catch (error) {
+        providerError = error;
+        console.warn('[Play] Configured audio provider failed:', error?.message || error);
+      }
+    }
+    if (!result) throw providerError || new Error('No audio provider is available.');
+    if (!result?.url) throw new Error('The download service returned no media.');
     if (videoMode) {
-      const quality = ['1080', '720', '480', '360', '240', '144'].find(q => data.videos?.[q]);
-      if (!quality) throw new Error('No video quality available');
-      await socket.sendMessage(context.chatId, { video: { url: data.videos[quality] }, mimetype: 'video/mp4', caption: `✅ ${data.title || video?.title || 'Video'}\n${quality}p\n> ${FOOTER}` }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, { video: { url: result.url }, mimetype: 'video/mp4', caption: `✅ ${video?.title || result.filename || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
     } else {
-      if (!data.audio) throw new Error('Audio not available');
-      if (data.thumbnail && data.title) await imageOrText(socket, context, data.thumbnail, `🎵 ${data.title}`);
-      await socket.sendMessage(context.chatId, { audio: { url: data.audio }, mimetype: 'audio/mpeg', ptt: false, fileName: `${data.title || 'audio'}.mp3` }, { quoted: context.raw });
+      if (video?.title) await socket.sendMessage(context.chatId, { text: `🎵 ${video.title}` }, { quoted: context.raw });
+      const media = await downloadRemoteFile(result.url, 25 * 1024 * 1024);
+      await socket.sendMessage(context.chatId, { audio: media.buffer, mimetype: media.type || 'audio/mpeg', ptt: false, fileName: result.filename || `${video?.title || 'audio'}.mp3` }, { quoted: context.raw });
     }
     await react(socket, context, '✅');
+    return { ok: true, title: video?.title || result.filename || 'audio' };
   } catch (error) {
+    console.error('[Play] Download failed:', error?.message || error);
     await react(socket, context, '❌');
-    await reply(`Download failed: ${error.message}`);
+    const userMessage = /Invalid YouTube URL|No search results|No YouTube results/i.test(error?.message || '')
+      ? error.message
+      : 'Audio download is temporarily unavailable. Please try another source/query.';
+    if (!command.quiet) await reply(`Download failed: ${userMessage}`);
+    return { ok: false, error };
   }
 }
 async function upload(socket, context, command, uploadQuoted) {

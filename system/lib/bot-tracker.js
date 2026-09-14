@@ -1,4 +1,7 @@
 'use strict';
+
+const { maskInternationalNumber } = require('./pairing-number');
+
 // Source BotTracker adapted to the existing atomic RuntimeSettingsStore.
 // No connection/session lifecycle hooks and no second database.
 class BotTracker {
@@ -45,7 +48,9 @@ class BotTracker {
   }
   async sendHeartbeat() {
     const uptime = this.getUptime();
-    const payload = { phoneNumber: this.stats.phoneNumber, commandsExecuted: this.stats.commandsExecuted, uptimeHours: uptime.hours, uptimeMinutes: uptime.minutes, uptimeSeconds: uptime.seconds, uptimeMs: uptime.milliseconds, lastHeartbeat: Date.now(), isActive: this.stats.isActive, version: this.stats.version, timestamp: new Date().toISOString(), lastCommand: this.stats.lastCommand };
+    let safePhoneNumber = 'unknown';
+    try { safePhoneNumber = maskInternationalNumber(this.stats.phoneNumber); } catch { /* keep the redacted fallback */ }
+    const payload = { phoneNumber: safePhoneNumber, commandsExecuted: this.stats.commandsExecuted, uptimeHours: uptime.hours, uptimeMinutes: uptime.minutes, uptimeSeconds: uptime.seconds, uptimeMs: uptime.milliseconds, lastHeartbeat: Date.now(), isActive: this.stats.isActive, version: this.stats.version, timestamp: new Date().toISOString(), lastCommand: this.stats.lastCommand };
     if (this.apiUrl) {
       try {
         const url = new URL(this.apiUrl);

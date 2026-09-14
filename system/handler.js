@@ -61,6 +61,7 @@ const {
 const {
   requestCobalt,
   spotifySearch,
+  spotifyUserError,
   translateText,
   textToSpeech,
   safeMath,
@@ -70,6 +71,7 @@ const {
   uploadToCatbox
 } = require('./lib/net-tools');
 const { isAuthorizedAdmin } = require('./security');
+const { sessionDashboard } = require('./lib/session-status');
 
 // ---------------------------------------------------------------------------
 // Stores
@@ -574,13 +576,51 @@ async function handleSetBotProfilePhoto(socket, context) {
 
 // --- MENU ---
 
+async function menuAccess(socket, context) {
+  if (isOwner(socket, context.sender)) return 'owner';
+  if (await sudoStore.has(senderNumber(context))) return 'sudo';
+  if (context.isGroup) {
+    try {
+      const group = await getGroupInfo(socket, context);
+      if (group.isAdmin) return 'admin';
+    } catch (error) {
+      console.warn('[menu] Could not inspect group permissions:', error.message);
+    }
+  }
+  return 'public';
+}
+
+function menuCommandsForAccess(category, access) {
+  const allowed = access === 'owner'
+    ? new Set(['public', 'owner', 'admin', 'sudo'])
+    : access === 'admin' || access === 'sudo'
+      ? new Set(['public', 'admin', 'sudo'])
+      : new Set(['public']);
+  return category.commands.filter(entry => allowed.has(entry.permission));
+}
+
+function menuHelpText(prefix, category, commands) {
+  return [
+    `*${category.icon} ${category.label}*`,
+    '',
+    ...commands.flatMap(entry => [
+      `${prefix}${entry.name}${entry.usage ? ` ${entry.usage}` : ''}${entry.aliases.length ? `  (${entry.aliases.map(alias => `${prefix}${alias}`).join(', ')})` : ''}`,
+      entry.description,
+      ''
+    ]),
+    `Type ${prefix}menu for all categories.`
+  ].join('\n');
+}
+
 async function handleMenuCommand(socket, context, command) {
   const botName = await settingsStore.get('bot_name') || config.botName;
   const p = getCommandPrefix();
   const categoryId = command.args[0]?.toLowerCase();
+  const access = await menuAccess(socket, context);
+  const visibleCategories = categoriesWithCommands().map(category => ({ ...category, commands: menuCommandsForAccess(category, access) })).filter(category => category.commands.length);
 
   if (!categoryId || categoryId === 'home') {
-    const categories = categoriesWithCommands();
+    const categories = visibleCategories;
     try {
       await sendList(socket, context.chatId, {
         text: `*${botName}*\n\nChoose a category:`,
@@ -619,7 +659,7 @@ async function handleMenuCommand(socket, context, command) {
   }
 
   // Category view: interactive list where every row runs a real command.
-  const category = getCategory(categoryId);
+  const category = visibleCategories.find(entry => entry.id === categoryId || entry.label.toLowerCase() === categoryId);
   if (!category) {
     await socket.sendMessage(context.chatId, { text: `Unknown category. Type ${p}menu to see all categories.` }, { quoted: context.raw });
     return;
@@ -627,7 +667,7 @@ async function handleMenuCommand(socket, context, command) {
 
   // One shared rendering includes every execute alias in both interactive
   // bodies and the plain-text fallback; list rows keep canonical actions.
-  const text = buildHelpText(p, category.id);
+  const text = menuHelpText(p, category, category.commands);
 
   try {
     await sendList(socket, context.chatId, {
@@ -662,29 +702,56 @@ async function handleSpotifyCommand(socket, context, command) {
     await sendResult(socket, context, { text: usageLine('spotify', '<song name>', 'spotify Faded'), command: 'spotify' });
     return;
   }
-  await socket.sendMessage(context.chatId, { text: '⏳ *Searching Spotify…*' }, { quoted: context.raw });
+  let loading;
+  const finish = async text => {
+    // Baileys supports editing a sent message by reusing its key. If a socket
+    // implementation cannot edit, sendResult is the bounded fallback so the
+    // loading state is never the last visible response.
+    if (loading?.key && typeof socket.sendMessage === 'function') {
+      try {
+        await socket.sendMessage(context.chatId, { text, edit: loading.key });
+        return;
+      } catch (editError) {
+        console.warn('[Spotify] Loading-message edit failed:', editError?.message || editError);
+      }
+    }
+    await sendResult(socket, context, { text, command: 'spotify', ctx: { track: command.text } });
+  };
   try {
+    loading = await socket.sendMessage(context.chatId, { text: '⏳ *Searching Spotify…*' }, { quoted: context.raw });
     const results = await spotifySearch(command.text, 5);
-    if (!results.length) throw new Error('No results found.');
+    if (!results.length) {
+      await finish('*SPOTIFY RESULTS* 🎧\nNo tracks found for that query.');
+      return;
+    }
 
     const lines = results.map((track, i) => {
       const duration = track.duration ? `${Math.floor(track.duration / 60_000)}:${String(Math.floor((track.duration % 60_000) / 1000)).padStart(2, '0')}` : '';
-      return `${i + 1}. *${track.title}*\n➜ ${track.artist}${duration ? ` · ${duration}` : ''}\n${track.url}`;
+      const artwork = track.images?.[0]?.url ? `\n🖼 ${track.images[0].url}` : '';
+      return `${i + 1}. *${track.title}*\n➜ ${track.artist}${track.album ? ` · ${track.album}` : ''}${duration ? ` · ${duration}` : ''}${artwork}\n${track.url}`;
     });
 
-    await sendResult(socket, context, {
-      text: `*SPOTIFY RESULTS* 🎧\n*Query:* ${command.text}\n\n${lines.join('\n\n')}`,
-      command: 'spotify',
-      // The Download button re-runs the downloader with the top track name.
-      ctx: { track: `${results[0].title} ${results[0].artist || ''}`.trim() }
+    const selected = results[0];
+    const audioQuery = `${selected.title} ${selected.artist || ''}`.trim();
+    const audio = await sourceCommands.download(socket, context, {
+      name: 'play',
+      text: audioQuery,
+      args: audioQuery.split(/\s+/),
+      quiet: true
     });
+    if (!audio?.ok) {
+      const reason = audio?.error?.message || '';
+      if (/no media|not found|no search results|refused|unsupported/i.test(reason)) {
+        await finish('*SPOTIFY AUDIO* ❌\nAudio not found for this track.');
+      } else {
+        await finish('*SPOTIFY AUDIO* ❌\nAudio download is temporarily unavailable. Please try again later.');
+      }
+      return;
+    }
+    await finish(`*SPOTIFY AUDIO READY* 🎧\n*Title:* ${selected.title}\n*Artist:* ${selected.artist || 'Unknown'}\n*Source:* ${selected.url}`);
   } catch (error) {
-    console.error('[spotify] Search failed:', error);
-    await sendResult(socket, context, {
-      text: `*SPOTIFY FAILED* ❌\n${error.message}`,
-      command: 'spotify',
-      ctx: { track: command.text }
-    });
+    console.error('[Spotify] Search failed:', error?.code || error?.message || error);
+    await finish(`*SPOTIFY FAILED* ❌\n${spotifyUserError(error)}`);
   }
 }
 
@@ -1318,12 +1385,9 @@ async function handlePremiumCommand(socket, context, command) {
 // --- SESSIONS ---
 
 async function handleSessionsCommand(socket, context) {
-  const text = [
-    `🧩 *${config.botName.toUpperCase()} SESSION*`,
-    '',
-    `*Bot:* ${socket.user?.id?.split(':')[0] || 'unknown'}`,
-    `*Uptime:* ${Math.floor(process.uptime())}s`
-  ].join('\n');
+  const status = socket.animeSessionStatus;
+  const number = socket.user?.id?.split(':')[0]?.split('@')[0];
+  const text = [`🧩 *${config.botName.toUpperCase()} SESSION*`, '', sessionDashboard(status || { state: 'error', lastEvent: 'Unavailable', lastUpdate: Date.now() }, { number }), '', 'Use this view only for the current connected socket.'].join('\n');
   await sendResult(socket, context, { text, command: 'sessions' });
 }
 
@@ -1949,11 +2013,14 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
     case 'status':
     case 'runtime': {
+      const status = socket.animeSessionStatus;
+      const number = socket.user?.id?.split(':')[0]?.split('@')[0];
       const text = [
         `📊 *${config.botName.toUpperCase()} STATUS*`,
         '',
+        sessionDashboard(status || { state: 'error', lastEvent: 'Unavailable', lastUpdate: Date.now() }, { number, compact: true }),
+        '',
         `*Mode:* ${publicMode ? 'public 🌍' : 'self 👤'}`,
-        `*Uptime:* ${Math.floor(process.uptime())}s`,
         `*Commands:* ${categoriesWithCommands().reduce((total, category) => total + category.commands.length, 0)}`,
         `*Developer:* ${config.developerName}`
       ].join('\n');

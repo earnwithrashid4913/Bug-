@@ -27,6 +27,7 @@ const { authenticatedSelfJid, sendWelcomeVideo, welcomeCaption } = require('./sy
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
 const { TelegramPairingManager } = require('./system/lib/telegram-pairing-manager');
+const { createSessionStatus, sessionDashboard, transitionSessionStatus } = require('./system/lib/session-status');
 
 // ---------------------------------------------------------------------------
 // Process supervisor.
@@ -111,18 +112,15 @@ const pairedSelfWelcomeSent = new Set();
 
 // Live mirror of the primary WhatsApp socket state. Telegram pairing sessions
 // expose their own owner-scoped status through TelegramPairingManager.
-const liveStatus = {
-  state: 'starting',
-  connected: false,
+const liveStatus = Object.assign(createSessionStatus('primary'), {
   message: 'Starting the WhatsApp client…',
   pairingCode: null,
   pairingNumber: null,
   pairingRequestedAt: null,
   session: 'unknown',
   botUser: null,
-  startedAt: Date.now(),
-  updatedAt: Date.now()
-};
+  startedAt: Date.now()
+});
 
 
 const disconnectLabels = Object.freeze({
@@ -236,13 +234,8 @@ function scheduleReconnect() {
 }
 
 function setStatus(state, message, extra = {}) {
-  Object.assign(liveStatus, {
-    state,
-    message,
-    connected: state === 'connected',
-    updatedAt: Date.now(),
-    ...extra
-  });
+  transitionSessionStatus(liveStatus, state, message || state);
+  Object.assign(liveStatus, { message, ...extra });
 }
 
 function renderQrCode(qr, pairingState) {
@@ -355,7 +348,7 @@ function startTelegramController() {
     const sessionKey = `${ownerId}:${session?.number || ''}`;
     if (!socket || pairedSelfWelcomeSent.has(sessionKey)) return;
     pairedSelfWelcomeSent.add(sessionKey);
-    await sendConnectionSuccess(socket).catch((error) => {
+    await sendConnectionSuccess(socket, socket.animeSessionStatus).catch((error) => {
       pairedSelfWelcomeSent.delete(sessionKey);
       console.warn('[connection] Could not send paired self-chat welcome.');
     });
@@ -408,6 +401,7 @@ async function startTelegramWithRetry() {
 }
 
 async function sendConnectionSuccess(socket) {
+  const sessionStatus = arguments[1] || socket?.animeSessionStatus || liveStatus;
   const target = authenticatedSelfJid(socket);
   if (!target) throw new Error('Connected socket did not expose an authenticated private user JID.');
 
@@ -428,6 +422,8 @@ async function sendConnectionSuccess(socket) {
     '*ANIME MD*',
     '',
     '*Connected Successfully* ✓',
+    '',
+    sessionDashboard(sessionStatus, { number: sessionStatus?.safeNumber || sessionStatus?.botUser || socket.user?.id?.split(':')[0] }),
     '',
     'Your WhatsApp session is now active and ready to use.',
     '🔐 Secure Session • 🟢 System Ready'
@@ -451,6 +447,10 @@ async function sendConnectionSuccess(socket) {
 
 async function handleConnectionUpdate(socket, update, pairingState) {
   if (socket !== activeSocket || stopping) return;
+
+  if (update.connection === 'connecting') {
+    setStatus('connecting', pairingState.registered ? 'Restoring the WhatsApp session…' : 'Connecting to WhatsApp…');
+  }
 
   if (update.qr && !pairingState.registered) {
     // The handshake is complete from here on, so a pairing code can be issued.
@@ -516,6 +516,7 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   );
 
   if (willReconnect) {
+    setStatus('reconnecting', label);
     scheduleReconnect();
     return;
   }
@@ -652,6 +653,8 @@ async function startBot() {
     // ---------------------------------------------------------------------
     activeSocket = socket;
     socket.decodeJid = decodeJid;
+    // Handlers read this live object; they never infer status from auth files.
+    socket.animeSessionStatus = liveStatus;
 
     const pairingState = {
       pending: false,

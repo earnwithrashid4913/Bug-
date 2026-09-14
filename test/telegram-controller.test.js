@@ -682,7 +682,7 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
 test('session buttons stay owner-scoped: another user cannot manage a session', async () => {
   const { calls, fetchImpl } = captureApi();
   const seenOwners = [];
-  const { controller } = makeController({
+  const { controller, replies } = makeController({
     owners: ['10'],
     fetchImpl,
     controllerStore: { has: async (id) => String(id) === '20', add: async () => [], remove: async () => true, getUser: async () => undefined, updateUser: async () => ({}), pairedNumbersOf: async () => [], isVerified: async () => true, blockStatus: async () => ({ blocked: false }), users: async () => ({}) },
@@ -694,16 +694,16 @@ test('session buttons stay owner-scoped: another user cannot manage a session', 
       }
     })
   });
-  // The owner opens the manage view.
-  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: 'ses:menu:923001234567', message: { chat: { id: 1 }, message_id: 5 } } });
+  // The owner opens the manage view with an opaque server-side token.
+  const sessionToken = controller.issueSessionCallbackToken('10', '923001234567');
+  assert.doesNotMatch(sessionToken, /923001234567/);
+  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: `ses:menu:${sessionToken}`, message: { chat: { id: 1 }, message_id: 5 } } });
   const ownerView = calls.filter((call) => call.method === 'editMessageText').at(-1);
   assert.match(ownerView.payload.text, /SESSION STATUS/);
-  // Another authorized controller taps the same button and only sees a
-  // friendly not-found box — the manager resolves ownership server-side.
-  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 20 }, data: 'ses:menu:923001234567', message: { chat: { id: 1 }, message_id: 6 } } });
-  const strangerView = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(strangerView.payload.text, /No session found for that number/);
-  assert.deepEqual(seenOwners.map((entry) => entry.ownerId), ['10', '20']);
+  // Another authorized controller cannot reuse the owner's token.
+  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 30 }, data: `ses:menu:${sessionToken}`, message: { chat: { id: 1 }, message_id: 6 } } });
+  assert.match(replies.at(-1).text, /permission|expired/i);
+  assert.deepEqual(seenOwners.map((entry) => entry.ownerId), ['10']);
 });
 
 test('the stop button asks for confirmation before credentials are deleted', async () => {
@@ -716,12 +716,13 @@ test('the stop button asks for confirmation before credentials are deleted', asy
       stopSession: async (_ownerId, number, options) => { stopped.push({ number, options }); return { number, numberDisplay: '+92 300 1234567', status: 'CLEANUP' }; }
     })
   });
-  await controller.handleUpdate({ callback_query: { id: 'cb1', from: { id: 10 }, data: 'ses:stop:923001234567', message: { chat: { id: 1 }, message_id: 5 } } });
+  const sessionToken = controller.issueSessionCallbackToken('10', '923001234567');
+  await controller.handleUpdate({ callback_query: { id: 'cb1', from: { id: 10 }, data: `ses:stop:${sessionToken}`, message: { chat: { id: 1 }, message_id: 5 } } });
   const confirm = calls.filter((call) => call.method === 'editMessageText').at(-1);
   assert.match(confirm.payload.text, /REMOVE SESSION/);
   assert.match(confirm.payload.text, /Remove it\?/);
   assert.deepEqual(stopped, [], 'nothing is deleted before the confirmation button');
-  await controller.handleUpdate({ callback_query: { id: 'cb2', from: { id: 10 }, data: 'ses:stopok:923001234567', message: { chat: { id: 1 }, message_id: 5 } } });
+  await controller.handleUpdate({ callback_query: { id: 'cb2', from: { id: 10 }, data: `ses:stopok:${sessionToken}`, message: { chat: { id: 1 }, message_id: 5 } } });
   const done = calls.filter((call) => call.method === 'editMessageText').at(-1);
   assert.match(done.payload.text, /SESSION REMOVED/);
   assert.deepEqual(stopped, [{ number: '923001234567', options: { admin: true } }], 'the bootstrap owner may stop any session');
@@ -781,11 +782,10 @@ test('an invalid or unknown callback shows a friendly fallback, never a raw erro
   const { controller, replies } = makeController({ fetchImpl });
   await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: 'bogus:action', message: { chat: { id: 1 }, message_id: 5 } } });
   assert.match(replies.at(-1).text, /no longer valid/);
-  // An invalid number in the callback data fails validation before any lookup.
-  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: 'ses:menu:notanumber', message: { chat: { id: 1 }, message_id: 5 } } });
-  const invalid = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(invalid.payload.text, /PAIRING FAILED/);
-  assert.match(invalid.payload.text, /number format is invalid/);
+  // An unknown opaque token fails closed before any session lookup.
+  await controller.handleUpdate({ callback_query: { id: 'cb', from: { id: 10 }, data: 'ses:menu:not-a-valid-token', message: { chat: { id: 1 }, message_id: 5 } } });
+  const invalid = replies.at(-1);
+  assert.match(invalid.text, /expired|no longer valid/i);
 });
 
 // ---------------------------------------------------------------------------

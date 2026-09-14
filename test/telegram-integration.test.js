@@ -73,8 +73,6 @@ test('the Telegram controller wiring starts, greets with the ANIME MD intro, and
 
   // The startup greeting reaches the configured bootstrap owner first
   // (as a photo caption because a start image is configured).
-  await waitFor((entry) => /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/.test(entry.payload.text || entry.payload.caption || ''), 'the anime md intro');
-  const greeting = sent.find((entry) => /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/.test(entry.payload.text || entry.payload.caption || ''));
   await waitFor((entry) => /ANIME MD • MAIN MENU/.test(normalizeTelegramHeadings(entry.payload.text || entry.payload.caption || '')), 'the anime md intro');
   const greeting = sent.find((entry) => /ANIME MD • MAIN MENU/.test(normalizeTelegramHeadings(entry.payload.text || entry.payload.caption || '')));
   const greetingText = greeting.payload.text || greeting.payload.caption;
