@@ -169,11 +169,9 @@ async function tools(socket, context, command) {
   const query = command.text;
   try {
     let endpoint;
-    if (command.name === 'tempmail') endpoint = '/tempmail';
-    else if (command.name === 'getmail') {
-      if (!query) return reply('Usage: getmail <session ID>');
-      endpoint = `/get_inbox_tempmail?q=${encodeURIComponent(query)}`;
-    } else if (command.name === 'fancy') {
+    // tempmail/getmail now run through the universal temp mail provider system
+    // (commands/temp-mail.js); the legacy single-provider routes are retired.
+    if (command.name === 'fancy') {
       if (command.args[0]?.toLowerCase() === 'styles') {
         if (!command.args[1]) return reply('Usage: fancy styles <text>');
         endpoint = `/fancytext/styles?q=${encodeURIComponent(command.args.slice(1).join(' '))}`;
@@ -189,12 +187,7 @@ async function tools(socket, context, command) {
     const data = await request(base + endpoint);
     if (data.status === false) throw new Error('Provider rejected the request');
     let text;
-    if (command.name === 'tempmail') {
-      if (!Array.isArray(data.result) || !data.result[0]) throw new Error('Invalid email response');
-      text = data.result.join('\n');
-    } else if (command.name === 'getmail') {
-      text = data.emails?.length ? data.emails.map((mail, i) => `${i + 1}. ${mail.from || 'Unknown'}\n${mail.subject || 'No subject'}\n${mail.date || ''}`).join('\n\n') : 'No emails';
-    } else if (data.styles) {
+    if (data.styles) {
       text = data.styles.slice(0, 10).map((style, i) => `${i + 1}. ${style.name}\n${style.result}`).join('\n\n');
     } else {
       if (typeof data.result !== 'string' || !data.result) throw new Error('Empty provider response');

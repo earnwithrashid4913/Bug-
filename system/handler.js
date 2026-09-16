@@ -57,6 +57,9 @@ const dc = require('../commands/davidcyril-api');
 // Universal image generation/effect providers (same DavidCyril client as the
 // downloaders and the movie/series systems).
 const imageGeneration = require('../commands/image-generation');
+// Universal temporary-mailbox providers (Emailnator, Guerrilla Mail, Mail.tm,
+// TempMail.io, Temporary-Mail) through the same DavidCyril client.
+const tempMail = require('../commands/temp-mail');
 const {
   handleMovieSearchCommand,
   handleMovieLatestCommand,
@@ -1645,9 +1648,16 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'fancy':
     case 'encrypt':
     case 'encrypt2':
-    case 'tempmail':
-    case 'getmail':
       await sourceCommands.tools(socket, context, command);
+      break;
+
+    // --- TEMP MAIL (universal provider system) ---
+    case 'tempmail':
+      await tempMail.handleTempMailCommand(socket, context, command, { prefix: getCommandPrefix() });
+      break;
+
+    case 'getmail':
+      await tempMail.handleGetMailCommand(socket, context, command, { prefix: getCommandPrefix() });
       break;
     case 'store':
     case 'ad':

@@ -36,7 +36,9 @@ function command(name, category, description, { aliases = [], usage = '', permis
 // registerCommands() below can append extra commands at runtime; static entries
 // are never modified.
 const STATIC_COMMANDS = Object.freeze([
-  ...['fancy', 'encrypt', 'encrypt2', 'tempmail', 'getmail'].map(name => command(name, 'tools', 'Source API tool.', { usage: name === 'tempmail' ? '' : '<input>' })),
+  ...['fancy', 'encrypt', 'encrypt2'].map(name => command(name, 'tools', 'Source API tool.', { usage: '<input>' })),
+  command('tempmail', 'tools', 'Temporary mailbox: create, inbox, read, delete.', { usage: '[create|inbox|read|delete|change|types]' }),
+  command('getmail', 'tools', 'Check the active temporary mailbox inbox.', { usage: '[message id]' }),
   command('upload', 'upload', 'Mirror a URL or upload replied media.', { aliases: ['mirror', 'host'], usage: '<url|reply>' }),
   command('store', 'media', 'Save replied audio/video.', { permission: 'owner', usage: '<name>' }),
   command('ad', 'media', 'Send stored audio.', { permission: 'owner', usage: '<name>' }),
