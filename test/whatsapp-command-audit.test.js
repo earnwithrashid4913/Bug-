@@ -3,7 +3,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeHarness } = require('../test-support/command-harness');
 const { COMMANDS, STATIC_COMMANDS, categoriesWithCommands, helpText, resolveCommand } = require('../system/lib/menu');
-const executeAfter = require('../system/execute-after/registry');
 const { audit, inspect, markdown } = require('../scripts/command-registry-check');
 const { styleHeaders } = require('../system/lib/presentation');
 
@@ -26,25 +25,21 @@ function textOf(socket) {
 
 test('complete public registry, alias branches, menu bounds and hidden exclusion audit', () => {
   const result = audit();
-  // The static AnimeMD surface is frozen (261 dispatcher names/aliases, 140
-  // declared commands). ExecuteAfter provider commands are extension commands:
-  // they are registered into the same registry through one dispatcher bridge,
-  // so they add exactly one route per registered provider command.
-  const extensionEntries = executeAfter.entries();
-  assert.equal(result.staticRoutes, 261);
+  // The AnimeMD public surface is frozen: 261 dispatcher names/aliases, 140
+  // declared commands and 23 complete menu categories, all served by the one
+  // dispatcher switch in system/handler.js.
+  assert.equal(result.routes.length, 261);
   assert.equal(STATIC_COMMANDS.length, 140);
-  assert.equal(result.extensionNames.length, extensionEntries.length);
-  assert.equal(result.routes.length, 261 + extensionEntries.length);
-  assert.equal(COMMANDS.length, 140 + extensionEntries.length);
-  const extensionCategories = categoriesWithCommands().filter(category => category.id === executeAfter.framework.category.id).length;
-  assert.equal(result.categories.length, 23 + extensionCategories);
+  assert.equal(COMMANDS.length, STATIC_COMMANDS.length);
+  assert.equal(result.categories.length, 23);
   assert.equal(result.hidden.length, 2);
   assert.doesNotMatch(markdown(result), /\| h \||\| hidden \||davidcaril|davinci/i);
 });
 
 test('EVERY public execute name runs through the real handler and produces a result/action', async t => {
   const h = makeHarness();
-  // Keep the test worker alive during intentional unref'ed provider pacing.
+  // The harness unref()s every timer it schedules, so keep a reference on the
+  // event loop while the 261 execute names run through the real dispatcher.
   const alive = setInterval(() => {}, 1000);
   t.after(async () => { clearInterval(alive); await h.close(); });
   for (const entry of COMMANDS) for (const name of [entry.name, ...entry.aliases]) {

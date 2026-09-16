@@ -31,9 +31,6 @@ const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker, crea
 const { sendButtons, sendList } = require('./lib/ui');
 const { backButton, contextButtons, menuButton, settingButtons } = require('./lib/whatsapp-actions');
 const { helpText: buildHelpText, categoriesWithCommands, getCategory, resolveCommand } = require('./lib/menu');
-// EXECUTEAFTER — provider framework route (single dispatcher: the branch below
-// is the ONLY integration point; the framework itself lives in ./execute-after/).
-const executeAfterRouter = require('./execute-after/router');
 const {
   handleAnimeCommand,
   handleMangaCommand,
@@ -1641,25 +1638,6 @@ async function handleMessage(socket, rawMessage) {
 }
 
 async function dispatchCommand(socket, context, command, rawMessage) {
-  // --- EXECUTEAFTER PROVIDER COMMANDS -------------------------------------
-  // Dynamic provider commands use this same dispatcher, the same menu registry
-  // and the same sender. Nothing else about AnimeMD changes, and a provider
-  // failure can never reach the rest of the bot (the router catches everything).
-  if (executeAfterRouter.owns(command.name)) {
-    await executeAfterRouter.dispatch(socket, context, command, {
-      backButton,
-      contextButtons,
-      footer: `${config.botName} • ${sourceCommands.FOOTER}`,
-      getPrefix: getCommandPrefix,
-      menuButton,
-      react: sourceCommands.react,
-      sendList,
-      sendResult
-    });
-    return;
-  }
-  // ------------------------------------------------------------------------
-
   switch (command.name) {
     case 'fancy':
     case 'encrypt':

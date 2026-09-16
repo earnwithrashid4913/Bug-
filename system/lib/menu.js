@@ -33,8 +33,8 @@ function command(name, category, description, { aliases = [], usage = '', permis
 }
 
 // The existing AnimeMD commands are the immutable seed of the live registry.
-// External frameworks (ExecuteAfter) append their own commands through
-// registerCommands() below; static entries are never modified.
+// registerCommands() below can append extra commands at runtime; static entries
+// are never modified.
 const STATIC_COMMANDS = Object.freeze([
   ...['fancy', 'encrypt', 'encrypt2', 'tempmail', 'getmail'].map(name => command(name, 'tools', 'Source API tool.', { usage: name === 'tempmail' ? '' : '<input>' })),
   command('upload', 'upload', 'Mirror a URL or upload replied media.', { aliases: ['mirror', 'host'], usage: '<url|reply>' }),
@@ -323,29 +323,3 @@ module.exports = {
   registerCommands,
   resolveCommand
 };
-
-// ---------------------------------------------------------------------------
-// EXTENSION BRIDGE — ExecuteAfter provider commands
-// ---------------------------------------------------------------------------
-// The framework appends its provider commands to this same registry. It is a
-// single line on purpose: removing the framework later means deleting
-// system/execute-after/, commands/... and this block. A failure here can never
-// stop AnimeMD from booting — it only disables the extension.
-// ---------------------------------------------------------------------------
-try {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const extension = path.join(__dirname, '..', 'execute-after', 'registry.js');
-  if (fs.existsSync(extension)) {
-    // While the extension module is still loading it self-registers when it
-    // finishes, so touching its exports here is unnecessary (and would warn
-    // about a circular dependency).
-    const cached = require.cache?.[extension];
-    if (!cached || cached.loaded) {
-      const loaded = require(extension);
-      if (loaded && typeof loaded.registerInto === 'function') loaded.registerInto(module.exports);
-    }
-  }
-} catch (error) {
-  console.warn('[execute-after] extension registry unavailable:', error?.message || error);
-}
