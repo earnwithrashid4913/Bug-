@@ -54,6 +54,9 @@ const {
   handleTeraboxCommand,
 } = require('../commands/downloader-extended');
 const dc = require('../commands/davidcyril-api');
+// Universal image generation/effect providers (same DavidCyril client as the
+// downloaders and the movie/series systems).
+const imageGeneration = require('../commands/image-generation');
 const {
   handleMovieSearchCommand,
   handleMovieLatestCommand,
@@ -1869,6 +1872,28 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'tr':
     case 'trans':
       await handleTranslateCommand(socket, context, command);
+      break;
+
+    // --- IMAGE GENERATION / IMAGE EFFECTS ---
+    case 'image':
+    case 'aiimage':
+    case 'imagine':
+      await imageGeneration.handleImageCommand(socket, context, command, { prefix: getCommandPrefix() });
+      break;
+
+    case 'ephoto':
+    case 'ephoto360':
+      await imageGeneration.handleEphotoCommand(socket, context, command, { prefix: getCommandPrefix() });
+      break;
+
+    case 'imgedit':
+    case 'imageedit':
+    case 'aiedit':
+      await imageGeneration.handleImageEditCommand(socket, context, command, {
+        prefix: getCommandPrefix(),
+        download: downloadMediaBuffer,
+        uploadApiUrl: config.uploadApiUrl
+      });
       break;
 
     // --- TOOLS ---

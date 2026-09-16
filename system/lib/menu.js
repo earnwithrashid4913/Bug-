@@ -73,6 +73,9 @@ const STATIC_COMMANDS = Object.freeze([
 
   command('ai', 'ai', 'Ask the configured Groq AI provider.', { aliases: ['ask', 'ia', 'groq', 'loveai', 'love', 'dark'], usage: '<question>' }),
   command('translate', 'ai', 'Translate text; replies are auto-detected and translated to English by default.', { aliases: ['tr', 'trans'], usage: '[lang] <text>' }),
+  command('image', 'ai', 'Generate an AI image from a text prompt.', { aliases: ['aiimage', 'imagine'], usage: '<prompt>' }),
+  command('ephoto', 'ai', 'Render your text with an Ephoto effect.', { aliases: ['ephoto360'], usage: '<effect> <text>' }),
+  command('imgedit', 'ai', 'Edit or restyle a replied image with AI.', { aliases: ['imageedit', 'aiedit'], usage: '<prompt>' }),
 
   command('jid', 'tools', 'Show current chat and sender JIDs.', { aliases: ['chatid'] }),
   command('idch', 'tools', 'Fetch WhatsApp channel metadata.', { aliases: ['cekidch'], usage: '<channel url>' }),

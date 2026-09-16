@@ -791,6 +791,159 @@ async function spotifyV2Search(query) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  IMAGE GENERATION / IMAGE EFFECT APIs
+//
+//  Same universal client as the downloaders and the movie/series providers:
+//  one function per endpoint, bounded timeout, clean failures. The endpoint
+//  paths below are the canonical inventory entries and are never renamed.
+//
+//  Request/response contracts verified against the live API:
+//    GET /animagine?prompt=…           → { success, prompt, ratio, cdn_url, expires }
+//    GET /epicrealism?prompt=…         → { success, result: "<image url>" }
+//    GET /fluxv2?prompt=…              → { success, result: "<image url>" }
+//    GET /flixier?prompt=…             → { success, result: { status, prompt, style,
+//                                                          url, thumb, resolution } }
+//    GET /ai/writecream/image?prompt=… → { success, prompt, ratio, image_url }
+//    GET /nanobanana2?url=…&prompt=…   → image-to-image edit of a public image URL
+//    GET /pixwith?url=…&prompt=…       → image-to-image edit of a public image URL
+//    GET /api/ephoto/:effect?text=…    → dynamic effect segment; the API itself
+//                                        answers "Invalid effect name." for an
+//                                        effect it does not know.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Image models are slower than a download, so they get a longer bounded timeout.
+const IMAGE_TIMEOUT_MS = 90_000;
+
+// Canonical inventory entries, kept verbatim (grep-able) — `:effect` is a
+// dynamic path segment that is substituted per request, never hardcoded.
+const IMAGE_ENDPOINTS = Object.freeze({
+  animagine: '/animagine',
+  ephoto: '/api/ephoto/:effect',
+  epicrealism: '/epicrealism',
+  flixier: '/flixier',
+  nanobanana2: '/nanobanana2',
+  pixwith: '/pixwith',
+  writecream: '/ai/writecream/image',
+  fluxv2: '/fluxv2'
+});
+
+// Field priority while hunting an image reference inside an unknown shape.
+const IMAGE_URL_FIELDS = ['cdn_url', 'image_url', 'imageUrl', 'image', 'result', 'url', 'output', 'link', 'src', 'file', 'photo', 'thumb', 'thumbnail', 'preview'];
+const IMAGE_DATA_URI = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+$/i;
+// Ephoto effect slugs are a path segment: letters/digits and a few separators
+// only, so no slash, dot or query character can ever reach the request path.
+const EFFECT_NAME_PATTERN = /^[a-z0-9][a-z0-9_+-]{0,39}$/i;
+
+function isImagePayload(value) {
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  return /^https?:\/\/\S+$/i.test(text) || IMAGE_DATA_URI.test(text);
+}
+
+/**
+ * Finds an image reference (https URL or base64 data URI) in any provider
+ * response shape: a plain string, a nested object or an array. Depth and width
+ * are bounded so a hostile/deep payload can never spin.
+ *
+ * `exclude` drops references the caller already knows are inputs, so an
+ * image-to-image provider can never echo the source image back as its result.
+ */
+function pickImageUrl(data, { exclude = [] } = {}) {
+  const blocked = new Set([...exclude].filter(Boolean).map(String));
+  function scan(node, depth) {
+    if (!node || depth > 3) return null;
+    if (typeof node === 'string') {
+      const text = node.trim();
+      return isImagePayload(text) && !blocked.has(text) ? text : null;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node.slice(0, 10)) {
+        const found = scan(item, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof node !== 'object') return null;
+    for (const field of IMAGE_URL_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(node, field)) continue;
+      const found = scan(node[field], depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  return scan(data, 0);
+}
+
+// Only the metadata a provider actually returned — nothing is invented.
+function pickImageMeta(data) {
+  const inner = data?.result && typeof data.result === 'object' ? data.result : data || {};
+  const meta = {};
+  if (typeof inner.prompt === 'string' && inner.prompt.trim()) meta.prompt = inner.prompt.trim();
+  if (typeof inner.ratio === 'string' && inner.ratio.trim()) meta.ratio = inner.ratio.trim();
+  if (typeof inner.style === 'string' && inner.style.trim()) meta.style = inner.style.trim();
+  if (typeof inner.status === 'string' && inner.status.trim()) meta.status = inner.status.trim();
+  if (inner.resolution && typeof inner.resolution === 'object') {
+    const width = Number(inner.resolution.width);
+    const height = Number(inner.resolution.height);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      meta.resolution = { width, height };
+    }
+  }
+  if (typeof inner.thumb === 'string' && /^https?:\/\//i.test(inner.thumb)) meta.thumb = inner.thumb;
+  if (inner.expires !== undefined && inner.expires !== null) meta.expires = inner.expires;
+  if (typeof data?.creator === 'string' && data.creator.trim()) meta.creator = data.creator.trim();
+  return meta;
+}
+
+// The API's own explanation, when it gave one (used for logs and for the
+// effect-name classification, never dumped raw into a chat message).
+function pickApiMessage(data) {
+  const value = data?.message || data?.error || data?.result?.message || data?.detail;
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : '';
+}
+
+// ── Text → Image ───────────────────────────────────────────────────────────
+
+async function animagineImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.animagine, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function epicrealismImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.epicrealism, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function fluxV2Image(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.fluxv2, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function flixierImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.flixier, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function writecreamImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.writecream, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+// ── Image → Image (edit / restyle) ─────────────────────────────────────────
+
+async function nanobanana2Edit(imageUrl, prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.nanobanana2, { params: { url: imageUrl, prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function pixwithEdit(imageUrl, prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.pixwith, { params: { url: imageUrl, prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+// ── Ephoto dynamic text effect (/api/ephoto/:effect) ───────────────────────
+
+async function ephotoEffect(effect, text) {
+  const safe = String(effect || '').trim();
+  if (!EFFECT_NAME_PATTERN.test(safe)) throw new Error('Unsupported effect name.');
+  const path = IMAGE_ENDPOINTS.ephoto.replace(':effect', encodeURIComponent(safe.toLowerCase()));
+  return dcFetch(path, { params: { text }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  COMBINED FALLBACK CHAINS (Cross-service)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1025,4 +1178,24 @@ module.exports = {
   subSearch, subInfo,
   // Zoom
   zoomSearch, zoomMovie,
+
+  // ── Image Generation / Image Effects ──
+  IMAGE_ENDPOINTS,
+  IMAGE_TIMEOUT_MS,
+  EFFECT_NAME_PATTERN,
+  isImagePayload,
+  pickImageUrl,
+  pickImageMeta,
+  pickApiMessage,
+  // Text → Image
+  animagineImage,
+  epicrealismImage,
+  fluxV2Image,
+  flixierImage,
+  writecreamImage,
+  // Image → Image
+  nanobanana2Edit,
+  pixwithEdit,
+  // Ephoto dynamic effect
+  ephotoEffect,
 };
