@@ -240,11 +240,20 @@ function safeApiMessage(message) {
   return text;
 }
 
+// These wrapper endpoints report an upstream problem inside their own text,
+// e.g. { success: false, error: "Request failed with status code 401" }.
+// Reading that status keeps the reply accurate without echoing the raw text.
+function embeddedStatus(text) {
+  const match = String(text || '').match(/status(?:\s+code)?\s*[:=]?\s*(\d{3})/i);
+  return match ? Number(match[1]) : 0;
+}
+
 function describeFailure(error, data) {
-  const status = Number(error?.response?.status || data?.status || 0);
+  const rawApiText = dc.pickApiMessage(error?.response?.data || data);
+  const status = Number(error?.response?.status || data?.status || 0) || embeddedStatus(rawApiText);
   const code = String(error?.code || '');
   const rawMessage = String(error?.message || '');
-  const apiMessage = safeApiMessage(dc.pickApiMessage(error?.response?.data || data));
+  const apiMessage = safeApiMessage(rawApiText);
   if (apiMessage) return apiMessage;
   if (code === 'ECONNABORTED' || /timeout/i.test(rawMessage)) return 'that provider took too long to answer';
   if (status === 429) return 'that provider asked us to slow down (too many requests)';
