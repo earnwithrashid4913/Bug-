@@ -31,9 +31,6 @@ const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker, crea
 const { sendButtons, sendList } = require('./lib/ui');
 const { backButton, contextButtons, menuButton, settingButtons } = require('./lib/whatsapp-actions');
 const { helpText: buildHelpText, categoriesWithCommands, getCategory, resolveCommand } = require('./lib/menu');
-// EXECUTEAFTER — provider framework route (single dispatcher: the branch below
-// is the ONLY integration point; the framework itself lives in ./execute-after/).
-const executeAfterRouter = require('./execute-after/router');
 const {
   handleAnimeCommand,
   handleMangaCommand,
@@ -57,6 +54,12 @@ const {
   handleTeraboxCommand,
 } = require('../commands/downloader-extended');
 const dc = require('../commands/davidcyril-api');
+// Universal image generation/effect providers (same DavidCyril client as the
+// downloaders and the movie/series systems).
+const imageGeneration = require('../commands/image-generation');
+// Universal temporary-mailbox providers (Emailnator, Guerrilla Mail, Mail.tm,
+// TempMail.io, Temporary-Mail) through the same DavidCyril client.
+const tempMail = require('../commands/temp-mail');
 const {
   handleMovieSearchCommand,
   handleMovieLatestCommand,
@@ -1641,32 +1644,20 @@ async function handleMessage(socket, rawMessage) {
 }
 
 async function dispatchCommand(socket, context, command, rawMessage) {
-  // --- EXECUTEAFTER PROVIDER COMMANDS -------------------------------------
-  // Dynamic provider commands use this same dispatcher, the same menu registry
-  // and the same sender. Nothing else about AnimeMD changes, and a provider
-  // failure can never reach the rest of the bot (the router catches everything).
-  if (executeAfterRouter.owns(command.name)) {
-    await executeAfterRouter.dispatch(socket, context, command, {
-      backButton,
-      contextButtons,
-      footer: `${config.botName} • ${sourceCommands.FOOTER}`,
-      getPrefix: getCommandPrefix,
-      menuButton,
-      react: sourceCommands.react,
-      sendList,
-      sendResult
-    });
-    return;
-  }
-  // ------------------------------------------------------------------------
-
   switch (command.name) {
     case 'fancy':
     case 'encrypt':
     case 'encrypt2':
-    case 'tempmail':
-    case 'getmail':
       await sourceCommands.tools(socket, context, command);
+      break;
+
+    // --- TEMP MAIL (universal provider system) ---
+    case 'tempmail':
+      await tempMail.handleTempMailCommand(socket, context, command, { prefix: getCommandPrefix() });
+      break;
+
+    case 'getmail':
+      await tempMail.handleGetMailCommand(socket, context, command, { prefix: getCommandPrefix() });
       break;
     case 'store':
     case 'ad':
@@ -1891,6 +1882,28 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'tr':
     case 'trans':
       await handleTranslateCommand(socket, context, command);
+      break;
+
+    // --- IMAGE GENERATION / IMAGE EFFECTS ---
+    case 'image':
+    case 'aiimage':
+    case 'imagine':
+      await imageGeneration.handleImageCommand(socket, context, command, { prefix: getCommandPrefix() });
+      break;
+
+    case 'ephoto':
+    case 'ephoto360':
+      await imageGeneration.handleEphotoCommand(socket, context, command, { prefix: getCommandPrefix() });
+      break;
+
+    case 'imgedit':
+    case 'imageedit':
+    case 'aiedit':
+      await imageGeneration.handleImageEditCommand(socket, context, command, {
+        prefix: getCommandPrefix(),
+        download: downloadMediaBuffer,
+        uploadApiUrl: config.uploadApiUrl
+      });
       break;
 
     // --- TOOLS ---

@@ -791,6 +791,159 @@ async function spotifyV2Search(query) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  IMAGE GENERATION / IMAGE EFFECT APIs
+//
+//  Same universal client as the downloaders and the movie/series providers:
+//  one function per endpoint, bounded timeout, clean failures. The endpoint
+//  paths below are the canonical inventory entries and are never renamed.
+//
+//  Request/response contracts verified against the live API:
+//    GET /animagine?prompt=…           → { success, prompt, ratio, cdn_url, expires }
+//    GET /epicrealism?prompt=…         → { success, result: "<image url>" }
+//    GET /fluxv2?prompt=…              → { success, result: "<image url>" }
+//    GET /flixier?prompt=…             → { success, result: { status, prompt, style,
+//                                                          url, thumb, resolution } }
+//    GET /ai/writecream/image?prompt=… → { success, prompt, ratio, image_url }
+//    GET /nanobanana2?url=…&prompt=…   → image-to-image edit of a public image URL
+//    GET /pixwith?url=…&prompt=…       → image-to-image edit of a public image URL
+//    GET /api/ephoto/:effect?text=…    → dynamic effect segment; the API itself
+//                                        answers "Invalid effect name." for an
+//                                        effect it does not know.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Image models are slower than a download, so they get a longer bounded timeout.
+const IMAGE_TIMEOUT_MS = 90_000;
+
+// Canonical inventory entries, kept verbatim (grep-able) — `:effect` is a
+// dynamic path segment that is substituted per request, never hardcoded.
+const IMAGE_ENDPOINTS = Object.freeze({
+  animagine: '/animagine',
+  ephoto: '/api/ephoto/:effect',
+  epicrealism: '/epicrealism',
+  flixier: '/flixier',
+  nanobanana2: '/nanobanana2',
+  pixwith: '/pixwith',
+  writecream: '/ai/writecream/image',
+  fluxv2: '/fluxv2'
+});
+
+// Field priority while hunting an image reference inside an unknown shape.
+const IMAGE_URL_FIELDS = ['cdn_url', 'image_url', 'imageUrl', 'image', 'result', 'url', 'output', 'link', 'src', 'file', 'photo', 'thumb', 'thumbnail', 'preview'];
+const IMAGE_DATA_URI = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+$/i;
+// Ephoto effect slugs are a path segment: letters/digits and a few separators
+// only, so no slash, dot or query character can ever reach the request path.
+const EFFECT_NAME_PATTERN = /^[a-z0-9][a-z0-9_+-]{0,39}$/i;
+
+function isImagePayload(value) {
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  return /^https?:\/\/\S+$/i.test(text) || IMAGE_DATA_URI.test(text);
+}
+
+/**
+ * Finds an image reference (https URL or base64 data URI) in any provider
+ * response shape: a plain string, a nested object or an array. Depth and width
+ * are bounded so a hostile/deep payload can never spin.
+ *
+ * `exclude` drops references the caller already knows are inputs, so an
+ * image-to-image provider can never echo the source image back as its result.
+ */
+function pickImageUrl(data, { exclude = [] } = {}) {
+  const blocked = new Set([...exclude].filter(Boolean).map(String));
+  function scan(node, depth) {
+    if (!node || depth > 3) return null;
+    if (typeof node === 'string') {
+      const text = node.trim();
+      return isImagePayload(text) && !blocked.has(text) ? text : null;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node.slice(0, 10)) {
+        const found = scan(item, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof node !== 'object') return null;
+    for (const field of IMAGE_URL_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(node, field)) continue;
+      const found = scan(node[field], depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  return scan(data, 0);
+}
+
+// Only the metadata a provider actually returned — nothing is invented.
+function pickImageMeta(data) {
+  const inner = data?.result && typeof data.result === 'object' ? data.result : data || {};
+  const meta = {};
+  if (typeof inner.prompt === 'string' && inner.prompt.trim()) meta.prompt = inner.prompt.trim();
+  if (typeof inner.ratio === 'string' && inner.ratio.trim()) meta.ratio = inner.ratio.trim();
+  if (typeof inner.style === 'string' && inner.style.trim()) meta.style = inner.style.trim();
+  if (typeof inner.status === 'string' && inner.status.trim()) meta.status = inner.status.trim();
+  if (inner.resolution && typeof inner.resolution === 'object') {
+    const width = Number(inner.resolution.width);
+    const height = Number(inner.resolution.height);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      meta.resolution = { width, height };
+    }
+  }
+  if (typeof inner.thumb === 'string' && /^https?:\/\//i.test(inner.thumb)) meta.thumb = inner.thumb;
+  if (inner.expires !== undefined && inner.expires !== null) meta.expires = inner.expires;
+  if (typeof data?.creator === 'string' && data.creator.trim()) meta.creator = data.creator.trim();
+  return meta;
+}
+
+// The API's own explanation, when it gave one (used for logs and for the
+// effect-name classification, never dumped raw into a chat message).
+function pickApiMessage(data) {
+  const value = data?.message || data?.error || data?.result?.message || data?.detail;
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : '';
+}
+
+// ── Text → Image ───────────────────────────────────────────────────────────
+
+async function animagineImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.animagine, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function epicrealismImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.epicrealism, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function fluxV2Image(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.fluxv2, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function flixierImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.flixier, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function writecreamImage(prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.writecream, { params: { prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+// ── Image → Image (edit / restyle) ─────────────────────────────────────────
+
+async function nanobanana2Edit(imageUrl, prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.nanobanana2, { params: { url: imageUrl, prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+async function pixwithEdit(imageUrl, prompt) {
+  return dcFetch(IMAGE_ENDPOINTS.pixwith, { params: { url: imageUrl, prompt }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+// ── Ephoto dynamic text effect (/api/ephoto/:effect) ───────────────────────
+
+async function ephotoEffect(effect, text) {
+  const safe = String(effect || '').trim();
+  if (!EFFECT_NAME_PATTERN.test(safe)) throw new Error('Unsupported effect name.');
+  const path = IMAGE_ENDPOINTS.ephoto.replace(':effect', encodeURIComponent(safe.toLowerCase()));
+  return dcFetch(path, { params: { text }, timeout: IMAGE_TIMEOUT_MS });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  COMBINED FALLBACK CHAINS (Cross-service)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -887,6 +1040,342 @@ async function downloadYtVideo(youtubeUrl) {
 // ════════════════════════════════════════════════════════════════════════════
 //  EXPORTS
 // ════════════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════════════
+//  TEMP MAIL PROVIDERS — universal client section
+//
+//  Five separate temporary-mailbox providers, each with ONLY the operations
+//  its own supplied endpoints actually offer:
+//
+//    emailnator      create, inbox
+//    guerrilla       create, inbox, message, setuser
+//    mailtm          create, inbox, message, delete
+//    tempmailio      create, inbox, delete
+//    temporary-mail  create, inbox, message, change, types
+//
+//  Contracts confirmed live against the API itself:
+//    guerrilla/create      → { success, email, sid_token, alias,
+//                              note: "Use sid_token to check inbox. …" }
+//    mailtm/create         → { success, email, token,
+//                              note: "Use the token to check inbox. …" }
+//    temporary-mail/create → { success, status, result: { email, code, types,
+//                              note: "Pass email + code to inbox endpoint" } }
+//
+//  Nothing below invents a parameter: the credential key names come from the
+//  provider's own response/note, and `missingTempmailParam()` reads the
+//  provider's own complaint when an endpoint wants something we did not send.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Mailboxes are cheap but not free; a bounded timeout keeps a dead provider
+// from freezing a command.
+const TEMPMAIL_TIMEOUT_MS = 45_000;
+
+// Canonical supplied paths, kept verbatim (grep-able).
+const TEMPMAIL_ENDPOINTS = Object.freeze({
+  emailnator: Object.freeze({
+    create: '/tempmail/emailnator/create',
+    inbox: '/tempmail/emailnator/inbox'
+  }),
+  guerrilla: Object.freeze({
+    create: '/tempmail/guerrilla/create',
+    inbox: '/tempmail/guerrilla/inbox',
+    message: '/tempmail/guerrilla/message',
+    setuser: '/tempmail/guerrilla/setuser'
+  }),
+  mailtm: Object.freeze({
+    create: '/tempmail/mailtm/create',
+    inbox: '/tempmail/mailtm/inbox',
+    message: '/tempmail/mailtm/message',
+    delete: '/tempmail/mailtm/delete'
+  }),
+  tempmailio: Object.freeze({
+    create: '/tempmail/tempmailio/create',
+    inbox: '/tempmail/tempmailio/inbox',
+    delete: '/tempmail/tempmailio/delete'
+  }),
+  'temporary-mail': Object.freeze({
+    create: '/tempmail/temporary-mail/create',
+    inbox: '/tempmail/temporary-mail/inbox',
+    message: '/tempmail/temporary-mail/message',
+    change: '/tempmail/temporary-mail/change',
+    types: '/tempmail/temporary-mail/types'
+  })
+});
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Provider message-id key names, in priority order. The exact key a provider
+// used is remembered per message so an id is never sent under a foreign name.
+const MESSAGE_ID_KEYS = ['_id', 'id', 'message_id', 'messageId', 'email_id', 'mail_id', 'uid', 'mid', 'msg_id'];
+const MESSAGE_FROM_KEYS = ['from', 'sender', 'fromAddress', 'from_address', 'mail_from', 'author', 'fromName', 'from_name'];
+const MESSAGE_SUBJECT_KEYS = ['subject', 'mail_subject', 'title', 'name', 'headline'];
+const MESSAGE_DATE_KEYS = ['date', 'mail_date', 'created_at', 'createdAt', 'timestamp', 'mail_timestamp', 'time', 'received_at', 'received', 'sent_at', 'datetime', 'seen'];
+const MESSAGE_BODY_KEYS = ['body', 'mail_body', 'text', 'content', 'plain', 'textBody', 'body_text', 'content_text', 'snippet', 'intro', 'summary', 'excerpt', 'preview'];
+const MESSAGE_HTML_KEYS = ['html', 'body_html', 'htmlBody', 'content_html', 'html_body'];
+// Everything a create response may carry that is NOT a session credential.
+const TEMPMAIL_PUBLIC_KEYS = new Set([
+  'creator', 'success', 'status', 'code_status', 'note', 'message', 'error', 'timestamp',
+  'expires', 'expiresAt', 'expires_at', 'expiry', 'ttl', 'types', 'type', 'email', 'address',
+  'mailbox', 'mail', 'alias', 'username', 'user', 'domain', 'id', '_id', 'account', 'accountId',
+  'count', 'total', 'tag', 'tags'
+]);
+
+// One bounded GET per provider operation. `params` only ever contains keys the
+// provider itself handed us (or asked for by name).
+function tempmailRequest(providerId, operation, params) {
+  const endpoint = TEMPMAIL_ENDPOINTS[providerId]?.[operation];
+  if (!endpoint) throw new Error(`Unsupported temp mail operation "${operation}" for "${providerId}".`);
+  const query = {};
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    query[key] = String(value);
+  }
+  return dcFetch(endpoint, { params: query, timeout: TEMPMAIL_TIMEOUT_MS });
+}
+
+// `result` may hold the payload directly (temporary-mail) or the payload may be
+// top level (guerrilla, mail.tm).
+function unwrapTempmailPayload(data) {
+  if (!data || typeof data !== 'object') return null;
+  const inner = data.result ?? data.data;
+  if (inner && typeof inner === 'object' && !Array.isArray(inner)) return inner;
+  return data;
+}
+
+function pickTempmailEmail(data) {
+  const payload = unwrapTempmailPayload(data);
+  if (!payload) return '';
+  for (const key of ['email', 'address', 'mailbox', 'mail']) {
+    const value = payload[key];
+    if (typeof value === 'string' && EMAIL_PATTERN.test(value.trim())) return value.trim();
+  }
+  for (const value of Object.values(payload)) {
+    if (typeof value === 'string' && EMAIL_PATTERN.test(value.trim())) return value.trim();
+  }
+  return '';
+}
+
+function pickTempmailExpiry(payload) {
+  const raw = payload?.expires ?? payload?.expiresAt ?? payload?.expires_at ?? payload?.expiry ?? payload?.ttl;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    return raw < 1e11 ? Date.now() + raw * 1000 : raw;   // seconds vs epoch-ms
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+// Normalized mailbox: the address is public, every credential stays private and
+// is only ever replayed to the SAME provider that issued it.
+function pickMailbox(data) {
+  const payload = unwrapTempmailPayload(data);
+  const email = pickTempmailEmail(data);
+  if (!payload || !email) return null;
+  const credentials = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (TEMPMAIL_PUBLIC_KEYS.has(key)) continue;
+    if (typeof value === 'string' && value.trim() && value.trim() !== email) credentials[key] = value.trim();
+    else if (typeof value === 'number' && Number.isFinite(value)) credentials[key] = String(value);
+  }
+  return {
+    email,
+    credentials,
+    alias: typeof payload.alias === 'string' ? payload.alias.trim() : '',
+    username: typeof payload.username === 'string' ? payload.username.trim() : '',
+    domain: typeof payload.domain === 'string' ? payload.domain.trim() : '',
+    types: Array.isArray(payload.types) ? payload.types.map((value) => String(value)).slice(0, 25) : [],
+    note: typeof payload.note === 'string' ? payload.note.trim() : '',
+    expiresAt: pickTempmailExpiry(payload)
+  };
+}
+
+function pickStringField(entry, keys) {
+  for (const key of keys) {
+    const value = entry?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (value && typeof value === 'object') {
+      const nested = value.address || value.email || value.name || value.text || value.value;
+      if (typeof nested === 'string' && nested.trim()) return nested.trim();
+    }
+  }
+  return '';
+}
+
+// `null` = this is not an inbox response at all (unreadable), `[]` = a real but
+// empty inbox. The distinction matters: an empty inbox is not a failure.
+function pickMessages(data) {
+  const containers = [
+    data, data?.result, data?.data,
+    data?.messages, data?.emails, data?.mails, data?.list, data?.inbox, data?.items,
+    data?.result?.messages, data?.result?.emails, data?.result?.mails, data?.result?.list, data?.result?.inbox, data?.result?.items,
+    data?.data?.messages, data?.data?.emails, data?.data?.list
+  ];
+  let array = null;
+  for (const container of containers) {
+    if (Array.isArray(container)) { array = container; break; }
+  }
+  if (!array) return null;
+  const messages = [];
+  for (const entry of array) {
+    if (typeof entry === 'string') {
+      messages.push({ id: entry, idKey: MESSAGE_ID_KEYS[1], from: '', subject: entry, date: '', intro: '' });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    let id = '';
+    let idKey = '';
+    for (const key of MESSAGE_ID_KEYS) {
+      const value = entry[key];
+      if (typeof value === 'string' && value.trim()) { id = value.trim(); idKey = key; break; }
+      if (typeof value === 'number' && Number.isFinite(value)) { id = String(value); idKey = key; break; }
+    }
+    messages.push({
+      id,
+      idKey,
+      from: pickStringField(entry, MESSAGE_FROM_KEYS),
+      subject: pickStringField(entry, MESSAGE_SUBJECT_KEYS),
+      date: pickStringField(entry, MESSAGE_DATE_KEYS),
+      intro: pickStringField(entry, MESSAGE_BODY_KEYS)
+    });
+    if (messages.length >= 25) break;
+  }
+  return messages;
+}
+
+// Single-message payload for the `message` endpoints.
+function pickMessagePayload(data) {
+  const payload = unwrapTempmailPayload(data);
+  if (!payload) return null;
+  const from = pickStringField(payload, MESSAGE_FROM_KEYS);
+  const subject = pickStringField(payload, MESSAGE_SUBJECT_KEYS);
+  const date = pickStringField(payload, MESSAGE_DATE_KEYS);
+  const text = pickStringField(payload, MESSAGE_BODY_KEYS);
+  const html = pickStringField(payload, MESSAGE_HTML_KEYS);
+  if (!from && !subject && !text && !html) return null;
+  let id = '';
+  for (const key of MESSAGE_ID_KEYS) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) { id = value.trim(); break; }
+    if (typeof value === 'number' && Number.isFinite(value)) { id = String(value); break; }
+  }
+  const attachments = Array.isArray(payload.attachments) ? payload.attachments.length : 0;
+  return { id, from, subject, date, text, html, attachments };
+}
+
+// `types` is provider metadata (address/domain types), never a mailbox creator.
+// Confirmed live shape (temporary-mail/types):
+//   { success, result: { default: 'gmail', types: {
+//       gmail:      { code: '1', example: 'a.b.c@gmail.com' },
+//       plus:       { code: '2', example: 'name+tag@gmail.com' },
+//       googlemail: { code: '3', example: 'name@googlemail.com' },
+//       domain:     { code: '4', example: 'name@custom-domain.com',
+//                     note: 'optional domain= on change' } } } }
+// A plain array of types is accepted too. Anything else returns null so an
+// unreadable reply is never dressed up as a type list.
+const TEMPMAIL_TYPE_SKIP_KEYS = new Set([
+  'creator', 'success', 'status', 'note', 'message', 'error', 'timestamp',
+  'default', 'types', 'domains', 'count', 'total', 'code', 'result', 'data'
+]);
+
+function isTempmailTypeMap(container) {
+  if (!container || typeof container !== 'object' || Array.isArray(container)) return false;
+  const entries = Object.entries(container).filter(([key]) => !TEMPMAIL_TYPE_SKIP_KEYS.has(String(key).toLowerCase()));
+  if (!entries.length) return false;
+  return entries.some(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
+    && entries.every(([, value]) => value === null || ['object', 'string', 'number'].includes(typeof value));
+}
+
+function pickTempmailTypes(data) {
+  const payload = unwrapTempmailPayload(data);
+  const defaultName = String(payload?.default ?? data?.default ?? '').trim().toLowerCase();
+  const containers = [data?.types, data?.result?.types, data?.data?.types, payload?.types, data?.domains, data?.result, data?.data, payload];
+  for (const container of containers) {
+    if (Array.isArray(container)) {
+      const entries = container.slice(0, 30).map((entry) => {
+        if (typeof entry === 'string' || typeof entry === 'number') {
+          return { id: String(entry), label: String(entry), example: '', note: '', isDefault: false };
+        }
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+          const id = String(entry.code ?? entry.id ?? entry.type ?? entry.name ?? entry.domain ?? entry.value ?? '').trim();
+          const label = String(entry.label ?? entry.name ?? entry.type ?? entry.domain ?? entry.title ?? id).trim();
+          return id || label ? {
+            id: id || label,
+            label: label || id,
+            example: String(entry.example ?? entry.sample ?? '').trim(),
+            note: String(entry.note ?? entry.description ?? '').trim(),
+            isDefault: false
+          } : null;
+        }
+        return null;
+      }).filter(Boolean);
+      if (entries.length) return entries;
+      continue;
+    }
+    if (isTempmailTypeMap(container)) {
+      const entries = Object.entries(container)
+        .filter(([key]) => !TEMPMAIL_TYPE_SKIP_KEYS.has(String(key).toLowerCase()))
+        .slice(0, 30)
+        .map(([key, value]) => {
+          const isDefault = String(key).toLowerCase() === defaultName;
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const code = String(value.code ?? value.id ?? value.type ?? '').trim();
+            return {
+              id: code || key,
+              label: String(value.name ?? value.label ?? key).trim(),
+              example: String(value.example ?? value.sample ?? '').trim(),
+              note: String(value.note ?? value.description ?? '').trim(),
+              isDefault
+            };
+          }
+          if (typeof value === 'string' || typeof value === 'number') {
+            return { id: String(value), label: key, example: '', note: '', isDefault };
+          }
+          return null;
+        }).filter(Boolean);
+      if (entries.length) return entries;
+    }
+  }
+  return null;
+}
+
+// Action endpoints (delete/change/setuser) confirm through the API's own flags.
+function pickTempmailAction(data) {
+  if (!data || typeof data !== 'object') return { ok: false, message: 'The provider sent an unreadable reply.' };
+  const status = Number(data.status ?? data.code ?? 0);
+  const okFlag = data.success === true || data.deleted === true || data.ok === true;
+  const badFlag = data.success === false || data.error === true;
+  const message = pickApiMessage(data);
+  if (badFlag) return { ok: false, message: message || 'The provider rejected that request.' };
+  if (status >= 400) return { ok: false, message: message || `The provider answered with status ${status}.` };
+  if (okFlag || (status > 0 && status < 400)) return { ok: true, message };
+  return { ok: false, message: message || 'The provider did not confirm that action.' };
+}
+
+// When an endpoint asks for a parameter we did not send, read the parameter
+// NAME out of the provider's own complaint. Nothing is guessed in code: the
+// provider supplies the key, the caller supplies the value it already holds.
+function missingTempmailParam(message, alreadySent) {
+  const text = String(message || '');
+  if (!text) return '';
+  const sent = new Set(Object.keys(alreadySent || {}));
+  const patterns = [
+    /\b(?:parameter|param|field|query|key)\b[\s:'"`]+([a-z_][a-z0-9_]{1,30})/i,
+    /\b([a-z_][a-z0-9_]{1,30})\s+(?:is\s+)?(?:required|missing|needed|expected|must be)\b/i,
+    /\b(?:required|missing|needed|provide|pass|send|expects?)\b[\s:'"`]*(?:the\s+|a\s+|your\s+)?([a-z_][a-z0-9_]{1,30})/i
+  ];
+  // Plain English words are never mistaken for parameter names. Real key names
+  // such as `email`, `address`, `username`, `token` or `id` are allowed through:
+  // the provider asked for them by name.
+  const blocked = new Set(['the', 'a', 'an', 'this', 'that', 'request', 'response', 'parameter', 'parameters', 'param', 'params', 'field', 'fields', 'value', 'values', 'data', 'json', 'body', 'payload', 'message', 'messages', 'error', 'errors', 'success', 'status', 'note', 'creator', 'invalid', 'valid', 'missing', 'required', 'please', 'try', 'again', 'with', 'for', 'and', 'you', 'your', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'it', 'be', 'not', 'no', 'or', 'if', 'then', 'than', 'some', 'any', 'all', 'must', 'should', 'could', 'would', 'have', 'has', 'had', 'we', 'us', 'our', 'cannot', 'unable', 'wrong', 'bad', 'null', 'empty', 'missing']);
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const candidate = String(match?.[1] || '').trim();
+    if (!candidate || sent.has(candidate) || blocked.has(candidate.toLowerCase())) continue;
+    return candidate;
+  }
+  return '';
+}
 
 module.exports = {
   // Constants
@@ -1025,4 +1514,39 @@ module.exports = {
   subSearch, subInfo,
   // Zoom
   zoomSearch, zoomMovie,
+
+  // ── Image Generation / Image Effects ──
+  IMAGE_ENDPOINTS,
+  IMAGE_TIMEOUT_MS,
+  EFFECT_NAME_PATTERN,
+  isImagePayload,
+  pickImageUrl,
+  pickImageMeta,
+  pickApiMessage,
+  // Text → Image
+  animagineImage,
+  epicrealismImage,
+  fluxV2Image,
+  flixierImage,
+  writecreamImage,
+  // Image → Image
+  nanobanana2Edit,
+  pixwithEdit,
+  // Ephoto dynamic effect
+  ephotoEffect,
+
+  // ── Temp Mail Providers ──
+  TEMPMAIL_ENDPOINTS,
+  TEMPMAIL_TIMEOUT_MS,
+  EMAIL_PATTERN,
+  MESSAGE_ID_KEYS,
+  tempmailRequest,
+  unwrapTempmailPayload,
+  pickTempmailEmail,
+  pickMailbox,
+  pickMessages,
+  pickMessagePayload,
+  pickTempmailTypes,
+  pickTempmailAction,
+  missingTempmailParam,
 };

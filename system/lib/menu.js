@@ -33,10 +33,12 @@ function command(name, category, description, { aliases = [], usage = '', permis
 }
 
 // The existing AnimeMD commands are the immutable seed of the live registry.
-// External frameworks (ExecuteAfter) append their own commands through
-// registerCommands() below; static entries are never modified.
+// registerCommands() below can append extra commands at runtime; static entries
+// are never modified.
 const STATIC_COMMANDS = Object.freeze([
-  ...['fancy', 'encrypt', 'encrypt2', 'tempmail', 'getmail'].map(name => command(name, 'tools', 'Source API tool.', { usage: name === 'tempmail' ? '' : '<input>' })),
+  ...['fancy', 'encrypt', 'encrypt2'].map(name => command(name, 'tools', 'Source API tool.', { usage: '<input>' })),
+  command('tempmail', 'tools', 'Temporary mailbox: create, inbox, read, delete.', { usage: '[create|inbox|read|delete|change|types]' }),
+  command('getmail', 'tools', 'Check the active temporary mailbox inbox.', { usage: '[message id]' }),
   command('upload', 'upload', 'Mirror a URL or upload replied media.', { aliases: ['mirror', 'host'], usage: '<url|reply>' }),
   command('store', 'media', 'Save replied audio/video.', { permission: 'owner', usage: '<name>' }),
   command('ad', 'media', 'Send stored audio.', { permission: 'owner', usage: '<name>' }),
@@ -73,6 +75,9 @@ const STATIC_COMMANDS = Object.freeze([
 
   command('ai', 'ai', 'Ask the configured Groq AI provider.', { aliases: ['ask', 'ia', 'groq', 'loveai', 'love', 'dark'], usage: '<question>' }),
   command('translate', 'ai', 'Translate text; replies are auto-detected and translated to English by default.', { aliases: ['tr', 'trans'], usage: '[lang] <text>' }),
+  command('image', 'ai', 'Generate an AI image from a text prompt.', { aliases: ['aiimage', 'imagine'], usage: '<prompt>' }),
+  command('ephoto', 'ai', 'Render your text with an Ephoto effect.', { aliases: ['ephoto360'], usage: '<effect> <text>' }),
+  command('imgedit', 'ai', 'Edit or restyle a replied image with AI.', { aliases: ['imageedit', 'aiedit'], usage: '<prompt>' }),
 
   command('jid', 'tools', 'Show current chat and sender JIDs.', { aliases: ['chatid'] }),
   command('idch', 'tools', 'Fetch WhatsApp channel metadata.', { aliases: ['cekidch'], usage: '<channel url>' }),
@@ -323,29 +328,3 @@ module.exports = {
   registerCommands,
   resolveCommand
 };
-
-// ---------------------------------------------------------------------------
-// EXTENSION BRIDGE — ExecuteAfter provider commands
-// ---------------------------------------------------------------------------
-// The framework appends its provider commands to this same registry. It is a
-// single line on purpose: removing the framework later means deleting
-// system/execute-after/, commands/... and this block. A failure here can never
-// stop AnimeMD from booting — it only disables the extension.
-// ---------------------------------------------------------------------------
-try {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const extension = path.join(__dirname, '..', 'execute-after', 'registry.js');
-  if (fs.existsSync(extension)) {
-    // While the extension module is still loading it self-registers when it
-    // finishes, so touching its exports here is unnecessary (and would warn
-    // about a circular dependency).
-    const cached = require.cache?.[extension];
-    if (!cached || cached.loaded) {
-      const loaded = require(extension);
-      if (loaded && typeof loaded.registerInto === 'function') loaded.registerInto(module.exports);
-    }
-  }
-} catch (error) {
-  console.warn('[execute-after] extension registry unavailable:', error?.message || error);
-}
