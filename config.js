@@ -83,7 +83,8 @@ module.exports = {
     // Leave empty to disable the join check. Bootstrap owners skip it.
     requiredChannels: [
       { name: 'Fixa Updates', chatId: '@fixaupdates', link: 'https://t.me/fixaupdates', kind: 'channel' },
-      { name: 'Fixa Dev GB Group', chatId: '@FixaDevGBGroup', link: 'https://t.me/FixaDevGBGroup', kind: 'group' }
+      { name: 'Fixa Dev GB Group', chatId: '@FixaDevGBGroup', link: 'https://t.me/FixaDevGBGroup', kind: 'group' },
+      { name: 'Nemesis Inc', chatId: '@nemesisinc007', link: 'https://t.me/nemesisinc007', kind: 'channel' }
     ],
     // Optional HTTPS images shown by Telegram.
     startImage: 'https://files.catbox.moe/cvdoo3.png',
