@@ -25,11 +25,12 @@ function textOf(socket) {
 
 test('complete public registry, alias branches, menu bounds and hidden exclusion audit', () => {
   const result = audit();
-  // The AnimeMD public surface is frozen: 261 dispatcher names/aliases, 140
+  // The AnimeMD public surface is frozen: 269 dispatcher names/aliases, 143
   // declared commands and 23 complete menu categories, all served by the one
-  // dispatcher switch in system/handler.js.
-  assert.equal(result.routes.length, 261);
-  assert.equal(STATIC_COMMANDS.length, 140);
+  // dispatcher switch in system/handler.js. (Counts re-audited against the real
+  // registry: `allAliases()` and the dispatcher agree in both directions.)
+  assert.equal(result.routes.length, 269);
+  assert.equal(STATIC_COMMANDS.length, 143);
   assert.equal(COMMANDS.length, STATIC_COMMANDS.length);
   assert.equal(result.categories.length, 23);
   assert.equal(result.hidden.length, 2);

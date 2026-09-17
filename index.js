@@ -27,7 +27,7 @@ const { authenticatedSelfJid, sendWelcomeVideo, welcomeCaption } = require('./sy
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
 const { TelegramPairingManager } = require('./system/lib/telegram-pairing-manager');
-const { createSessionStatus, sessionDashboard, transitionSessionStatus } = require('./system/lib/session-status');
+const { createSessionStatus, sessionDashboard, sessionDigits, transitionSessionStatus } = require('./system/lib/session-status');
 
 // ---------------------------------------------------------------------------
 // Process supervisor.
@@ -234,7 +234,10 @@ function scheduleReconnect() {
 }
 
 function setStatus(state, message, extra = {}) {
-  transitionSessionStatus(liveStatus, state, message || state);
+  // The lifecycle state drives `⚡ Last Event` (CONNECTED / RECONNECTING / …).
+  // The human sentence stays available as liveStatus.message for logs; it must
+  // never replace the event label, or the dashboard reports prose as an event.
+  transitionSessionStatus(liveStatus, state);
   Object.assign(liveStatus, { message, ...extra });
 }
 
@@ -336,6 +339,21 @@ function startTelegramController() {
     activityLogger: (event) => telegramController?.sendOwnerActivity(event)
   });
   telegramPairingManager.onConnected = async (ownerId, session, socket) => {
+    // ---------------------------------------------------------------------
+    // The once-per-session WhatsApp welcome is claimed SYNCHRONOUSLY, before
+    // any await. Two connection.open callbacks for the same session (a
+    // duplicate Baileys event, or a reconnect racing the previous callback)
+    // can otherwise both pass a check that runs after an await and deliver the
+    // video/dashboard twice. The key is this session's own identity
+    // (Telegram owner + paired number), never a single global flag, so
+    // independent sessions each get exactly one welcome and can never block or
+    // overwrite each other.
+    // ---------------------------------------------------------------------
+    const sessionKey = `${ownerId}:${session?.number || ''}`;
+    const selfJid = authenticatedSelfJid(socket);
+    const claimed = Boolean(socket) && Boolean(selfJid) && !pairedSelfWelcomeSent.has(sessionKey);
+    if (claimed) pairedSelfWelcomeSent.add(sessionKey);
+
     // This notification is scoped to the Telegram owner whose isolated
     // WhatsApp socket authenticated. It is never broadcast to other owners.
     await telegramController?.notifySessionConnected(ownerId, session).catch(() => {
@@ -345,13 +363,19 @@ function startTelegramController() {
     // The paired account, not the Telegram owner or a configured developer,
     // receives the WhatsApp-side welcome. `socket.user.id` is Baileys' own
     // authenticated JID for this isolated session.
-    const sessionKey = `${ownerId}:${session?.number || ''}`;
-    if (!socket || pairedSelfWelcomeSent.has(sessionKey)) return;
-    pairedSelfWelcomeSent.add(sessionKey);
-    await sendConnectionSuccess(socket, socket.animeSessionStatus).catch((error) => {
-      pairedSelfWelcomeSent.delete(sessionKey);
-      console.warn('[connection] Could not send paired self-chat welcome.');
+    if (!claimed) return;
+    // socket.animeSessionStatus is THIS session's own status mirror, set by the
+    // pairing manager when the socket was created: the dashboard therefore
+    // reports the identity/state of the session that actually connected.
+    const delivery = await sendConnectionSuccess(socket, socket.animeSessionStatus).catch((error) => {
+      console.warn(`[connection] Could not send paired self-chat welcome: ${error?.message || error}`);
+      return { delivered: false };
     });
+    // Nothing reached the paired account (invalid destination, transport down):
+    // release the claim so the next real connection can still greet it. A
+    // partially delivered welcome keeps the claim, so a reconnect never repeats
+    // a video that was already sent.
+    if (!delivery?.delivered) pairedSelfWelcomeSent.delete(sessionKey);
   };
   telegramPairingManager.onDisconnected = async (ownerId, session, classification) => {
     // Only permanent endings (logged out, replaced, bad session) reach the
@@ -400,30 +424,58 @@ async function startTelegramWithRetry() {
   }
 }
 
+// Delivers the connected dashboard (+ the optional welcome video) for ONE real
+// connection. It resolves its own failure modes: every media step is optional
+// and contained, so a missing/invalid video, a failed upload or a temporary
+// network problem can never fail the WhatsApp connection, mark the session
+// inactive or crash the worker. The caller's once-per-session guard is released
+// only when nothing at all was delivered (`delivered === false`).
 async function sendConnectionSuccess(socket) {
+  // The caller passes the session status that belongs to THIS connection
+  // (the primary mirror, or a paired session's own mirror). Signature kept as
+  // `(socket)` on purpose: the connection-media integration test extracts this
+  // exact function from the source and runs the real code.
   const sessionStatus = arguments[1] || socket?.animeSessionStatus || liveStatus;
   const target = authenticatedSelfJid(socket);
+  // The dashboard carries the real session number, so the only acceptable
+  // destination is this session's own private chat. Groups, channels and status
+  // broadcasts are rejected here; no auth state, session directory, credential
+  // or socket internals are ever included in the payload.
   if (!target) throw new Error('Connected socket did not expose an authenticated private user JID.');
 
+  const delivery = { delivered: false, video: false, image: false, card: false };
+
+  // 1. Optional configured welcome video, captioned with the real dashboard.
   const video = await sendWelcomeVideo(socket, config.connectionWelcomeVideo);
-  if (video.status !== 'sent') {
+  delivery.video = video.status === 'sent';
+  if (delivery.video) delivery.delivered = true;
+
+  // 2. Existing image fallback when the video is disabled or could not be sent.
+  if (!delivery.video) {
     try {
       await socket.sendMessage(target, {
         image: { url: config.connectionSuccessImage },
-        caption: config.connectionWelcomeVideo.enabled ? welcomeCaption(socket) : '*ANIME MD*'
+        caption: config.connectionWelcomeVideo.enabled ? welcomeCaption(socket, sessionStatus) : `*${config.botName}*`
       });
+      delivery.image = true;
+      delivery.delivered = true;
     } catch {
       // A remote image must never prevent the existing text/menu fallback.
       console.warn('[connection] Welcome image could not be sent.');
     }
   }
 
+  // 3. The connected dashboard card. Every value is resolved from this
+  //    session's own live status/identity — never hardcoded, never masked.
   const text = [
-    '*ANIME MD*',
+    `*${config.botName}*`,
     '',
     '*Connected Successfully* ✓',
     '',
-    sessionDashboard(sessionStatus, { number: sessionStatus?.safeNumber || sessionStatus?.botUser || socket.user?.id?.split(':')[0] }),
+    sessionDashboard(sessionStatus, {
+      socket,
+      number: sessionStatus?.safeNumber || sessionStatus?.botUser || sessionDigits(target)
+    }),
     '',
     'Your WhatsApp session is now active and ready to use.',
     '🔐 Secure Session • 🟢 System Ready'
@@ -438,11 +490,15 @@ async function sendConnectionSuccess(socket) {
       buttons: [{ label: '📖 MENU', id: `${prefix}menu home` }],
       fallbackText: `${text}\n\nType ${prefix}menu to open the command menu.`
     });
+    delivery.card = true;
+    delivery.delivered = true;
   } catch {
     // Keep the existing once-per-lifecycle flag after a media attempt. A
     // failed menu must not cause the successful video to repeat on reconnect.
     console.warn('[connection] Welcome menu could not be sent.');
   }
+
+  return delivery;
 }
 
 async function handleConnectionUpdate(socket, update, pairingState) {
@@ -468,23 +524,42 @@ async function handleConnectionUpdate(socket, update, pairingState) {
   if (update.connection === 'open') {
     reconnectAttempts = 0;
     pairingState.registered = true;
+    // Session identity comes from THIS socket's own authenticated JID — the
+    // only value WhatsApp itself confirmed for the connection that just opened.
+    // It is read here (not from a shared global set elsewhere) so two sessions
+    // can never overwrite each other's number, and a stale socket cannot mutate
+    // it: this whole handler is already gated on `socket === activeSocket`.
+    const selfJid = authenticatedSelfJid(socket);
+    const selfNumber = sessionDigits(selfJid) || null;
     setStatus('connected', `${config.botName} is connected to WhatsApp.`, {
       pairingCode: null,
       pairingRequestedAt: null,
       session: 'paired',
+      sessionLabel: 'paired',
+      safeNumber: selfNumber,
       botUser: socket.user?.id?.split(':')[0] || socket.user?.id || null
     });
     console.log(chalk.green(`[connection] ${config.botName} is connected to WhatsApp.`));
     console.log(chalk.cyan(`[connection] Logged in as: ${socket.user?.name || 'Unknown'} (${socket.user?.id?.split(':')[0] || 'n/a'})`));
-    // Send exactly once per process/session lifecycle: reconnects and duplicate
-    // connection.update events reuse the guarded socket and this flag.
-    if (socket.user?.id && !connectionCardSent) {
+    // Send exactly once per connected session lifecycle: reconnects and duplicate
+    // connection.update events reuse the guarded socket and this flag. The flag
+    // is claimed synchronously (before any await) and is only released again
+    // when nothing at all could be delivered, so a duplicate open event or a
+    // concurrent callback can never produce a second video/dashboard.
+    if (selfJid && !connectionCardSent) {
       connectionCardSent = true;
-      void sendConnectionSuccess(socket)
-        .then(() => console.log('[connection] Connection success card sent.'))
+      void sendConnectionSuccess(socket, liveStatus)
+        .then((result) => {
+          if (result?.delivered) {
+            console.log('[connection] Connection success card sent.');
+            return;
+          }
+          connectionCardSent = false;
+          console.warn('[connection] Connection success card could not be delivered; it may be retried on the next real connection.');
+        })
         .catch((error) => {
           connectionCardSent = false;
-          console.warn('[connection] Could not send the connection success card.');
+          console.warn(`[connection] Could not send the connection success card: ${error?.message || error}`);
         });
     }
     void telegramController?.notifyConnected().catch((error) => {
@@ -505,6 +580,12 @@ async function handleConnectionUpdate(socket, update, pairingState) {
     pairingRequestedAt: null,
     session: reason === DisconnectReason.loggedOut ? 'logged_out' : liveStatus.session
   });
+  // A terminal ending closes this session for good: transitionSessionStatus()
+  // has already dropped its identity and stopped its uptime clock, and the
+  // once-per-session welcome guard is released so a genuinely NEW session
+  // (re-paired inside the same process) is greeted exactly once, while a
+  // duplicate close event for the dead session cannot greet anything.
+  if (!willReconnect) connectionCardSent = false;
   // One line per close carrying everything needed to diagnose a 24/7 outage
   // after the fact: reason, status code, the reconnect decision, and whether
   // the saved credentials are still usable. Never any credential material.

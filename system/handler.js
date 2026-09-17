@@ -1527,9 +1527,17 @@ async function handlePremiumCommand(socket, context, command) {
 // --- SESSIONS ---
 
 async function handleSessionsCommand(socket, context) {
-  const status = socket.animeSessionStatus;
-  const number = socket.user?.id?.split(':')[0]?.split('@')[0];
-  const text = [`🧩 *${config.botName.toUpperCase()} SESSION*`, '', sessionDashboard(status || { state: 'error', lastEvent: 'Unavailable', lastUpdate: Date.now() }, { number }), '', 'Use this view only for the current connected socket.'].join('\n');
+  // One authoritative renderer: the values come from THIS socket's own live
+  // session mirror (attached by index.js / the pairing manager) and, when a
+  // socket has no mirror, from that socket's real authenticated identity.
+  // Nothing here is hardcoded, masked or invented.
+  const text = [
+    `🧩 *${config.botName.toUpperCase()} SESSION*`,
+    '',
+    sessionDashboard(socket.animeSessionStatus, { socket }),
+    '',
+    'Use this view only for the current connected socket.'
+  ].join('\n');
   await sendResult(socket, context, { text, command: 'sessions' });
 }
 
@@ -2183,12 +2191,10 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
     case 'status':
     case 'runtime': {
-      const status = socket.animeSessionStatus;
-      const number = socket.user?.id?.split(':')[0]?.split('@')[0];
       const text = [
         `📊 *${config.botName.toUpperCase()} STATUS*`,
         '',
-        sessionDashboard(status || { state: 'error', lastEvent: 'Unavailable', lastUpdate: Date.now() }, { number, compact: true }),
+        sessionDashboard(socket.animeSessionStatus, { socket, compact: true }),
         '',
         `*Mode:* ${publicMode ? 'public 🌍' : 'self 👤'}`,
         `*Commands:* ${categoriesWithCommands().reduce((total, category) => total + category.commands.length, 0)}`,

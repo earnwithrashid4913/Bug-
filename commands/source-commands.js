@@ -26,8 +26,10 @@ async function ping(socket, context) {
   await imageOrText(socket, context, urls[index], `> *${font('PONG!')}* ${['⚡', '📡', '🐢', '😴'][index]}\n\n> Latence: ${latency}ms\n> Message-send latency\n\n> ${FOOTER}`);
 }
 async function alive(socket, context) {
-  const number = socket.user?.id?.split(':')[0]?.split('@')[0];
-  const text = `❤️ *${font('ANIME-MD')}*\n\n${sessionDashboard(socket.animeSessionStatus || { state: 'error', lastEvent: 'Unavailable', lastUpdate: Date.now() }, { number, compact: true })}\n\n> ${FOOTER}`;
+  // Uptime/status are resolved by the one authoritative session renderer from
+  // this socket's live session mirror (or, when a socket has none, from that
+  // socket's real identity and the process runtime) — never a placeholder.
+  const text = `❤️ *${font('ANIME-MD')}*\n\n${sessionDashboard(socket.animeSessionStatus, { socket, compact: true })}\n\n> ${FOOTER}`;
   await imageOrText(socket, context, 'https://i.ibb.co/5WN6ZV1h/a17b5bc5feb6.jpg', text);
 }
 

@@ -140,7 +140,11 @@ test('/status without arguments never claims WhatsApp is connected', async () =>
   });
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/status' } });
   const status = replies.pop().text;
-  assert.match(status, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐒𝐘𝐒𝐓𝐄𝐌/);
+  // Boxed titles are compared font-independently on purpose (displayAssert
+  // folds `〔 … 〕`), so the title wording is asserted in plain text while the
+  // raw ANIME SYSTEM styling is checked separately below.
+  assert.match(status, /ANIME MD • SYSTEM/);
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(status), 'the status card keeps its ANIME SYSTEM styling');
   assert.match(status, /𝐂𝐎𝐍𝐓𝐑𝐎𝐋𝐋𝐄𝐑 〢 🟢 𝐎𝐍𝐋𝐈𝐍𝐄/);
   assert.match(status, /𝐔𝐏𝐓𝐈𝐌𝐄 〢 𝟎𝐝 \/ 𝟎𝐡 \/ 𝟎𝐦/);
   assert.match(status, /𝐖𝐇𝐀𝐓𝐒𝐀𝐏𝐏 〢 𝟎 𝐒𝐄𝐒𝐒𝐈𝐎𝐍𝐒/);
@@ -207,7 +211,17 @@ test('connected notifications use the connected box and are never sent early', a
   const notification = replies.pop();
   assert.match(notification.caption, /ANIME MD • CONNECTED/);
   assert.match(notification.caption, /✅ WhatsApp Connected/);
-  assert.match(notification.caption, /📱 \+92 300 1234567/);
+  // A private connected notification carries the REAL session number unmasked,
+  // and the dashboard lines must reflect the actual lifecycle instead of the
+  // pre-connect placeholders the card used to freeze on.
+  assert.match(notification.caption, /📱 Session: \+923001234567/);
+  assert.doesNotMatch(notification.caption, /•••••/);
+  assert.match(notification.caption, /🟢 Status: CONNECTED/);
+  assert.doesNotMatch(notification.caption, /🔴 Status: DISCONNECTED/);
+  assert.match(notification.caption, /⏱️ Uptime: \d{2}h \d{2}m \d{2}s/);
+  assert.match(notification.caption, /📅 Connected Since: \d{1,2} [A-Za-z]+ \d{4} • \d{2}:\d{2}:\d{2} UTC/);
+  assert.match(notification.caption, /⚡ Last Event: CONNECTED/);
+  assert.doesNotMatch(notification.caption, /Connected Since: Unavailable/);
   assert.match(notification.caption, /🟢 Session: ACTIVE/);
   assert.match(notification.caption, /Roman Urdu/);
   // Before the controller runs, notifications are suppressed.
@@ -241,14 +255,25 @@ test('Telegram startup shows the ANIME MD intro, verifies the token, and starts 
   assert.deepEqual(methods.slice(0, 2), ['getMe', 'deleteWebhook']);
   assert.equal(await controller.start(), false, 'a second listener is never started');
     const intro = captions[0];
-  assert.match(intro, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
+  assert.match(intro, /ANIME MD • MAIN MENU/);
   assert.match(intro, /「 🤖 」 𝐒𝐘𝐒𝐓𝐄𝐌 〢 🟢 𝐎𝐍𝐋𝐈𝐍𝐄/);
   assert.match(intro, /buttons below/);
   // ANIME SYSTEM style: mathematical-bold glyphs (U+1D400-U+1D7FF) are the
   // owner-chosen presentation for the dashboard cards.
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(intro), 'the intro uses the anime-system bold style');
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(intro.split('\n')[0]), 'styled title');
-  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(intro.split('\n').slice(1).join('\n')), 'body is unchanged');
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(intro.split('\n').slice(1).join('\n')), 'the card body keeps the same ANIME SYSTEM presentation');
+  // Styling stops at the card: the prose around it — and every /command token an
+  // owner has to type — stays raw ASCII, so presentation can never hide or
+  // rewrite a command.
+  const introCard = intro.split('\n').filter((line) => /^[╭┃╰]/u.test(line.trim()));
+  const introProse = intro.split('\n').filter((line) => line.trim() && !/^[╭┃╰]/u.test(line.trim()));
+  assert.ok(introCard.length >= 6, 'the intro keeps its boxed ANIME SYSTEM card');
+  assert.ok(introProse.length > 0, 'the intro still explains the next step');
+  for (const line of introProse) {
+    assert.match(line, /^[\x20-\x7E]+$/, `intro prose stays raw ASCII: ${JSON.stringify(line)}`);
+  }
+  assert.ok(intro.includes('/help'), 'command tokens are raw');
   // No server-dashboard jargon in the intro.
   assert.doesNotMatch(intro, /Telegram Controller/);
   assert.doesNotMatch(intro, /Pairing System/);
@@ -262,7 +287,7 @@ test('Telegram startup shows the ANIME MD intro, verifies the token, and starts 
 
 test('the startup box never claims a WhatsApp connection by itself', () => {
   const text = startupBox();
-  assert.match(text, /╭━━━〔 ⚡ 𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔 〕━━━╮/);
+  assert.match(text, /╭━━━〔 ⚡ ANIME MD • MAIN MENU 〕━━━╮/);
   assert.match(text, /✦ 𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 ✦/);
   assert.match(text, /「 🤖 」 𝐒𝐘𝐒𝐓𝐄𝐌 〢 🟢 𝐎𝐍𝐋𝐈𝐍𝐄/);
   assert.match(text, /「 ⚡ 」 𝐒𝐓𝐀𝐓𝐔𝐒 〢 𝐎𝐏𝐄𝐑𝐀𝐓𝐈𝐎𝐍𝐀𝐋/);
@@ -273,7 +298,20 @@ test('the startup box never claims a WhatsApp connection by itself', () => {
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(text), 'the startup box uses the anime-system bold style');
   const [heading, ...body] = text.split('\n');
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(heading), 'requested bold Unicode title');
-  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(body.join('\n')), 'body and identifiers remain unchanged');
+  assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(body.join('\n')), 'the card body keeps the same ANIME SYSTEM presentation');
+  // Styling is cosmetic only: folding every line back to plain text must give
+  // the exact same wording, so no glyph can alter an identifier or a value.
+  assert.deepEqual(text.split('\n').map((line) => line.normalize('NFKC')), [
+    '╭━━━〔 ⚡ ANIME MD • MAIN MENU 〕━━━╮',
+    '┃',
+    '┃     ✦ ANIME MD ✦',
+    '┃',
+    '┃   「 🤖 」 SYSTEM 〢 🟢 ONLINE',
+    '┃   「 ⚡ 」 STATUS 〢 OPERATIONAL',
+    '┃',
+    '┃   ════「 SYSTEM READY 」════',
+    '╰━━━━━━━━━━━━━━━━━━━━━━━━━╯'
+  ]);
 });
 
 test('Telegram callbacks stay authorized and route status through owner-scoped sessions', async () => {
@@ -429,7 +467,7 @@ test('public mode lets any Telegram user verify, pair and manage only their own 
   });
   // A stranger receives the intro plus a verify prompt (no access-denied box).
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/start' } });
-  assert.match(replies.at(-1).caption || replies.at(-1).text, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
+  assert.match(replies.at(-1).caption || replies.at(-1).text, /ANIME MD • MAIN MENU/);
   // Restricted commands require self-verification before they run.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 11 }, text: '/pair 923001234567' } });
   assert.match((replies.at(-1).caption || replies.at(-1).text) || '', /VERIFICATION/);
@@ -671,7 +709,7 @@ test('dashboard callbacks edit the message and every button has a handler', asyn
   // The home view is the dashboard with its navigation buttons.
   await callback('home');
   const home = calls.filter((call) => call.method === 'editMessageText').at(-1);
-  assert.match(home.payload.text, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
+  assert.match(home.payload.text, /ANIME MD • MAIN MENU/);
   // Home now includes role-aware buttons, check that core buttons exist
   const flat = home.payload.reply_markup.inline_keyboard.flat().map((button) => button.callback_data);
   for (const expected of ['pair:new', 'nav:sessions', 'nav:status', 'nav:guide', 'nav:settings', 'nav:help', 'nav:allmenu', 'nav:developer', 'nav:thanks', 'nav:premium', 'nav:account']) {
@@ -1571,7 +1609,7 @@ test('a completely normal user can verify and is not blocked by owner/admin-only
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/start' } });
   const result = replies.at(-1);
   const intro = result.caption || result.text;
-  assert.match(intro, /𝐀𝐍𝐈𝐌𝐄 𝐌𝐃 • 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔/);
+  assert.match(intro, /ANIME MD • MAIN MENU/);
   assert.equal(await store.isVerified('42'), true, 'a normal user who is a member is verified');
   // The normal user can then use a protected command.
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 42 }, text: '/sessions' } });

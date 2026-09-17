@@ -82,7 +82,18 @@ test('the Telegram controller wiring starts, greets with the ANIME MD intro, and
   // owner-chosen presentation for the dashboard cards.
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(greetingText), 'the intro uses the anime-system bold style');
   assert.ok(/[\u{1D400}-\u{1D7FF}]/u.test(greetingText.split('\n')[0]), 'styled title');
-  assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(greetingText.split('\n').slice(1).join('\n')), 'body is unchanged');
+  // ANIME SYSTEM styling belongs to the boxed card. The prose around it — and
+  // every /command token an owner actually has to type — stays raw ASCII, so
+  // presentation can never hide or rewrite a command.
+  const cardLines = greetingText.split('\n').filter((line) => /^[╭┃╰]/u.test(line.trim()));
+  const proseLines = greetingText.split('\n').filter((line) => line.trim() && !/^[╭┃╰]/u.test(line.trim()));
+  assert.ok(cardLines.length >= 6, 'the greeting keeps its boxed ANIME SYSTEM card');
+  assert.ok(proseLines.length > 0, 'the greeting still explains the next step');
+  for (const line of proseLines) {
+    assert.match(line, /^[\x20-\x7E]+$/, `card prose stays raw ASCII: ${JSON.stringify(line)}`);
+    assert.ok(!/[\u{1D400}-\u{1D7FF}]/u.test(line), `prose is unchanged: ${JSON.stringify(line)}`);
+  }
+  assert.ok(greetingText.includes('/help'), 'command tokens are raw');
 
   // /sessions through the real manager: no sessions yet.
   await waitFor((entry) => entry.method === 'sendMessage' && /ANIME MD • SESSIONS/.test(normalizeTelegramHeadings(entry.payload.text)), '/sessions');
