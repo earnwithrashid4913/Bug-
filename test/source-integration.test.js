@@ -73,11 +73,29 @@ test('stored media round-trip and exact deletion preserve unrelated runtime sett
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 test('source downloader selects highest available video quality', async () => {
-  const original = global.fetch;
+  const axios = require('axios');
+  const originalFetch = global.fetch;
+  const originalGet = axios.get;
   const sent = [];
-  global.fetch = async () => ({ ok: true, json: async () => ({ status: true, title: 'Fixture', videos: { '360': 'https://example.com/360.mp4', '720': 'https://example.com/720.mp4' } }) });
+  // Mock the transports the video chain actually uses, in its real order:
+  // Cobalt over fetch refuses the link, so the DavidCyril provider pool (axios)
+  // has to serve it and must pick the highest rendition it is offered.
+  global.fetch = async () => new Response(JSON.stringify({ status: 'error', text: 'Download service refused this link.' }), { status: 400, headers: { 'content-type': 'application/json' } });
+  axios.get = async () => ({ data: { status: true, title: 'Fixture', videos: { '360': 'https://example.com/360.mp4', '720': 'https://example.com/720.mp4' } } });
   try {
     await source.download({ sendMessage: async (jid, payload) => sent.push(payload) }, context, { name: 'ytmp4', text: 'https://youtu.be/example', args: ['https://youtu.be/example'] });
     assert.equal(sent.find(p => p.video).video.url, 'https://example.com/720.mp4');
-  } finally { global.fetch = original; }
+  } finally { global.fetch = originalFetch; axios.get = originalGet; }
+});
+test('provider rendition maps resolve to the best media of the requested kind', () => {
+  const dc = require('../commands/davidcyril-api');
+  // A quality map is a real provider response shape, not a single URL field.
+  assert.equal(dc.pickUrl({ status: true, videos: { '360': 'https://e.test/360.mp4', '1080': 'https://e.test/1080.mp4', '720': 'https://e.test/720.mp4' } }), 'https://e.test/1080.mp4');
+  assert.equal(dc.pickUrl({ formats: [{ quality: '360p', type: 'video', url: 'https://e.test/360.mp4' }, { quality: '720p', type: 'video', url: 'https://e.test/720.mp4' }] }), 'https://e.test/720.mp4');
+  assert.equal(dc.pickAudioUrl({ status: true, audios: { '128': 'https://e.test/128.mp3', '320': 'https://e.test/320.mp3' } }), 'https://e.test/320.mp3');
+  // An explicit single URL still wins over rendition selection, and an audio
+  // request is never satisfied with a video-only rendition map.
+  assert.equal(dc.pickUrl({ url: 'https://e.test/direct.mp4', videos: { '720': 'https://e.test/720.mp4' } }), 'https://e.test/direct.mp4');
+  assert.equal(dc.pickAudioUrl({ status: true, videos: { '720': 'https://e.test/720.mp4' } }), null);
+  assert.equal(dc.pickUrl({ status: true, title: 'nothing to download' }), null);
 });

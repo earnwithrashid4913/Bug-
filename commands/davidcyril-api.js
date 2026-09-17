@@ -25,7 +25,78 @@ function extractUrl(text) {
   return m ? m[0] : '';
 }
 
-function pickUrl(data) {
+// ── rendition (quality map) selection ──────────────────────────────────────
+//
+// Several providers answer with a MAP or LIST of renditions instead of one
+// URL, e.g. `{ status: true, title, videos: { '360': url, '720': url } }`.
+// Those responses used to be read as "no media" and the command reported a
+// download failure even though a usable URL was offered. Every provider parser
+// below now understands them and always takes the HIGHEST available quality.
+
+const VIDEO_QUALITY_GROUPS = ['videos', 'video', 'mp4', 'renditions', 'formats', 'qualities', 'links', 'urls'];
+const AUDIO_QUALITY_GROUPS = ['audios', 'audio', 'mp3', 'music', 'renditions', 'formats', 'qualities'];
+
+function entryUrl(entry) {
+  if (typeof entry === 'string') return entry;
+  if (!entry || typeof entry !== 'object') return null;
+  return entry.url || entry.link || entry.download_url || entry.downloadUrl || entry.direct_url || entry.src || entry.videoUrl || entry.audioUrl || null;
+}
+
+function entryKind(entry) {
+  if (!entry || typeof entry === 'string') return '';
+  return String(entry.type || entry.kind || entry.mimetype || entry.category || '').toLowerCase();
+}
+
+// 360 / 720p / 1080 / 4K-style labels rank by their vertical resolution.
+function videoQualityRank(label) {
+  const text = String(label ?? '').toLowerCase();
+  if (/\d+\s*(kbps|kb\b)/.test(text)) return -1; // a bitrate label is not a video rendition
+  const match = /(\d{3,5})/.exec(text);
+  return match ? Number(match[1]) : -1;
+}
+
+// 128 / 320kbps / 64k-style labels rank by their bitrate.
+function audioQualityRank(label) {
+  const text = String(label ?? '').toLowerCase();
+  const bitrate = /(\d{2,4})\s*(kbps|kb\b|k\b)/.exec(text);
+  if (bitrate) return Number(bitrate[1]);
+  const plain = /^(\d{2,3})p?$/.exec(text.trim());
+  return plain ? Number(plain[1]) : -1;
+}
+
+function pickHighestQuality(source, { groups, kind, rank }) {
+  if (!source || typeof source !== 'object') return null;
+  let best = null;
+  const consider = (value, label) => {
+    const url = entryUrl(value);
+    if (!isUrlLike(url)) return;
+    if (kind) {
+      const entryKindValue = entryKind(value);
+      // Respect an explicit rendition type when the provider supplies one.
+      if (entryKindValue && !entryKindValue.includes(kind)) return;
+    }
+    const score = rank(label ?? (value && typeof value === 'object' ? (value.quality ?? value.resolution ?? value.label ?? value.size ?? value.format ?? value.name) : ''));
+    if (!best || score > best.score) best = { score, url };
+  };
+  for (const group of groups) {
+    const entries = source[group];
+    if (!entries || typeof entries !== 'object') continue;
+    if (Array.isArray(entries)) {
+      for (const entry of entries) consider(entry, entry && typeof entry === 'object' ? (entry.quality ?? entry.resolution ?? entry.label ?? entry.size ?? entry.format ?? entry.name) : '');
+      continue;
+    }
+    for (const [label, entry] of Object.entries(entries)) consider(entry, label);
+  }
+  return best ? best.url : null;
+}
+
+function isUrlLike(value) {
+  return typeof value === 'string' && /^https?:\/\//i.test(value);
+}
+
+// `skipVideoRenditions` keeps the audio parser away from video-only rendition
+// maps: an audio command must never be handed a video file.
+function pickUrl(data, { skipVideoRenditions = false } = {}) {
   if (!data) return null;
   const obj = data.result || data.data || data;
   if (typeof obj === 'string' && obj.startsWith('http')) return obj;
@@ -43,12 +114,21 @@ function pickUrl(data) {
     if (v?.url) return v.url;
     if (obj.medias[0]?.url) return obj.medias[0].url;
   }
+  // Rendition maps/lists: take the highest video quality on offer.
+  if (!skipVideoRenditions) {
+    const rendition = pickHighestQuality(obj, { groups: VIDEO_QUALITY_GROUPS, kind: 'video', rank: videoQualityRank });
+    if (rendition) return rendition;
+  }
   // Deep scan for nested download URLs
   for (const key of Object.keys(obj)) {
     const val = obj[key];
     if (val && typeof val === 'object' && !Array.isArray(val)) {
       for (const f of fields) {
         if (val[f] && typeof val[f] === 'string' && /^https?:\/\//i.test(val[f])) return val[f];
+      }
+      if (!skipVideoRenditions) {
+        const nested = pickHighestQuality(val, { groups: VIDEO_QUALITY_GROUPS, kind: 'video', rank: videoQualityRank });
+        if (nested) return nested;
       }
     }
   }
@@ -66,7 +146,12 @@ function pickAudioUrl(data) {
     const a = obj.medias.find(x => x.type === 'audio');
     if (a?.url) return a.url;
   }
-  return pickUrl(data);
+  // Audio rendition maps/lists: take the highest bitrate on offer. A video-only
+  // rendition map must NOT be handed to an audio command, so this stays scoped
+  // to the audio groups and never reaches pickUrl()'s video selection.
+  const rendition = pickHighestQuality(obj, { groups: AUDIO_QUALITY_GROUPS, kind: 'audio', rank: audioQualityRank });
+  if (rendition) return rendition;
+  return pickUrl(data, { skipVideoRenditions: true });
 }
 
 function pickTitle(data) {
@@ -1393,6 +1478,9 @@ module.exports = {
   pickItems,
   isUrl,
   isValidResult,
+  pickHighestQuality,
+  videoQualityRank,
+  audioQualityRank,
 
   // Core
   dcFetch,

@@ -4,7 +4,7 @@ const path = require('node:path');
 const { font } = require('./presentation');
 const { cleanText, publicHttpsUrl } = require('./anime-library');
 const { readLimitedBuffer } = require('./net-tools');
-const { maskInternationalNumber } = require('./pairing-number');
+const { UNKNOWN_VALUE, formatSessionNumber, sessionDashboard, sessionDigits } = require('./session-status');
 
 function normalizeWelcomeConfig(value = {}) {
   return Object.freeze({
@@ -20,11 +20,19 @@ function authenticatedSelfJid(socket) {
   const jid = socket.user.id.replace(/:\d+@/, '@');
   return /^\d+@(s\.whatsapp\.net|lid)$/.test(jid) ? jid : undefined;
 }
-function welcomeCaption(socket) {
+function welcomeCaption(socket, status, { dashboard = 'compact' } = {}) {
   const jid = authenticatedSelfJid(socket);
-  const number = jid?.endsWith('@s.whatsapp.net') ? maskInternationalNumber(jid.split('@')[0]) : 'Unavailable';
+  // The ACTUAL number of this connected session, read from that socket's own
+  // authenticated identity: never masked, never hardcoded and never taken from
+  // a shared global that another session could overwrite. A LID identity is a
+  // real WhatsApp identity but not a phone number, so it stays "Unavailable".
+  const number = formatSessionNumber(sessionDigits(jid));
   const name = cleanText(socket?.user?.name, 80) || 'WhatsApp User';
-  return [
+  // Real runtime session state (status mirror of THIS socket, or a view derived
+  // from it). Media captions stay bounded, so the compact dashboard travels with
+  // the video/image; the full dashboard is used by the text card.
+  const live = status || socket?.animeSessionStatus;
+  const lines = [
     `╭━━━〔 🌀 ${font('LIMITLESS • ACTIVE')} 〕━━━╮`,
     '',
     `          ✦ ${font('CONNECTED')} ✦`,
@@ -61,8 +69,32 @@ function welcomeCaption(socket) {
     '╰━━━━━━━━━━━━━━━━━━╯',
     '',
     `        「 ${font('GOJO IS HERE')} 」`,
-    '             The system is alive. 🌀'
-  ].join('\n');
+    '             The system is alive. 🌀',
+    '',
+    sessionDashboard(live, {
+      socket,
+      number: number === UNKNOWN_VALUE ? undefined : sessionDigits(jid),
+      compact: dashboard !== 'full'
+    })
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * The full connected-dashboard caption used by the WhatsApp text card that
+ * follows the optional welcome video/image. Same renderer, same real values,
+ * no second source of truth.
+ */
+function connectionCardCaption(socket, status) {
+  return welcomeCaption(socket, status, { dashboard: 'full' });
+}
+
+/** Media captions are bounded by WhatsApp; this keeps the welcome deliverable. */
+const MAX_MEDIA_CAPTION_LENGTH = 1024;
+
+function safeMediaCaption(caption) {
+  const text = String(caption ?? '');
+  return text.length <= MAX_MEDIA_CAPTION_LENGTH ? text : `${text.slice(0, MAX_MEDIA_CAPTION_LENGTH - 1).trimEnd()}…`;
 }
 // A notification helper only: callers keep the EXISTING connection lifecycle
 // flags/sets. No listener, socket, timer loop, history database or retry worker.
@@ -97,7 +129,7 @@ async function sendWelcomeVideo(socket, options, { log = console, fetchImpl = gl
     // supplemented with a bounded await so a failed optional video cannot hold
     // up the existing fallback text/menu. No retry creates a duplicate video.
     await Promise.race([
-      socket.sendMessage(target, { video: Buffer.isBuffer(source) ? source : { url: source }, mimetype: 'video/mp4', caption: welcomeCaption(socket) }, { mediaUploadTimeoutMs: settings.timeoutMs }),
+      socket.sendMessage(target, { video: Buffer.isBuffer(source) ? source : { url: source }, mimetype: 'video/mp4', caption: safeMediaCaption(welcomeCaption(socket)) }, { mediaUploadTimeoutMs: settings.timeoutMs }),
       new Promise((_, reject) => { timeout = setTimeout(() => { stage = 'VIDEO_TIMEOUT'; reject(new Error('timeout')); }, settings.timeoutMs); })
     ]);
     return { status: 'sent' };
@@ -108,4 +140,4 @@ async function sendWelcomeVideo(socket, options, { log = console, fetchImpl = gl
     return { status: 'failed' };
   } finally { clearTimeout(timeout); }
 }
-module.exports = { normalizeWelcomeConfig, authenticatedSelfJid, welcomeCaption, sendWelcomeVideo };
+module.exports = { MAX_MEDIA_CAPTION_LENGTH, normalizeWelcomeConfig, authenticatedSelfJid, connectionCardCaption, safeMediaCaption, welcomeCaption, sendWelcomeVideo };

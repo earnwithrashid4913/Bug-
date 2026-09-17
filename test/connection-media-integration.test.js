@@ -8,6 +8,10 @@ const vm = require('node:vm');
 const { TelegramController } = require('../system/lib/telegram-controller');
 const { TelegramControllerStore } = require('../system/lib/telegram-controllers');
 const { authenticatedSelfJid, sendWelcomeVideo, welcomeCaption } = require('../system/lib/connection-welcome');
+// index.js renders the connected dashboard through the ONE authoritative
+// session renderer, so the harness that runs the actual index callbacks must
+// supply that real module function too (it is part of index.js's module scope).
+const { sessionDashboard, sessionDigits } = require('../system/lib/session-status');
 const quiet = { warn() {}, info() {}, log() {} };
 const number = '923001234567';
 const session = { number, numberDisplay: '+92 3001234567', connected: true, registered: true };
@@ -145,7 +149,7 @@ async function indexWelcomeHarness({ menuFails = false, noticeFails = false } = 
   const sends = [], notices = [];
   const socket = { user: { id: `${number}:42@s.whatsapp.net`, name: 'Authenticated Own User' }, sendMessage: async (jid, payload) => { sends.push({ jid, payload }); } };
   const context = vm.createContext({
-    authenticatedSelfJid, welcomeCaption,
+    authenticatedSelfJid, welcomeCaption, sessionDashboard, sessionDigits,
     sendWelcomeVideo: (sock, options) => sendWelcomeVideo(sock, options, { log: quiet, fetchImpl: async () => new Response('mock MP4 bytes') }),
     config: { botName: 'ANIME MD', connectionWelcomeVideo: { enabled: true, source: 'url', url: 'https://media.example/welcome.mp4' }, connectionSuccessImage: 'https://media.example/image.jpg' },
     handleMessage: { getCommandPrefix: () => '!' },

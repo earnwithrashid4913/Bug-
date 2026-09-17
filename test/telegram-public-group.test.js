@@ -509,8 +509,11 @@ test('a failing button in a public group renders the clean public line, never th
     })
   });
 
+  // Session buttons carry an opaque per-owner token (never the raw number), so
+  // the fixture has to go through the real token API for an authorized click.
+  const token = controller.issueSessionCallbackToken(11, '923001234567');
   await controller.handleUpdate({
-    callback_query: { id: 'cb', from: { id: 11 }, data: 'ses:stopok:923001234567', message: { chat: { id: GROUP_ID, type: 'supergroup' }, message_id: 5 } }
+    callback_query: { id: 'cb', from: { id: 11 }, data: `ses:stopok:${token}`, message: { chat: { id: GROUP_ID, type: 'supergroup' }, message_id: 5 } }
   });
 
   const publicText = calls
@@ -525,7 +528,7 @@ test('a failing button in a public group renders the clean public line, never th
   // per-user gate for /stop is cleared so this second call is evaluated.)
   clearUserGate(controller);
   await controller.handleUpdate({
-    callback_query: { id: 'cb', from: { id: 11 }, data: 'ses:stopok:923001234567', message: { chat: { id: 1, type: 'private' }, message_id: 5 } }
+    callback_query: { id: 'cb', from: { id: 11 }, data: `ses:stopok:${token}`, message: { chat: { id: 1, type: 'private' }, message_id: 5 } }
   });
   assert.match(textsIn(calls, 1).join('\n'), /another controller/);
 });

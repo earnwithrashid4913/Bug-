@@ -114,7 +114,73 @@ const { parseDuration } = require('./premium');
 // listing of the commands the WhatsApp handler actually registers — nothing is
 // invented here, so a command can never appear in the menu without existing.
 const { categoriesWithCommands } = require('./menu');
-const { sessionDashboard } = require('./session-status');
+const {
+  formatSessionNumber,
+  safeSessionNumber,
+  sessionDashboard,
+  sessionDigits,
+  stateEventLabel
+} = require('./session-status');
+
+// ---------------------------------------------------------------------------
+// Session lifecycle → dashboard state.
+//
+// The pairing manager's snapshots already carry a resolved `state`; this table
+// is only the fallback for a snapshot that carries just the lifecycle enum, so
+// a box can never render an invented state (or claim CONNECTED for a session
+// that is offline/reconnecting).
+// ---------------------------------------------------------------------------
+const PAIRING_STATUS_STATES = Object.freeze({
+  RECEIVED: 'connecting',
+  VALIDATING: 'connecting',
+  NORMALIZING: 'connecting',
+  LOCKING: 'connecting',
+  INITIALIZING: 'connecting',
+  CONNECTING: 'connecting',
+  PAIRING_READY: 'pairing',
+  CODE_GENERATED: 'pairing',
+  WAITING_FOR_LINK: 'pairing',
+  CONNECTED: 'connected',
+  RECONNECTING: 'reconnecting',
+  OFFLINE: 'disconnected',
+  FAILED: 'error',
+  EXPIRED: 'disconnected',
+  LOGGED_OUT: 'logged_out',
+  CLEANUP: 'disconnected'
+});
+
+function sessionStateOf(session, fallback = 'disconnected') {
+  const state = String(session?.state || '').toLowerCase();
+  if (state) return state;
+  const mapped = PAIRING_STATUS_STATES[String(session?.status || '').toUpperCase()];
+  if (mapped) return mapped;
+  if (typeof session?.connected === 'boolean') return session.connected ? 'connected' : 'disconnected';
+  return fallback;
+}
+
+// Builds the session-status object the ONE dashboard renderer consumes from a
+// pairing-manager snapshot. Every value is the snapshot's own real value; the
+// only defaults are the timestamps of the event that is being rendered right
+// now, so a box never shows a placeholder or a hardcoded date.
+function sessionStatusOf(session, { fallbackState = 'disconnected', now = Date.now() } = {}) {
+  const state = sessionStateOf(session, fallbackState);
+  const connected = state === 'connected' && session?.connected !== false;
+  const connectedAt = Number(session?.connectedAt) > 0 ? Number(session.connectedAt) : (connected ? now : null);
+  const lastUpdate = Number(session?.lastUpdate) > 0 ? Number(session.lastUpdate) : now;
+  return {
+    id: String(session?.id || session?.number || 'telegram-session'),
+    state,
+    connected,
+    connectedAt,
+    startedAt: Number(session?.startedAt) > 0 ? Number(session.startedAt) : (connectedAt || lastUpdate),
+    reconnects: Number(session?.reconnects) || 0,
+    hasConnected: connected || Number(session?.connectedAt) > 0,
+    lastEvent: session?.lastEvent || stateEventLabel(state),
+    lastUpdate,
+    sessionLabel: session?.registered ? 'paired' : 'pairing',
+    safeNumber: sessionDigits(session?.number) || ''
+  };
+}
 // Canonical project identity (never deployment configuration). Used by the
 // DEVELOPER and THANKS TO pages so they always report the project's real
 // protected identity instead of a copied one.
@@ -542,21 +608,32 @@ function guideBox() {
   ]);
 }
 
-function connectedBox(numberDisplay, username, session) {
+// The CONNECTED box is rendered by notifySessionConnected() only — that is the
+// pairing manager's real `connection === 'open'` event, never code generation,
+// an auth file or a socket object. Its dashboard values come from that
+// session's own snapshot: real state, real connected-since timestamp, real
+// reconnect count, real last event/update, and the session's ACTUAL number.
+//
+// `public` renders the masked display the flow already chose (a group or
+// supergroup must never receive a full phone number); a private chat receives
+// the real, unmasked number of the connected session.
+function connectedBox(numberDisplay, username, session, { public: isPublic = false, now = Date.now() } = {}) {
+  const digits = sessionDigits(session?.number) || sessionDigits(numberDisplay);
+  const display = String(numberDisplay || '').trim();
+  const number = isPublic
+    ? (display.includes('•') ? display : safeSessionNumber(digits))
+    : (digits || display);
   const lines = [
     '',
     '✦ ANIME-MD • LINK COMPLETE ✦',
     '✅ Pairing Completed Successfully',
     '✅ WhatsApp Connected',
     '',
-    session ? sessionDashboard({
-      state: session.state || (session.connected ? 'connected' : 'disconnected'),
-      connected: session.connected,
-      connectedAt: session.connectedAt,
-      reconnects: session.reconnects,
-      lastEvent: session.lastEvent,
-      lastUpdate: session.lastUpdate
-    }, { number: session.number || String(numberDisplay || '').replace(/\D/g, '') }) : `📱 ${numberDisplay}`
+    session ? sessionDashboard(sessionStatusOf(session, { fallbackState: 'connected', now }), {
+      number,
+      maskNumber: isPublic,
+      verbatimNumber: isPublic
+    }) : `📱 ${formatSessionNumber(display || digits, { masked: isPublic, verbatim: true })}`
   ];
   if (username) lines.push(`👤 @${username}`);
   lines.push(
@@ -909,14 +986,16 @@ function sessionsBox(sessions, publicChat = false) {
 }
 
 function statusBox(session, { ownerId, publicChat = false } = {}) {
-  const dashboard = sessionDashboard({
-    state: session.state || (session.connected ? 'connected' : 'disconnected'),
-    connected: session.connected,
-    connectedAt: session.connectedAt,
-    reconnects: session.reconnects,
-    lastEvent: session.lastEvent,
-    lastUpdate: session.lastUpdate
-  }, { number: session.number || String(session.numberDisplay || '').replace(/\D/g, ''), compact: false });
+  // Same renderer, same real values. The number line keeps the display the
+  // caller chose: the full international form in a private chat, the masked
+  // form in a group/supergroup.
+  const dashboard = sessionDashboard(sessionStatusOf(session), {
+    number: displayNumber(session, publicChat) || sessionDigits(session?.number),
+    maskNumber: publicChat,
+    verbatimNumber: true,
+    numberLabel: 'Number',
+    compact: false
+  });
   const lines = [
     '',
     ...dashboard.split('\\n'),
@@ -2854,7 +2933,7 @@ class TelegramController {
 
   async sendSessionsView(chatId, senderId, { messageId, admin = false, publicChat = false } = {}) {
     const sessions = await this.pairing.listSessions(senderId);
-    return this.present(chatId, messageId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId, session.number)));
+    return this.present(chatId, messageId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId ?? senderId, session.number)));
   }
 
   async sendStatusView(chatId, senderId, { messageId, publicChat = false } = {}) {
@@ -2870,8 +2949,8 @@ class TelegramController {
 
   async sendSessionMenuView(chatId, senderId, number, { messageId, admin = false, publicChat = false } = {}) {
     const session = await this.pairing.statusOf(senderId, number, { admin });
-    const foreign = admin && String(session.ownerId) !== String(senderId);
-    const token = this.issueSessionCallbackToken(session.ownerId, session.number);
+    const foreign = admin && session.ownerId !== undefined && String(session.ownerId) !== String(senderId);
+    const token = this.issueSessionCallbackToken(session.ownerId ?? senderId, session.number);
     return this.present(chatId, messageId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(token));
   }
 
@@ -3231,14 +3310,17 @@ class TelegramController {
         case 'sessions':
         case 'listsessions': {
           const sessions = await this.pairing.listSessions(command.senderId);
-          await this.reply(command.chatId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId, session.number)));
+          // A session snapshot that does not carry its owner belongs to the
+          // requesting controller: listSessions() is owner-scoped. Falling back
+          // keeps the buttons working instead of failing the whole view.
+          await this.reply(command.chatId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId ?? command.senderId, session.number)));
           return;
         }
         case 'status': {
           if (command.args[0]) {
             const session = await this.pairing.statusOf(command.senderId, command.args[0], { admin: access === 'bootstrap' });
-            const foreign = access === 'bootstrap' && String(session.ownerId) !== String(command.senderId);
-            const token = this.issueSessionCallbackToken(session.ownerId, session.number);
+            const foreign = access === 'bootstrap' && session.ownerId !== undefined && String(session.ownerId) !== String(command.senderId);
+            const token = this.issueSessionCallbackToken(session.ownerId ?? command.senderId, session.number);
             await this.reply(command.chatId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(token));
             return;
           }
@@ -3829,7 +3911,17 @@ class TelegramController {
       this.endChatPairing(flow.chatId, flow.senderKey);
       // One message, edited in place — the group sees the masked number, a
       // private chat sees the full one.
-      const successText = connectedBox(session?.numberDisplay || flow.publicDisplay || flow.numberDisplay, flow.actor?.username, session);
+      // A flow started in a group/supergroup keeps the masked display for that
+      // chat; a private flow shows the session's real number. The dashboard
+      // inside the box follows the same rule (see connectedBox).
+      const successText = connectedBox(
+        flow.public
+          ? (flow.publicDisplay || safeSessionNumber(session?.number))
+          : (session?.numberDisplay || flow.numberDisplay),
+        flow.actor?.username,
+        session,
+        { public: Boolean(flow.public) }
+      );
       try {
         await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, successText, connectedMarkup()));
         this.scheduleAnimeEdit(ownerId, session, flow.chatId);

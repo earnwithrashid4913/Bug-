@@ -357,6 +357,9 @@ class TelegramPairingManager {
   sessionSnapshot(session) {
     return {
       id: session.id,
+      // The controller scopes session buttons and admin views by owner. Without
+      // it a snapshot cannot be turned into a callback token at all.
+      ownerId: session.ownerId,
       number: session.number,
       numberDisplay: session.numberDisplay,
       safeNumberDisplay: session.sessionStatus ? safeSessionNumber(session.number) : 'Unavailable',
