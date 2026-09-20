@@ -29,8 +29,9 @@ const { EconomyStore } = require('./lib/economy');
 const { ChatStore } = require('./lib/chats');
 const { MAX_STICKER_INPUT_BYTES, convertStickerToImage, createImageSticker, createVideoSticker, takeSticker, convertToVideo } = require('./lib/sticker');
 const { sendButtons, sendList } = require('./lib/ui');
+const { styleHeaders } = require('./lib/presentation');
 const { backButton, contextButtons, menuButton, settingButtons } = require('./lib/whatsapp-actions');
-const { helpText: buildHelpText, categoriesWithCommands, getCategory, resolveCommand } = require('./lib/menu');
+const { helpText: buildHelpText, categoriesWithCommands, commandIndex, getCategory, resolveCommand } = require('./lib/menu');
 const {
   handleAnimeCommand,
   handleMangaCommand,
@@ -43,6 +44,7 @@ const {
 } = require('../commands/anime-otaku');
 const quizModule = require('../commands/quiz');
 const {
+  handleAioCommand,
   handleTiktokCommand,
   handleFacebookCommand,
   handleXdlCommand,
@@ -618,6 +620,50 @@ function menuCommandsForAccess(category, access) {
   return category.commands.filter(entry => allowed.has(entry.permission));
 }
 
+// The categories (and the commands inside them) this caller may actually run.
+// ONE resolution used by the root menu, the category view AND the numeric
+// reply shortcut, so a number shown in the menu always opens the category it
+// was printed next to.
+async function visibleMenuCategories(socket, context) {
+  const access = await menuAccess(socket, context);
+  return categoriesWithCommands()
+    .map(category => ({ ...category, commands: menuCommandsForAccess(category, access) }))
+    .filter(category => category.commands.length);
+}
+
+// WhatsApp caps a text message at 4096 characters, so the complete index is
+// split into whole messages here instead of being cut off mid-list: every
+// executable command reaches the user, and no category is ever half-shown.
+const MENU_INDEX_CHUNK_LIMIT = 2_500;
+
+function menuIndexChunks(prefix, categories) {
+  // One block per category, packed into whole messages: a category is never
+  // split across two messages unless that single category alone is too long.
+  const blocks = (Array.isArray(categories) ? categories : [])
+    .map((category) => commandIndex([category], prefix))
+    .filter((block) => block.length);
+  const chunks = [];
+  let current = [];
+  let length = 0;
+  const flush = () => {
+    if (!current.length) return;
+    chunks.push(current.join('\n'));
+    current = [];
+    length = 0;
+  };
+  for (const block of blocks) {
+    const blockSize = block.reduce((total, line) => total + line.length + 1, 0);
+    if (length && length + blockSize > MENU_INDEX_CHUNK_LIMIT) flush();
+    for (const line of block) {
+      if (length + line.length + 1 > MENU_INDEX_CHUNK_LIMIT && current.length) flush();
+      current.push(line);
+      length += line.length + 1;
+    }
+  }
+  flush();
+  return chunks;
+}
+
 function menuHelpText(prefix, category, commands) {
   return [
     `*${category.icon} ${category.label}*`,
@@ -635,14 +681,22 @@ async function handleMenuCommand(socket, context, command) {
   const botName = await settingsStore.get('bot_name') || config.botName;
   const p = getCommandPrefix();
   const categoryId = command.args[0]?.toLowerCase();
-  const access = await menuAccess(socket, context);
-  const visibleCategories = categoriesWithCommands().map(category => ({ ...category, commands: menuCommandsForAccess(category, access) })).filter(category => category.commands.length);
+  const visibleCategories = await visibleMenuCategories(socket, context);
 
   if (!categoryId || categoryId === 'home') {
     const categories = visibleCategories;
+    const totalCommands = categories.reduce((total, category) => total + category.commands.length, 0);
     try {
       await sendList(socket, context.chatId, {
-        text: `*${botName}*\n\nChoose a category:`,
+        text: [
+          `*${botName}*`,
+          '',
+          `📋 *${totalCommands} commands* in ${categories.length} categories`,
+          '',
+          'Choose a category:',
+          '',
+          'The complete command list follows below.'
+        ].join('\n'),
         footer: `Developer: ${config.developerName}`,
         title: 'Browse Categories',
         sections: [{
@@ -673,6 +727,14 @@ async function handleMenuCommand(socket, context, command) {
       });
     } catch (error) {
       await socket.sendMessage(context.chatId, { text: helpText(p) }, { quoted: context.raw });
+    }
+
+    // ALL COMMANDS IN ONE GO: every executable command of every category the
+    // caller may run, generated from the live registry (never a hand-written
+    // list). A category is then opened with `!menu <category>` — or with the
+    // number/row above — for its usage lines, aliases and descriptions.
+    for (const chunk of menuIndexChunks(p, categories)) {
+      await socket.sendMessage(context.chatId, { text: styleHeaders(chunk) }, { quoted: context.raw });
     }
     return;
   }
@@ -1597,7 +1659,9 @@ async function handleMessage(socket, rawMessage) {
 
     // Numeric reply for menu category selection
     if (/^\d+$/.test(context.text.trim()) && context.text.trim().length <= 2) {
-      const categories = categoriesWithCommands();
+      // Same access-filtered order the root menu printed, so reply "3" always
+      // opens the third category that was listed.
+      const categories = await visibleMenuCategories(socket, context);
       const index = Number(context.text.trim()) - 1;
       if (index >= 0 && index < categories.length) {
         const fakeCommand = { name: 'menu', args: [categories[index].id], text: '' };
@@ -1683,6 +1747,8 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
     // --- GENERAL ---
     case 'menu':
+    case 'm':
+    case 'cmds':
     case 'help':
       await handleMenuCommand(socket, context, command);
       break;
@@ -1724,16 +1790,23 @@ async function dispatchCommand(socket, context, command, rawMessage) {
 
     // --- DOWNLOADER ---
     case 'play':
+    case 'song':
+    case 'music':
       await sourceCommands.download(socket, context, command);
       break;
 
     case 'ytmp3':
+    case 'yta':
+    case 'ytaudio':
     case 'mp3':
     case 'audio':
       await sourceCommands.download(socket, context, command);
       break;
 
     case 'video':
+    case 'yt':
+    case 'youtube':
+    case 'ytv':
     case 'ytmp4':
     case 'ytvideo':
     case 'mp4':
@@ -1741,6 +1814,8 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
 
     case 'spotify':
+    case 'sp':
+    case 'spot':
       await handleSpotifyCommand(socket, context, command);
       break;
 
@@ -1748,6 +1823,14 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'download':
     case 'dl':
       await handleMediaCommand(socket, context, command);
+      break;
+
+    case 'aio':
+    case 'alldl':
+    case 'anydl':
+    case 'allinone':
+    case 'alldownload':
+      await handleAioCommand(socket, context, command.text, getCommandPrefix());
       break;
 
     // --- MEDIA ---
@@ -1803,6 +1886,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'take':
     case 'steal':
     case 'tovid':
+    case 'tomp4':
     case 'sticker2vid': {
       const sticker = getStickerMessage(rawMessage);
       if (!sticker) { await sendResult(socket, context, { text: 'Reply to a sticker.', command: command.name }); break; }
@@ -1820,6 +1904,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
     }
     case 'toimg':
+    case 'toimage':
     case 'sticker2img':
     case 'img': {
       const stickerMessage = getStickerMessage(rawMessage);
@@ -2190,6 +2275,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       await sourceCommands.alive(socket, context);
       break;
     case 'status':
+    case 'st':
     case 'runtime': {
       const text = [
         `📊 *${config.botName.toUpperCase()} STATUS*`,
@@ -2396,6 +2482,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
 
     case 'anime':
+    case 'ani':
       await handleAnimeCommand(socket, context, command.args);
       break;
 
@@ -2475,12 +2562,14 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     // ═══════════════════════════════════════════════════════════════
 
     case 'tiktok':
+    case 'tk':
     case 'tt':
     case 'ttdl':
       await handleTiktokCommand(socket, context, command.text);
       break;
 
     case 'facebook':
+    case 'fbvideo':
     case 'fb':
     case 'fbdl':
       await handleFacebookCommand(socket, context, command.text);
@@ -2489,12 +2578,15 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'xdl':
     case 'twdl':
     case 'twitter':
+    case 'x':
+    case 'tw':
       await handleXdlCommand(socket, context, command.text);
       break;
 
     case 'ig':
     case 'igdl':
     case 'instagram':
+    case 'insta':
       await handleInstagramCommand(socket, context, command.text);
       break;
 
@@ -2505,21 +2597,27 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
 
     case 'soundcloud':
+    case 'sc':
     case 'scdl':
       await handleSoundcloudCommand(socket, context, command.text);
       break;
 
     case 'mediafire':
+    case 'mf':
     case 'mfdl':
       await handleMediafireCommand(socket, context, command.text);
       break;
 
     case 'gdrive':
+    case 'gd':
+    case 'drive':
     case 'gddl':
       await handleGdriveCommand(socket, context, command.text);
       break;
 
     case 'terabox':
+    case 'tb':
+    case 'tera':
     case 'tbdl':
       await handleTeraboxCommand(socket, context, command.text);
       break;
@@ -2529,6 +2627,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     // ═══════════════════════════════════════════════════════════════
 
     case 'movie':
+    case 'mv':
     case 'film':
     case 'moviesearch':
       await handleMovieSearchCommand(socket, context, command.args);
@@ -2541,6 +2640,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       break;
 
     case 'series':
+    case 'srs':
     case 'tv':
     case 'tvseries':
       await handleSeriesSearchCommand(socket, context, command.args);

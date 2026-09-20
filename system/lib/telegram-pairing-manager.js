@@ -430,8 +430,18 @@ class TelegramPairingManager {
   }
 
   // All sessions across every controller, oldest first. Used by bootstrap
-  // owners (/listpaired) — never exposed to regular controllers.
-  listAllSessions() {
+  // owners (/listpaired) and by the admin/owner session dashboard — never
+  // exposed to regular controllers.
+  //
+  // CONTRACT: this is async and always resolves to an array. Every consumer
+  // (the Telegram controller, index.js) awaits it, so it must never hand back
+  // a bare array: a synchronous return value cannot be `.catch()`-ed and the
+  // mismatch used to surface as
+  // "this.pairing.listAllSessions(...).catch is not a function".
+  // `restore()` re-registers stored credentials into `this.sessions`, so this
+  // list covers live AND restored (offline) sessions — no second session
+  // manager and no separate credential scan is needed here.
+  async listAllSessions() {
     return [...this.sessions.values()]
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((session) => this.sessionSnapshot(session));

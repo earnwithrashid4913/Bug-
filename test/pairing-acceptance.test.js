@@ -14,7 +14,7 @@
 // TelegramPairingManager under test are the real production modules.
 // ---------------------------------------------------------------------------
 
-const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
+const { displayAssert: assert, normalizeTelegramHeadings, normalizeTelegramText } = require('../test-support/telegram-display');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -177,7 +177,7 @@ test('ACCEPTANCE: /pair returns the real WhatsApp code and reports CONNECTED onl
   assert.doesNotMatch(codeEntry.text, /GOAT/i, 'no custom/GOAT-MODS code anywhere in the reply');
 
   // 3. No connection is claimed before WhatsApp reports open.
-  assert.doesNotMatch(allText(replies), /WhatsApp Connected/);
+  assert.doesNotMatch(normalizeTelegramText(allText(replies)), /WHATSAPP CONNECTED/);
 
   // 4. The account holder enters the code on the SAME socket; WhatsApp marks
   //    the credentials registered and forces a restart (515).
@@ -192,13 +192,13 @@ test('ACCEPTANCE: /pair returns the real WhatsApp code and reports CONNECTED onl
   await sleep(30);
 
   // Still not claimed as connected while the replacement socket reconnects.
-  assert.doesNotMatch(allText(replies), /WhatsApp Connected/);
+  assert.doesNotMatch(normalizeTelegramText(allText(replies)), /WHATSAPP CONNECTED/);
 
   // 5. connection.update === 'open' → the real CONNECTED notification.
   fake.sockets.at(-1).ev.emit('connection.update', { connection: 'open' });
   await sleep(20);
-  const connected = allText(replies);
-  assert.match(connected, /WhatsApp Connected/, 'CONNECTED is reported after connection open');
+  const connected = normalizeTelegramText(allText(replies));
+  assert.match(connected, /WHATSAPP CONNECTED/, 'CONNECTED is reported after connection open');
   assert.match(connected, /\+92 349 494494/, 'the connected notification names the paired number');
   assert.equal(manager.getSession(OWNER_ID, NUMBER).status, 'CONNECTED');
 
@@ -253,7 +253,7 @@ test('ACCEPTANCE: /pair from a supergroup pairs with the real code visible in th
   // The group success is masked, and it is an EDIT of the same pairing message
   // — the connected state never claims a connection before connection open.
   const groupAfter = replies.filter((entry) => String(entry.chatId) === String(-1001)).map((entry) => entry.text || '');
-  assert.ok(groupAfter.some((text) => /WhatsApp Connected/.test(text) && /••••• 494/.test(text)), 'the group shows a masked success');
+  assert.ok(groupAfter.some((text) => /WHATSAPP CONNECTED/.test(normalizeTelegramText(text)) && /••••• 494/.test(text)), 'the group shows a masked success');
   assert.ok(!groupAfter.some((text) => /92349494494/.test(text)), 'still no full number in the group after connecting');
   assert.deepEqual(
     replies.filter((entry) => String(entry.chatId) === OWNER_ID),
@@ -273,7 +273,7 @@ test('ACCEPTANCE: an invalid number never opens a socket and reports the format 
   assert.equal(fake.sockets.length, 0, 'no WhatsApp socket was created for invalid input');
   const text = allText(replies);
   assert.match(text, /PAIRING FAILED|Send your WhatsApp number/);
-  assert.doesNotMatch(text, /WhatsApp Connected/);
+  assert.doesNotMatch(normalizeTelegramText(text), /WHATSAPP CONNECTED/);
   await manager.shutdown();
 });
 
@@ -309,7 +309,7 @@ test('ACCEPTANCE: a failed handshake reports failure and never claims a connecti
   await sendPair(controller, `/pair ${NUMBER}`);
   const text = allText(replies);
   assert.match(text, /PAIRING FAILED/);
-  assert.doesNotMatch(text, /WhatsApp Connected/);
+  assert.doesNotMatch(normalizeTelegramText(text), /WHATSAPP CONNECTED/);
   assert.doesNotMatch(text, /🔐 CODE:/, 'no code is shown when WhatsApp never issued one');
   await manager.shutdown();
 });

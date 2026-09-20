@@ -306,7 +306,10 @@ function startTelegramController() {
       getStatus: (ownerId) => telegramPairingManager.snapshot(ownerId),
       statusOf: (ownerId, number, options) => telegramPairingManager.statusOf(ownerId, number, options),
       listSessions: (ownerId) => telegramPairingManager.listSessions(ownerId),
-      listAllSessions: () => telegramPairingManager.listAllSessions(),
+      // Async contract: the controller awaits this list (see the Sessions
+      // button). Keeping it async here means a synchronous manager method can
+      // never be mistaken for a Promise by a caller.
+      listAllSessions: async () => telegramPairingManager.listAllSessions(),
       stopSession: (ownerId, number, options) => telegramPairingManager.stopSession(ownerId, number, options),
       restartSession: (ownerId, number, options) => telegramPairingManager.restartSession(ownerId, number, options),
       queuedPairingCount: () => telegramPairingManager.queuedPairingCount()

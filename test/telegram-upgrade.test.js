@@ -5,7 +5,7 @@
 // sessions, role-filtered help, centralized permission helpers, uptime
 // formatting, and the owner-ID type fix behind /listpaired.
 
-const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
+const { displayAssert: assert, normalizeTelegramHeadings, normalizeTelegramText } = require('../test-support/telegram-display');
 const test = require('node:test');
 const {
   ADMIN_COMMANDS,
@@ -312,7 +312,10 @@ test('admin sessions view lists every session globally (admin/owner only)', asyn
   const view = lastEdit();
   assert.match(view.payload.text, /ALL SESSIONS/);
   assert.match(view.payload.text, /user 42/);
-  assert.match(view.payload.text, /Total: 2 sessions/);
+  // Admin/Owner session dashboards show the COMPLETE number, never a masked one.
+  assert.match(view.payload.text, /\+92 300 1234567/);
+  assert.match(view.payload.text, /\+1 202 555 0123/);
+  assert.match(normalizeTelegramText(view.payload.text), /Total: 2 sessions/);
 
   // Owner global view via the owner panel.
   await controller.handleUpdate({ callback_query: { id: 'c2', from: { id: 10 }, data: 'owner:sessions', message: { chat: { id: 1 }, message_id: 31 } } });
@@ -395,13 +398,44 @@ test('system status reports real session and queue counts', async () => {
   });
   const { controller } = makeController({ pairing, fetchImpl });
   controller.startedAt = Date.now() - 125_000;
+  controller.running = true;
   await controller.handleUpdate({ callback_query: { id: 'c1', from: { id: 10 }, data: 'admin:system', message: { chat: { id: 1 }, message_id: 41 } } });
   const edit = calls.filter((c) => c.method === 'editMessageText').at(-1);
-  assert.match(edit.payload.text, /Telegram Bot: 🟢 ONLINE/);
-  assert.match(edit.payload.text, /Pairing Service: 🟢 READY/);
-  assert.match(edit.payload.text, /Active Sessions: 1/);
-  assert.match(edit.payload.text, /Queued Pairings: 2/);
-  assert.match(edit.payload.text, /Uptime: 2 minutes 5 seconds/);
+  const text = normalizeTelegramText(edit.payload.text);
+  assert.match(text, /🟢 BOT: ONLINE/);
+  assert.match(text, /🔐 PAIRING: READY/);
+  assert.match(text, /📊 Active Sessions: 1/);
+  assert.match(text, /🔄 Queued: 2/);
+  assert.match(text, /⏱️ Uptime: 2 minutes 5 seconds/);
+  // Configuration is reported in its own block: it is a setting, not health.
+  assert.match(text, /CONFIGURATION/);
+  assert.match(text, /🌍 Public Mode: (ON|OFF)/);
+  assert.match(text, /💎 Premium Only: (ON|OFF)/);
+  assert.match(text, /⚡ SYSTEM OPERATIONAL/);
+  // One process, one state: the card never repeats the same health fact under
+  // a second label ("Telegram Bot" + "Controller") and never hardcodes a
+  // version or a fake "READY".
+  assert.doesNotMatch(text, /Controller: /);
+  assert.doesNotMatch(text, /Bot Version/);
+  assert.equal((text.match(/ONLINE/g) || []).length, 1, 'the online state is stated exactly once');
+});
+
+test('system status reports a degraded state honestly instead of a fake healthy one', async () => {
+  const { calls, fetchImpl } = flowApi();
+  // A pairing binding whose session list cannot be read: the counts must not
+  // be faked as 0 and the footer must not claim the system is operational.
+  const pairing = fakePairing({
+    listAllSessions: async () => { throw new Error('session store offline'); }
+  });
+  const { controller } = makeController({ pairing, fetchImpl });
+  controller.startedAt = Date.now() - 125_000;
+  controller.running = true;
+  await controller.handleUpdate({ callback_query: { id: 'c2', from: { id: 10 }, data: 'admin:system', message: { chat: { id: 1 }, message_id: 42 } } });
+  const text = normalizeTelegramText(calls.filter((c) => c.method === 'editMessageText').at(-1).payload.text);
+  assert.match(text, /⚠️ PAIRING: UNAVAILABLE/);
+  assert.match(text, /📊 Active Sessions: Unavailable/);
+  assert.match(text, /⚠️ SYSTEM DEGRADED/);
+  assert.doesNotMatch(text, /SYSTEM OPERATIONAL/);
 });
 
 test('pairing manager exposes the real queued-pairing count', async () => {

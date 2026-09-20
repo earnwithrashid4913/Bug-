@@ -115,11 +115,13 @@ const { parseDuration } = require('./premium');
 // invented here, so a command can never appear in the menu without existing.
 const { categoriesWithCommands } = require('./menu');
 const {
-  formatSessionNumber,
+  connectedSinceText,
+  resolveSessionView,
   safeSessionNumber,
   sessionDashboard,
   sessionDigits,
-  stateEventLabel
+  stateEventLabel,
+  uptimeText
 } = require('./session-status');
 
 // ---------------------------------------------------------------------------
@@ -501,6 +503,26 @@ function publicErrorBox() {
   ]);
 }
 
+// A fault inside the bot itself (a broken call contract, a bad property read,
+// an out-of-range value). These are logged in full for the operator but must
+// never be quoted back to a Telegram user as raw JavaScript wording such as
+// "this.pairing.listAllSessions(...).catch is not a function".
+function isInternalError(error) {
+  const name = String(error?.name || '');
+  if (['TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'EvalError', 'URIError'].includes(name)) return true;
+  return /is not a function|Cannot read propert|Cannot set propert|is not defined|undefined is not|of undefined/i.test(String(error?.message || ''));
+}
+
+function internalErrorBox() {
+  return box('ANIME MD • ERROR', [
+    '',
+    '⚠️ Something went wrong on our side.',
+    '',
+    'The problem has been logged.',
+    'Please try again in a moment.'
+  ]);
+}
+
 // Group pacing notices. Short, friendly, and they never explain the internals
 // of the rate limiter beyond what the user can act on.
 function groupCooldownBox(seconds) {
@@ -610,42 +632,54 @@ function guideBox() {
 
 // The CONNECTED box is rendered by notifySessionConnected() only — that is the
 // pairing manager's real `connection === 'open'` event, never code generation,
-// an auth file or a socket object. Its dashboard values come from that
-// session's own snapshot: real state, real connected-since timestamp, real
-// reconnect count, real last event/update, and the session's ACTUAL number.
+// an auth file or a socket object.
 //
-// `public` renders the masked display the flow already chose (a group or
-// supergroup must never receive a full phone number); a private chat receives
-// the real, unmasked number of the connected session.
-function connectedBox(numberDisplay, username, session, { public: isPublic = false, now = Date.now() } = {}) {
+// Every value on the card is that session's own real value: state, uptime,
+// reconnect count and connected-since timestamp come from the one session
+// status model, and the number follows the ONE role-aware visibility rule
+// (Admin/Owner → full number, everyone else and every group → masked).
+//
+// Deliberately compact and non-repetitive: one state line per fact, no
+// duplicated "session active / system ready / last event / last update"
+// restatements of the same connection state.
+function connectedBox(numberDisplay, username, session, { public: isPublic = false, role = VIEWER.USER, now = Date.now() } = {}) {
   const digits = sessionDigits(session?.number) || sessionDigits(numberDisplay);
   const display = String(numberDisplay || '').trim();
-  const number = isPublic
+  const masked = !viewerCanSeeFullNumber(role);
+  const number = isPublic || masked
     ? (display.includes('•') ? display : safeSessionNumber(digits))
-    : (digits || display);
-  const lines = [
-    '',
-    '✦ ANIME-MD • LINK COMPLETE ✦',
-    '✅ Pairing Completed Successfully',
-    '✅ WhatsApp Connected',
-    '',
-    session ? sessionDashboard(sessionStatusOf(session, { fallbackState: 'connected', now }), {
-      number,
-      maskNumber: isPublic,
-      verbatimNumber: isPublic
-    }) : `📱 ${formatSessionNumber(display || digits, { masked: isPublic, verbatim: true })}`
-  ];
-  if (username) lines.push(`👤 @${username}`);
+    : (digits ? fullNumberDisplay({ number: digits }) : (display || 'Unavailable'));
+
+  const view = resolveSessionView(undefined, session ? sessionStatusOf(session, { fallbackState: 'connected', now }) : null, { now });
+  const { icon, label } = badgeParts(String(view.state || 'connected').toUpperCase());
+  const connectedAt = connectedSinceText(view, { now });
+
+  const lines = [''];
+  if (username) lines.push(`👤 ${bold('User')}: @${username}`, '');
   lines.push(
+    `✦ ${bold('LINK COMPLETE')} ✦`,
     '',
-    '🟢 Session: ACTIVE',
-    '🔐 Secure Session',
-    '⚡ System Ready',
+    // The success block is only claimed for a session that is genuinely
+    // connected right now; anything else renders its real state instead.
+    ...(view.connected
+      ? [`✅ ${bold('PAIRING COMPLETE')}`, `🟢 ${bold('WHATSAPP CONNECTED')}`]
+      : [`${icon} ${bold(label || 'SESSION UPDATE')}`]),
     '',
-    'Your ANIME MD session is ready.',
+    `──────── ${bold('SESSION')} ────────`,
     '',
-    'Roman Urdu: Aapka WhatsApp connect',
-    'ho gaya hai — session active hai.'
+    `📱 ${bold('Number')}: ${number}`,
+    `${icon} ${bold('Status')}: ${bold(label || 'UNKNOWN')}`,
+    `⏱️ ${bold('Uptime')}: ${uptimeText(view, { now })}`,
+    `🔄 ${bold('Reconnects')}: ${view.reconnects}`,
+    '',
+    `──────── ${bold('SYSTEM')} ────────`,
+    '',
+    `🔐 ${bold('Secure Session')}`,
+    `⚡ ${bold('SYSTEM READY')}`,
+    '',
+    `📅 ${bold('Connected')}: ${connectedAt || 'Unavailable'}`,
+    '',
+    `✦ ${bold('Your ANIME MD session is ready')} ✦`
   );
   return box('ANIME MD • CONNECTED', lines);
 }
@@ -768,19 +802,25 @@ function joinAllBox(communities = []) {
   return box('ANIME MD • JOIN ALL', lines);
 }
 
-function activityBox(event) {
+function activityBox(event, { viewerRole = VIEWER.USER, publicChat = false } = {}) {
   const display = event.username ? `@${event.username}` : (event.name || event.userId || 'Unknown');
   const tierIcon = event.tierIcon || '⭐';
   const lines = [
     '',
-    `👤 User: ${display}`,
-    `🆔 ID: ${event.userId || '—'}`,
-    `${tierIcon} Tier: ${event.tier || 'FREE'}`,
-    `🔐 Membership: ${event.membership || 'Unknown'}`
+    `👤 ${bold('User')}: ${display}`,
+    `🆔 ${bold('ID')}: ${event.userId || '—'}`,
+    `${tierIcon} ${bold('Tier')}: ${bold(String(event.tier || 'FREE'))}`,
+    `🔐 ${bold('Membership')}: ${bold(String(event.membership || 'Unknown'))}`
   ];
-  lines.push('', `⚡ Action: ${event.action}`);
+  lines.push('', `⚡ ${bold('Action')}: ${event.action}`);
+  // The WhatsApp number is rendered HERE, from the event's real number and the
+  // viewer's role — so an activity card can never leak a full number to a
+  // non-Admin/Owner audience, and no caller has to pre-mask (or pre-unmask) it.
+  if (event.number || event.numberDisplay) {
+    lines.push(`📱 ${bold('Number')}: ${displayNumber({ number: event.number, numberDisplay: event.numberDisplay }, publicChat, viewerRole)}`);
+  }
   for (const line of (event.details || [])) if (line) lines.push(line);
-  lines.push(`🕒 Time: ${formatTime(new Date())}`);
+  lines.push(`🕒 ${bold('Time')}: ${formatTime(new Date())}`);
   return box('ANIME MD • ACTIVITY', lines);
 }
 
@@ -855,16 +895,25 @@ function accountBox({ id, role, verified, premium, vip, owner, pairedNumbers = [
   return box('ANIME MD • MY ACCOUNT', lines);
 }
 
+// A counter that could not be read is shown as Unavailable, never as 0.
+// (null/undefined/'' must not coerce to 0 — that would report a broken read as
+// a real empty count.)
+function countLabel(value) {
+  if (value === null || value === undefined || value === '') return 'Unavailable';
+  const number = Number(value);
+  return Number.isFinite(number) ? String(number) : 'Unavailable';
+}
+
 function adminPanelBox({ controllers = 0, premiumUsers = 0, totalUsers = 0, blockedUsers = 0, sessions = 0 }) {
   return box('ANIME MD • ADMIN PANEL', [
     '',
     '🛡 Admin Control Center',
     '',
-    `👤 Total Users: ${totalUsers}`,
-    `🤖 Controllers: ${controllers}`,
-    `💎 Premium Users: ${premiumUsers}`,
-    `🚫 Blocked: ${blockedUsers}`,
-    `📱 Active Sessions: ${sessions}`,
+    `👤 Total Users: ${countLabel(totalUsers)}`,
+    `🤖 Controllers: ${countLabel(controllers)}`,
+    `💎 Premium Users: ${countLabel(premiumUsers)}`,
+    `🚫 Blocked: ${countLabel(blockedUsers)}`,
+    `📱 Active Sessions: ${countLabel(sessions)}`,
     '',
     'Select a section below:'
   ]);
@@ -902,22 +951,41 @@ function pairingUsageBox({ users = [] }) {
   return box('ANIME MD • PAIRING USAGE', lines);
 }
 
-function systemStatusBox({ uptime, sessions, queued = 0, publicMode, premiumOnly, version = '1.0.0' }) {
+// SYSTEM card — one line per real fact, and no fact twice.
+//
+//   * The Telegram bot and its "controller" are the SAME process (index.js
+//     starts one TelegramController that owns the polling loop), so a single
+//     BOT line reports that process's real polling state instead of two lines
+//     that could never disagree.
+//   * PAIRING is reported only from a real probe of the pairing binding
+//     (does it exist and answer?), never a hardcoded READY.
+//   * Public/Premium are CONFIGURATION, not health, so they live in their own
+//     block below the runtime values.
+//   * The footer is derived from the states above: a degraded system never
+//     claims to be operational.
+// `sessions`/`queued` are `null` when the value could not be read — that is
+// rendered as Unavailable instead of a fake 0.
+function systemStatusBox({ online = false, pairing = 'unknown', uptime = 0, sessions = null, queued = null, publicMode = false, premiumOnly = false }) {
+  const pairingReady = pairing === 'ready';
+  const botLabel = online ? 'ONLINE' : 'OFFLINE';
+  const pairingLabel = pairingReady ? 'READY' : pairing === 'unavailable' ? 'UNAVAILABLE' : 'UNKNOWN';
+  const operational = online && pairingReady;
+  const count = (value) => countLabel(value);
   return box('ANIME MD • SYSTEM STATUS', [
     '',
-    '🤖 Telegram Bot: 🟢 ONLINE',
-    '📡 Controller: 🟢 ONLINE',
-    '🔐 Pairing Service: 🟢 READY',
+    `${online ? '🟢' : '🔴'} ${bold('BOT')}: ${bold(botLabel)}`,
+    `${pairingReady ? '🔐' : '⚠️'} ${bold('PAIRING')}: ${bold(pairingLabel)}`,
     '',
-    `📊 Active Sessions: ${sessions}`,
-    `🔄 Queued Pairings: ${queued}`,
+    `📊 ${bold('Active Sessions')}: ${count(sessions)}`,
+    `🔄 ${bold('Queued')}: ${count(queued)}`,
+    `⏱️ ${bold('Uptime')}: ${formatUptime(uptime)}`,
     '',
-    `⏱ Controller Uptime: ${formatUptime(uptime)}`,
-    `🤖 Bot Version: ${version}`,
-    `🌍 Public Mode: ${publicMode ? 'ON' : 'OFF'}`,
-    `💎 Premium Only: ${premiumOnly ? 'ON' : 'OFF'}`,
+    `──────── ${bold('CONFIGURATION')} ────────`,
     '',
-    '✅ System Operational'
+    `🌍 ${bold('Public Mode')}: ${bold(publicMode ? 'ON' : 'OFF')}`,
+    `💎 ${bold('Premium Only')}: ${bold(premiumOnly ? 'ON' : 'OFF')}`,
+    '',
+    operational ? `⚡ ${bold('SYSTEM OPERATIONAL')}` : `⚠️ ${bold('SYSTEM DEGRADED')}`
   ]);
 }
 
@@ -925,6 +993,13 @@ function systemStatusBox({ uptime, sessions, queued = 0, publicMode, premiumOnly
 // WhatsApp socket actually reached connection open.
 const SESSION_STATE_BADGES = Object.freeze({
   CONNECTED: '🟢 CONNECTED',
+  // Canonical lifecycle states of system/lib/session-status.js. They are
+  // listed alongside the pairing-manager vocabulary so one table renders both
+  // and a canonical state can never fall through to a generic warning badge.
+  DISCONNECTED: '🔴 DISCONNECTED',
+  STARTING: '🟡 STARTING',
+  PAIRING: '🟡 PAIRING',
+  TELEGRAM_PAIRING: '🟣 TELEGRAM PAIRING',
   PAIRING_READY: '🟡 PAIRING',
   CODE_GENERATED: '🟡 PAIRING',
   WAITING_FOR_LINK: '🟡 PAIRING',
@@ -952,17 +1027,71 @@ function badgeParts(status) {
   return space === -1 ? { icon: badge, label: '' } : { icon: badge.slice(0, space), label: badge.slice(space + 1) };
 }
 
-// Public chats render session numbers masked (see maskInternationalNumber).
-function displayNumber(session, publicChat = false) {
-  if (!publicChat) return session.numberDisplay;
+// ---------------------------------------------------------------------------
+// Role-aware WhatsApp number visibility.
+//
+// A full phone number is sensitive operational data, so the decision of who
+// may see it is taken HERE, at the render boundary, and never inside an
+// individual card:
+//
+//   OWNER   → full international number   (+91 9876543061)
+//   ADMIN   → full international number   (+91 9876543061)
+//   USER    → masked                      (+91 ••••• 061)
+//   PUBLIC  → masked                      (+91 ••••• 061)
+//
+// A group/supergroup masks for EVERY role — an admin browsing the dashboard
+// from a group never broadcasts another user's number into that group. The
+// default role is USER, so any new call site fails closed (masked) unless it
+// explicitly proves the viewer is Admin/Owner.
+// ---------------------------------------------------------------------------
+const VIEWER = Object.freeze({ OWNER: 'owner', ADMIN: 'admin', USER: 'user', PUBLIC: 'public' });
+
+function viewerCanSeeFullNumber(role) {
+  return role === VIEWER.OWNER || role === VIEWER.ADMIN;
+}
+
+// Maps the controller's own access level to a viewer role. A public chat is
+// always PUBLIC (masked), whatever the sender's role is.
+function viewerRoleFromAccess(access, publicChat = false) {
+  if (publicChat) return VIEWER.PUBLIC;
+  if (access === 'bootstrap') return VIEWER.OWNER;
+  if (access === 'controller') return VIEWER.ADMIN;
+  return VIEWER.USER;
+}
+
+function fullNumberDisplay(session) {
+  // The display the pairing system already chose for this session wins, so the
+  // same number looks identical on the pairing, connected and session cards.
+  const display = String(session?.numberDisplay || '').trim();
+  if (display && !display.includes('•')) return display;
+  const digits = sessionDigits(session?.number ?? display);
+  if (!digits) return display || 'Unavailable';
   try {
-    return maskInternationalNumber(session.number);
+    return formatInternationalNumber(digits);
   } catch {
-    return session.numberDisplay;
+    return `+${digits}`;
   }
 }
 
-function sessionsBox(sessions, publicChat = false) {
+function maskedNumberDisplay(session) {
+  try {
+    return maskInternationalNumber(session?.number ?? session?.numberDisplay);
+  } catch {
+    // Not a phone number at all (or already masked): never invent digits.
+    return String(session?.safeNumberDisplay || session?.numberDisplay || 'Unavailable');
+  }
+}
+
+/**
+ * The number one viewer is allowed to see for one session.
+ * `publicChat` masks unconditionally; otherwise the viewer role decides.
+ */
+function displayNumber(session, publicChat = false, role = VIEWER.USER) {
+  if (publicChat || role === VIEWER.PUBLIC) return maskedNumberDisplay(session);
+  return viewerCanSeeFullNumber(role) ? fullNumberDisplay(session) : maskedNumberDisplay(session);
+}
+
+function sessionsBox(sessions, publicChat = false, role = VIEWER.USER) {
   if (!sessions.length) {
     return box('ANIME MD • SESSIONS', [
       '',
@@ -973,7 +1102,7 @@ function sessionsBox(sessions, publicChat = false) {
   }
   const lines = sessions.map((session) => {
     const { icon, label } = badgeParts(session.status);
-    return `${icon} ${displayNumber(session, publicChat)} — ${label || session.status}`;
+    return `${icon} ${displayNumber(session, publicChat, role)} — ${label || session.status}`;
   });
   return box('ANIME MD • SESSIONS', [
     '',
@@ -985,20 +1114,21 @@ function sessionsBox(sessions, publicChat = false) {
   ]);
 }
 
-function statusBox(session, { ownerId, publicChat = false } = {}) {
-  // Same renderer, same real values. The number line keeps the display the
-  // caller chose: the full international form in a private chat, the masked
-  // form in a group/supergroup.
+function statusBox(session, { ownerId, publicChat = false, role = VIEWER.USER } = {}) {
+  // Same renderer, same real values. The number line follows the ONE
+  // role-aware visibility rule: Admin/Owner see the full number, everyone
+  // else (and every group/supergroup) sees the masked form.
+  const shownNumber = displayNumber(session, publicChat, role);
   const dashboard = sessionDashboard(sessionStatusOf(session), {
-    number: displayNumber(session, publicChat) || sessionDigits(session?.number),
-    maskNumber: publicChat,
+    number: shownNumber || sessionDigits(session?.number),
+    maskNumber: publicChat || !viewerCanSeeFullNumber(role),
     verbatimNumber: true,
     numberLabel: 'Number',
     compact: false
   });
   const lines = [
     '',
-    ...dashboard.split('\\n'),
+    ...dashboard.split('\n'),
     `🔗 Paired: ${session.registered ? 'yes' : 'no'}`
   ];
   if (ownerId) lines.push(`👤 Owner: ${ownerId}`);
@@ -1006,7 +1136,7 @@ function statusBox(session, { ownerId, publicChat = false } = {}) {
   return box('ANIME MD • SESSION STATUS', lines);
 }
 
-function overallStatusBox(sessions, controllerUptimeSeconds, user = {}, publicChat = false) {
+function overallStatusBox(sessions, controllerUptimeSeconds, user = {}, publicChat = false, role = VIEWER.USER) {
   const tier = user.tier || TIER_LABELS.normal;
   const membership = user.membership === 'verified'
     ? 'Verified'
@@ -1027,7 +1157,7 @@ function overallStatusBox(sessions, controllerUptimeSeconds, user = {}, publicCh
   if (sessions.length) {
     lines.push('', ...sessions.map((session) => {
       const { icon, label } = badgeParts(session.status);
-      return `${icon} ${displayNumber(session, publicChat)} — ${label || session.status}`;
+      return `${icon} ${displayNumber(session, publicChat, role)} — ${label || session.status}`;
     }));
   } else {
     lines.push('', '⚡ Telegram Online', '◇ No WhatsApp session connected', `〘 /pair <number> 〙 ${bold('TO CONNECT')}`);
@@ -1572,12 +1702,13 @@ function guideMarkup() {
   ]] };
 }
 
-function sessionsMarkup(sessions, publicChat = false, tokenForSession = (session) => session.number) {
-  // Button labels are visible in the chat, so they follow the same
-  // public-chat masking rule as the box text. Callback data carries only an
-  // opaque server-side token, never a WhatsApp number.
+function sessionsMarkup(sessions, publicChat = false, tokenForSession = (session) => session.number, role = VIEWER.USER) {
+  // Button labels are visible in the chat, so they follow the SAME role-aware
+  // rule as the box text: Admin/Owner see the real number, everyone else and
+  // every group sees the masked form. Callback data carries only an opaque
+  // server-side token, never a WhatsApp number.
   const rows = sessions.slice(0, MAX_SESSION_BUTTONS).map((session) => [{
-    text: `📱 ${displayNumber(session, publicChat)}`,
+    text: `📱 ${displayNumber(session, publicChat, role)}`,
     callback_data: `ses:menu:${tokenForSession(session)}`
   }]);
   rows.push([
@@ -1663,11 +1794,11 @@ function ownerPanelBox({ controllers = 0, premiumUsers = 0, totalUsers = 0, bloc
     '',
     '👑 Owner Control Center',
     '',
-    `👤 Total Users: ${totalUsers}`,
-    `🤖 Controllers: ${controllers}`,
-    `💎 Premium Users: ${premiumUsers}`,
-    `🚫 Blocked: ${blockedUsers}`,
-    `📱 Active Sessions: ${sessions}`,
+    `👤 Total Users: ${countLabel(totalUsers)}`,
+    `🤖 Controllers: ${countLabel(controllers)}`,
+    `💎 Premium Users: ${countLabel(premiumUsers)}`,
+    `🚫 Blocked: ${countLabel(blockedUsers)}`,
+    `📱 Active Sessions: ${countLabel(sessions)}`,
     '',
     'Select a section below:'
   ]);
@@ -2373,8 +2504,16 @@ class TelegramController {
       const text = publicChat ? publicPairingFailureBox() : pairingFailedBox(friendly.lines, { retry: friendly.retry });
       return this.present(chatId, messageId, text, publicChat ? homeOnlyMarkup() : (friendly.retry ? retryMarkup() : markup));
     }
-    const safeMessage = String(error?.message || 'Unexpected error').slice(0, 200);
-    return this.reply(chatId, publicChat ? publicErrorBox() : box('ANIME MD • ERROR', ['', `❌ ${safeMessage}`, '']), markup || homeOnlyMarkup());
+    // An internal implementation fault (a broken call contract, a bad property
+    // read, …) is logged in full above but is NEVER quoted back to a Telegram
+    // user: they get one clean card instead of raw JavaScript wording.
+    const internal = !error?.code && isInternalError(error);
+    const text = publicChat
+      ? publicErrorBox()
+      : internal
+        ? internalErrorBox()
+        : box('ANIME MD • ERROR', ['', `❌ ${String(error?.message || 'Unexpected error').slice(0, 200)}`, '']);
+    return this.reply(chatId, text, markup || homeOnlyMarkup());
   }
 
   // ----------------------- public-chat pairing pacing ----------------------
@@ -2596,7 +2735,7 @@ class TelegramController {
       action: 'Pairing Code Generated',
       actor: flow.actor,
       userId: flow.senderKey,
-      details: [`📱 Number: ${safeLogNumber(flow.number)}`]
+      number: flow.number
     });
     // Do NOT record paired number here — only on successful WhatsApp connection
     // to avoid consuming slots for failed attempts.
@@ -2633,7 +2772,8 @@ class TelegramController {
       action: 'Pairing Failed',
       actor: flow.actor,
       userId: flow.senderKey,
-      details: [`📱 Number: ${safeLogNumber(flow.number)}`, `⚠️ ${friendly.lines?.[0] || friendlyReasonLine(error)}`]
+      number: flow.number,
+      details: [`⚠️ ${friendly.lines?.[0] || friendlyReasonLine(error)}`]
     });
   }
 
@@ -2734,7 +2874,7 @@ class TelegramController {
       action: 'Pair Request',
       actor: command.actor,
       userId: senderId,
-      details: [`📱 Number: ${safeLogNumber(number)}`]
+      number
     });
 
     // Check if number already paired — same number must not consume additional slot
@@ -2931,16 +3071,33 @@ class TelegramController {
 
   // ------------------------------ views -----------------------------------
 
+  // The viewer's role for number visibility. Admin/Owner dashboards show the
+  // real number; everybody else gets the masked form (see displayNumber).
+  async viewerRoleOf(senderId, { publicChat = false } = {}) {
+    return viewerRoleFromAccess(await this.accessOf(senderId), publicChat);
+  }
+
+  // Last-known Telegram @username for a user id, resolved from the actor cache
+  // that every update already populates. Display metadata ONLY: it is never
+  // used for access control, and it is what lets a public chat identify a
+  // session whose number is (correctly) masked.
+  usernameOf(userId) {
+    if (userId == null || userId === '') return undefined;
+    return this.actors.get(String(userId))?.username;
+  }
+
   async sendSessionsView(chatId, senderId, { messageId, admin = false, publicChat = false } = {}) {
     const sessions = await this.pairing.listSessions(senderId);
-    return this.present(chatId, messageId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId ?? senderId, session.number)));
+    const role = await this.viewerRoleOf(senderId, { publicChat });
+    return this.present(chatId, messageId, sessionsBox(sessions, publicChat, role), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId ?? senderId, session.number), role));
   }
 
   async sendStatusView(chatId, senderId, { messageId, publicChat = false } = {}) {
     const sessions = await this.pairing.listSessions(senderId);
     const tier = await this.tierOf(senderId);
     const membership = await this.membershipLabelOf(senderId);
-    const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership }, publicChat);
+    const role = await this.viewerRoleOf(senderId, { publicChat });
+    const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership }, publicChat, role);
     return this.present(chatId, messageId, text, { inline_keyboard: [[
       { text: '🔄 Refresh', callback_data: 'nav:status' },
       { text: '🏠 Home', callback_data: 'home' }
@@ -2951,7 +3108,8 @@ class TelegramController {
     const session = await this.pairing.statusOf(senderId, number, { admin });
     const foreign = admin && session.ownerId !== undefined && String(session.ownerId) !== String(senderId);
     const token = this.issueSessionCallbackToken(session.ownerId ?? senderId, session.number);
-    return this.present(chatId, messageId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(token));
+    const role = await this.viewerRoleOf(senderId, { publicChat });
+    return this.present(chatId, messageId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat, role }), sessionMenuMarkup(token));
   }
 
   async sendSettingsView(chatId, senderId, { messageId, admin = false } = {}) {
@@ -3000,16 +3158,83 @@ class TelegramController {
     return this.present(chatId, messageId, text, accountMarkup());
   }
 
+  // ---------------------------------------------------------------------
+  // Session reading for the admin/owner surfaces.
+  //
+  // `pairing.listAllSessions()` is awaited — it is NEVER treated as a bare
+  // array with `.catch()` bolted on, which is exactly what used to throw
+  // "this.pairing.listAllSessions(...).catch is not a function" from the
+  // Sessions button. Both contracts are accepted (a Promise or a synchronous
+  // array) so a host binding either implementation keeps working, and an
+  // unexpected shape fails loudly instead of rendering an empty dashboard.
+  //
+  // The list comes from the ONE pairing manager: it holds live sessions and
+  // the ones `restore()` re-registered from stored credentials. No second
+  // session manager and no extra credential scan is created here.
+  // ---------------------------------------------------------------------
+  async readAllSessions({ fallbackOwnerId } = {}) {
+    if (typeof this.pairing?.listAllSessions === 'function') {
+      const value = this.pairing.listAllSessions();
+      const sessions = value && typeof value.then === 'function' ? await value : value;
+      if (!Array.isArray(sessions)) {
+        throw Object.assign(new Error('The session list returned no data.'), { code: 'SESSIONS_UNAVAILABLE' });
+      }
+      // Stale/invalid entries are skipped, never rendered as blank rows.
+      return sessions.filter((session) => session && (session.number || session.numberDisplay));
+    }
+    if (typeof this.pairing?.listSessions === 'function' && fallbackOwnerId != null) {
+      const sessions = await this.pairing.listSessions(fallbackOwnerId);
+      if (!Array.isArray(sessions)) {
+        throw Object.assign(new Error('The session list returned no data.'), { code: 'SESSIONS_UNAVAILABLE' });
+      }
+      return sessions.filter((session) => session && (session.number || session.numberDisplay));
+    }
+    throw Object.assign(new Error('No session source is available.'), { code: 'SESSIONS_UNAVAILABLE' });
+  }
+
+  // Counters for the admin cards. `null` means "could not be read" and is
+  // rendered as Unavailable — a broken read is never reported as 0.
+  async sessionStats({ ownerId } = {}) {
+    let sessions = null;
+    let sessionError;
+    try {
+      sessions = (await this.readAllSessions({ fallbackOwnerId: ownerId })).length;
+    } catch (error) {
+      sessionError = error;
+      this.log.warn?.(`[telegram] Could not read the session list: ${error?.message || error}`);
+    }
+    let queued = null;
+    try {
+      if (typeof this.pairing?.queuedPairingCount === 'function') {
+        const value = Number(await this.pairing.queuedPairingCount());
+        queued = Number.isFinite(value) ? Math.max(0, value) : null;
+      }
+    } catch (error) {
+      this.log.warn?.(`[telegram] Could not read the pairing queue: ${error?.message || error}`);
+    }
+    // Real probe of the pairing binding: READY only when the service is
+    // actually bound and its session list could be read.
+    const bound = typeof this.pairing?.listAllSessions === 'function' || typeof this.pairing?.listSessions === 'function';
+    return {
+      sessions,
+      queued,
+      sessionError,
+      pairing: bound && !sessionError ? 'ready' : 'unavailable'
+    };
+  }
+
   async sendAdminPanelView(chatId, senderId, { messageId } = {}) {
     const access = await this.accessOf(senderId);
     if (access !== 'bootstrap' && access !== 'controller') {
       throw Object.assign(new Error('Only Admin/Owner can access Admin Panel.'), { code: 'DENIED' });
     }
-    let totalUsers = 0;
-    let controllers = 0;
-    let premiumUsers = 0;
-    let blockedUsers = 0;
-    let sessions = 0;
+    // A counter starts as null ("could not be read") and is only replaced by a
+    // real count, so an unreadable store renders Unavailable instead of a fake
+    // 0. Failures are logged for the operator, never silently converted.
+    let totalUsers = null;
+    let controllers = null;
+    let premiumUsers = null;
+    let blockedUsers = null;
     try {
       if (typeof this.controllerStore?.users === 'function') {
         const users = await this.controllerStore.users();
@@ -3017,17 +3242,15 @@ class TelegramController {
         blockedUsers = Object.values(users).filter((u) => u.blockedUntil && u.blockedUntil > Date.now()).length;
       }
       if (typeof this.controllerStore?.read === 'function') {
-        controllers = (await this.controllerStore.read().catch(() => [])).length;
+        controllers = (await this.controllerStore.read()).length;
       }
       if (typeof this.controllerStore?.listPremium === 'function') {
-        premiumUsers = (await this.controllerStore.listPremium().catch(() => [])).length;
+        premiumUsers = (await this.controllerStore.listPremium()).length;
       }
-      if (typeof this.pairing?.listAllSessions === 'function') {
-        sessions = (await this.pairing.listAllSessions().catch(() => [])).length;
-      } else {
-        sessions = (await this.pairing.listSessions(senderId).catch(() => [])).length;
-      }
-    } catch {}
+    } catch (error) {
+      this.log.warn?.(`[telegram] Could not read the admin counters: ${error?.message || error}`);
+    }
+    const { sessions } = await this.sessionStats({ ownerId: senderId });
     const text = adminPanelBox({ controllers, premiumUsers, totalUsers, blockedUsers, sessions });
     return this.present(chatId, messageId, text, adminPanelMarkup());
   }
@@ -3067,16 +3290,13 @@ class TelegramController {
   async sendSystemStatusView(chatId, senderId, { messageId, owner = false } = {}) {
     const access = await this.accessOf(senderId);
     if (access !== 'bootstrap' && access !== 'controller') throw Object.assign(new Error('Admin only'), { code: 'DENIED' });
-    let sessions = 0;
-    let queued = 0;
-    try {
-      if (typeof this.pairing?.listAllSessions === 'function') sessions = (await this.pairing.listAllSessions().catch(() => [])).length;
-      else sessions = (await this.pairing.listSessions(senderId).catch(() => [])).length;
-    } catch {}
-    try {
-      if (typeof this.pairing?.queuedPairingCount === 'function') queued = Number(await this.pairing.queuedPairingCount()) || 0;
-    } catch {}
+    // Every value below is live runtime/configuration state: the polling flag
+    // of this very process, the probed pairing binding, the real session and
+    // queue counts, the real process uptime and the two persisted settings.
+    const { sessions, queued, pairing } = await this.sessionStats({ ownerId: senderId });
     const text = systemStatusBox({
+      online: this.running === true,
+      pairing,
       uptime: (Date.now() - (this.startedAt || Date.now())) / 1000,
       sessions,
       queued,
@@ -3093,11 +3313,12 @@ class TelegramController {
     if (access !== 'bootstrap') {
       throw Object.assign(new Error('Only bootstrap owners can access the Owner Panel.'), { code: 'DENIED' });
     }
-    let totalUsers = 0;
-    let controllers = 0;
-    let premiumUsers = 0;
-    let blockedUsers = 0;
-    let sessions = 0;
+    // Same null-until-read rule as the admin panel: an unreadable counter is
+    // reported as Unavailable, never as a fake 0. Failures are logged.
+    let totalUsers = null;
+    let controllers = null;
+    let premiumUsers = null;
+    let blockedUsers = null;
     try {
       if (typeof this.controllerStore?.users === 'function') {
         const users = await this.controllerStore.users();
@@ -3105,17 +3326,15 @@ class TelegramController {
         blockedUsers = Object.values(users).filter((u) => u.blockedUntil && u.blockedUntil > Date.now()).length;
       }
       if (typeof this.controllerStore?.read === 'function') {
-        controllers = (await this.controllerStore.read().catch(() => [])).length;
+        controllers = (await this.controllerStore.read()).length;
       }
       if (typeof this.controllerStore?.listPremium === 'function') {
-        premiumUsers = (await this.controllerStore.listPremium().catch(() => [])).length;
+        premiumUsers = (await this.controllerStore.listPremium()).length;
       }
-      if (typeof this.pairing?.listAllSessions === 'function') {
-        sessions = (await this.pairing.listAllSessions().catch(() => [])).length;
-      } else {
-        sessions = (await this.pairing.listSessions(senderId).catch(() => [])).length;
-      }
-    } catch {}
+    } catch (error) {
+      this.log.warn?.(`[telegram] Could not read the owner counters: ${error?.message || error}`);
+    }
+    const { sessions } = await this.sessionStats({ ownerId: senderId });
     const text = ownerPanelBox({ controllers, premiumUsers, totalUsers, blockedUsers, sessions });
     return this.present(chatId, messageId, text, ownerPanelMarkup());
   }
@@ -3160,17 +3379,36 @@ class TelegramController {
 
   // Global session list for admin/owner eyes only. Regular users never reach
   // this view: the callbacks enforce the management role first.
+  // Global session list for Admin/Owner eyes only. Regular users never reach
+  // this view: the callbacks enforce the management role first, and the number
+  // column follows the role-aware rule (full number for Admin/Owner in a
+  // private chat, masked in a group).
+  //
+  // A genuine read failure propagates to replyWithError() and renders a clean
+  // error card — it is never swallowed into an empty "no sessions" list.
   async sendAllSessionsView(chatId, senderId, { messageId, publicChat = false, owner = false } = {}) {
     const access = await this.accessOf(senderId);
     if (access !== 'bootstrap' && access !== 'controller') throw Object.assign(new Error('Admin only'), { code: 'DENIED' });
-    const sessions = typeof this.pairing?.listAllSessions === 'function'
-      ? await this.pairing.listAllSessions().catch(() => [])
-      : [];
+    const role = await this.viewerRoleOf(senderId, { publicChat });
+    const sessions = await this.readAllSessions({ fallbackOwnerId: senderId });
+    const markup = owner ? ownerPanelMarkup() : adminPanelMarkup();
     if (!sessions.length) {
-      return this.present(chatId, messageId, box('ANIME MD • ALL SESSIONS', ['', '📭 No paired sessions on this bot.', '']), owner ? ownerPanelMarkup() : adminPanelMarkup());
+      return this.present(chatId, messageId, box('ANIME MD • ALL SESSIONS', ['', '📭 No paired sessions on this bot.', '']), markup);
     }
-    const lines = sessions.map((session) => `${badgeParts(session.status).icon} ${displayNumber(session, publicChat)} — ${badgeParts(session.status).label || session.status} (user ${session.ownerId ?? '?'})`);
-    return this.present(chatId, messageId, box('ANIME MD • ALL SESSIONS', ['', ...lines, '', `Total: ${sessions.length} session${sessions.length === 1 ? '' : 's'}`]), owner ? ownerPanelMarkup() : adminPanelMarkup());
+    const lines = sessions.map((session) => {
+      const { icon, label } = badgeParts(session.status);
+      // In a group the number is masked, so the owner's Telegram @username (when
+      // known) is what identifies the row — identification without disclosure.
+      const handle = this.usernameOf(session.ownerId);
+      const who = handle && !viewerCanSeeFullNumber(role) ? `@${handle}` : `user ${session.ownerId ?? '?'}`;
+      return `${icon} ${displayNumber(session, publicChat, role)} — ${label || session.status} (${who})`;
+    });
+    return this.present(chatId, messageId, box('ANIME MD • ALL SESSIONS', [
+      '',
+      ...lines,
+      '',
+      `${bold('Total')}: ${sessions.length} session${sessions.length === 1 ? '' : 's'}`
+    ]), markup);
   }
 
   // ------------------------------ update routing --------------------------
@@ -3251,6 +3489,8 @@ class TelegramController {
     // Public-chat presentation only: numbers rendered into a group/supergroup
     // are masked; the pairing code itself is delivered in the private chat.
     const publicChat = !chatIsPrivate(command.chat);
+    // Number visibility for every card this command renders (see VIEWER).
+    const viewerRole = viewerRoleFromAccess(access, publicChat);
 
     try {
       switch (command.name) {
@@ -3313,7 +3553,7 @@ class TelegramController {
           // A session snapshot that does not carry its owner belongs to the
           // requesting controller: listSessions() is owner-scoped. Falling back
           // keeps the buttons working instead of failing the whole view.
-          await this.reply(command.chatId, sessionsBox(sessions, publicChat), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId ?? command.senderId, session.number)));
+          await this.reply(command.chatId, sessionsBox(sessions, publicChat, viewerRole), sessionsMarkup(sessions, publicChat, (session) => this.issueSessionCallbackToken(session.ownerId ?? command.senderId, session.number), viewerRole));
           return;
         }
         case 'status': {
@@ -3321,14 +3561,14 @@ class TelegramController {
             const session = await this.pairing.statusOf(command.senderId, command.args[0], { admin: access === 'bootstrap' });
             const foreign = access === 'bootstrap' && session.ownerId !== undefined && String(session.ownerId) !== String(command.senderId);
             const token = this.issueSessionCallbackToken(session.ownerId ?? command.senderId, session.number);
-            await this.reply(command.chatId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat }), sessionMenuMarkup(token));
+            await this.reply(command.chatId, statusBox(session, { ownerId: foreign ? session.ownerId : undefined, publicChat, role: viewerRole }), sessionMenuMarkup(token));
             return;
           }
           const sessions = await this.pairing.listSessions(command.senderId);
           const anyConnected = sessions.some((session) => session.connected);
           const tier = await this.tierOf(command.senderId);
           const membership = await this.membershipLabelOf(command.senderId);
-          const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership }, publicChat);
+          const text = overallStatusBox(sessions, (Date.now() - (this.startedAt || Date.now())) / 1000, { tier, membership }, publicChat, viewerRole);
           if (anyConnected) await this.replyPhoto(command.chatId, this.connectedImage, text);
           else await this.reply(command.chatId, text);
           return;
@@ -3341,8 +3581,8 @@ class TelegramController {
           const release = this.reserveSensitiveRequest(command.senderId, 'restart');
           try {
             const session = await this.pairing.restartSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
-            await this.reply(command.chatId, box('ANIME MD • RESTARTING', ['', `📱 ${displayNumber(session, publicChat)}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
-            await this.notifyActivity({ action: 'Restart Request', actor, userId: command.senderId, details: [`📱 Number: ${safeLogNumber(session.number)}`] });
+            await this.reply(command.chatId, box('ANIME MD • RESTARTING', ['', `📱 ${displayNumber(session, publicChat, viewerRole)}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
+            await this.notifyActivity({ action: 'Restart Request', actor, userId: command.senderId, number: session.number });
           } finally {
             release();
           }
@@ -3458,13 +3698,19 @@ class TelegramController {
           return;
         }
         case 'listpaired': {
-          const sessions = typeof this.pairing.listAllSessions === 'function' ? await this.pairing.listAllSessions() : [];
+          // Bootstrap owners only (enforced above): the full session list with
+          // the real numbers, masked when the command runs in a group.
+          const role = await this.viewerRoleOf(command.senderId, { publicChat });
+          const sessions = await this.readAllSessions({ fallbackOwnerId: command.senderId });
           if (!sessions.length) {
             await this.reply(command.chatId, box('ANIME MD • ALL SESSIONS', ['', '📭 No paired sessions on this bot.', '']));
             return;
           }
-          const lines = sessions.map((session) => `${badgeParts(session.status).icon} ${displayNumber(session, publicChat)} — ${badgeParts(session.status).label || session.status} (user ${session.ownerId ?? '?'})`);
-          await this.reply(command.chatId, box('ANIME MD • ALL SESSIONS', ['', ...lines, '', `Total: ${sessions.length} session${sessions.length === 1 ? '' : 's'}`]), homeOnlyMarkup());
+          const lines = sessions.map((session) => {
+            const { icon, label } = badgeParts(session.status);
+            return `${icon} ${displayNumber(session, publicChat, role)} — ${label || session.status} (user ${session.ownerId ?? '?'})`;
+          });
+          await this.reply(command.chatId, box('ANIME MD • ALL SESSIONS', ['', ...lines, '', `${bold('Total')}: ${sessions.length} session${sessions.length === 1 ? '' : 's'}`]), homeOnlyMarkup());
           return;
         }
         case 'premium': {
@@ -3512,12 +3758,15 @@ class TelegramController {
           const release = this.reserveSensitiveRequest(command.senderId, 'stop');
           try {
             const session = await this.pairing.stopSession(command.senderId, command.args[0], { admin: access === 'bootstrap' });
-            const removedDisplay = publicChat
-              ? (session.number ? maskInternationalNumber(session.number) : session.numberDisplay || formatInternationalNumber(command.args[0]))
-              : (session.numberDisplay || formatInternationalNumber(command.args[0]));
+            const role = await this.viewerRoleOf(command.senderId, { publicChat });
+            const removedDisplay = displayNumber(
+              { number: session.number || command.args[0], numberDisplay: session.numberDisplay },
+              publicChat,
+              role
+            );
             await this.reply(command.chatId, stoppedBox(removedDisplay), pairAgainMarkup());
             await this.maybeRemovePairedNumber(command.senderId, command.args[0]);
-            await this.notifyActivity({ action: 'Session Removed', actor, userId: command.senderId, details: [`📱 Number: ${safeLogNumber(session.number)}`] });
+            await this.notifyActivity({ action: 'Session Removed', actor, userId: command.senderId, number: session.number || command.args[0] });
           } finally {
             release();
           }
@@ -3759,16 +4008,18 @@ class TelegramController {
           const release = this.reserveSensitiveRequest(senderId, 'restart');
           try {
             const session = await this.pairing.restartSession(senderId, number, { admin: isOwner });
-            return await this.present(chatId, messageId, box('ANIME MD • RESTARTING', ['', `📱 ${displayNumber(session, publicChat)}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
+            const role = await this.viewerRoleOf(senderId, { publicChat });
+            return await this.present(chatId, messageId, box('ANIME MD • RESTARTING', ['', `📱 ${displayNumber(session, publicChat, role)}`, `${badgeParts(session.status).icon} Status: ${badgeParts(session.status).label || session.status}`, '', 'The CONNECTED confirmation arrives', 'when WhatsApp reports the session online.']), backHomeMarkup());
           } finally {
             release();
           }
         }
         if (verb === 'stop') {
           const session = await this.pairing.statusOf(senderId, number, { admin: isOwner });
+          const role = await this.viewerRoleOf(senderId, { publicChat });
           return await this.present(chatId, messageId, box('ANIME MD • REMOVE SESSION', [
             '',
-            `📱 ${displayNumber(session, publicChat)}`,
+            `📱 ${displayNumber(session, publicChat, role)}`,
             '',
             'This stops the session and deletes its',
             'stored credentials. The WhatsApp bot',
@@ -3782,7 +4033,8 @@ class TelegramController {
           try {
             const session = await this.pairing.stopSession(senderId, number, { admin: isOwner });
             await this.maybeRemovePairedNumber(senderId, number);
-            return await this.present(chatId, messageId, stoppedBox(displayNumber(session, publicChat)), pairAgainMarkup());
+            const role = await this.viewerRoleOf(senderId, { publicChat });
+            return await this.present(chatId, messageId, stoppedBox(displayNumber(session, publicChat, role)), pairAgainMarkup());
           } finally {
             release();
           }
@@ -3855,8 +4107,12 @@ class TelegramController {
       tierIcon: tier?.icon,
       membership: membership === 'verified' ? 'Verified' : membership === 'not_verified' ? 'Not Verified' : 'Unknown',
       action: event?.action || 'Action',
+      number: event?.number,
+      numberDisplay: event?.numberDisplay,
       details: event?.details || []
-    });
+    // Every recipient of this card is a configured bootstrap owner, so the
+    // owner view (full WhatsApp number) is the correct — and only — audience.
+    }, { viewerRole: VIEWER.OWNER });
     for (const ownerId of this.bootstrapOwners) {
       try {
         await this.api('sendMessage', { chat_id: ownerId, text: escapeTelegramHtml(text), parse_mode: 'HTML' });
@@ -3899,28 +4155,35 @@ class TelegramController {
     await this.notifyActivity({
       action: 'WhatsApp Session Connected',
       userId: ownerId,
-      details: [`📱 Number: ${safeLogNumber(session?.number)}`]
+      // The real number travels on the event; activityBox() decides from the
+      // viewer's role whether it is rendered in full or masked.
+      number: session?.number
     });
     const flow = this.getFlow(ownerId);
     const number = String(session?.number || '');
+    // The card is always delivered to `ownerId` (the flow's own user), so the
+    // number it shows follows THAT user's role: Admin/Owner see the real
+    // number, a normal user and every group/supergroup see the masked form.
+    const viewerRole = await this.viewerRoleOf(ownerId, { publicChat: Boolean(flow?.public) });
+    // A public chat masks the number, so the pairer's Telegram @username is what
+    // identifies the session there. The flow actor wins; the actor cache covers
+    // a reconnect or a session that connected without a live flow.
+    const username = flow?.actor?.username || this.usernameOf(ownerId);
     if (flow && !flow.stopped && (number === String(flow.number) || !number)) {
       this.stopSpinner(flow);
       flow.state = 'SUCCESS';
       flow.stopped = true;
       this.pairingFlows.delete(flow.senderKey);
       this.endChatPairing(flow.chatId, flow.senderKey);
-      // One message, edited in place — the group sees the masked number, a
-      // private chat sees the full one.
-      // A flow started in a group/supergroup keeps the masked display for that
-      // chat; a private flow shows the session's real number. The dashboard
-      // inside the box follows the same rule (see connectedBox).
+      // One message, edited in place. A flow started in a group/supergroup
+      // keeps the masked display for that chat.
       const successText = connectedBox(
         flow.public
           ? (flow.publicDisplay || safeSessionNumber(session?.number))
           : (session?.numberDisplay || flow.numberDisplay),
-        flow.actor?.username,
+        username,
         session,
-        { public: Boolean(flow.public) }
+        { public: Boolean(flow.public), role: viewerRole }
       );
       try {
         await this.queueFlowEdit(flow, () => this.editMessage(flow.chatId, flow.messageId, successText, connectedMarkup()));
@@ -3935,12 +4198,12 @@ class TelegramController {
       return;
     }
     try {
-      await this.replyPhoto(ownerId, this.connectedImage, connectedBox(session?.numberDisplay || session?.number || '', undefined, session), connectedMarkup());
+      await this.replyPhoto(ownerId, this.connectedImage, connectedBox(session?.numberDisplay || session?.number || '', username, session, { role: viewerRole }), connectedMarkup());
       this.scheduleAnimeEdit(ownerId, session, ownerId);
     } catch {
       this.log.warn?.('[telegram] Connected image unavailable; trying text fallback.');
       try {
-        await this.reply(ownerId, connectedBox(session?.numberDisplay || session?.number || '', undefined, session), connectedMarkup());
+        await this.reply(ownerId, connectedBox(session?.numberDisplay || session?.number || '', username, session, { role: viewerRole }), connectedMarkup());
         this.scheduleAnimeEdit(ownerId, session, ownerId);
       } catch { this.log.warn?.('[telegram] Could not deliver the connected notification.'); }
     }
@@ -3951,7 +4214,7 @@ class TelegramController {
     await this.notifyActivity({
       action: 'WhatsApp Session Disconnected',
       userId: ownerId,
-      details: [`📱 Number: ${safeLogNumber(session?.number)}`]
+      number: session?.number
     });
     const flow = this.getFlow(ownerId);
     const failedBeforeLink = !session?.registered;
@@ -3978,9 +4241,15 @@ class TelegramController {
     // as an ended session; the reason line comes straight from the
     // disconnect classification, so failures are never generic.
     const title = failedBeforeLink ? 'ANIME MD • PAIRING FAILED' : 'ANIME MD • SESSION ENDED';
+    // Same ONE visibility rule as every other card: the recipient's role decides
+    // whether this number is shown in full or masked, so this path can never be
+    // the one that leaks a number the connected card would have masked.
+    const role = await this.viewerRoleOf(ownerId, { publicChat: false });
+    const username = this.usernameOf(ownerId);
     const lines = [
       '',
-      `📱 ${session?.numberDisplay || session?.number || ''}`,
+      ...(username ? [`👤 ${bold('User')}: @${username}`] : []),
+      `📱 ${displayNumber({ number: session?.number, numberDisplay: session?.numberDisplay }, false, role)}`,
       `⚠️ ${classification?.userMessage || 'The WhatsApp session ended.'}`
     ];
     if (failedBeforeLink) lines.push('', '❌ Pairing could not be completed.');
@@ -4174,5 +4443,13 @@ module.exports = {
   verifiedMarkup,
   verifyBox,
   verifyMarkup,
-  verifyRequiredBox
+  verifyRequiredBox,
+  // Number-visibility contract (role-aware) and the system-status renderer.
+  VIEWER,
+  viewerCanSeeFullNumber,
+  viewerRoleFromAccess,
+  countLabel,
+  isInternalError,
+  internalErrorBox,
+  systemStatusBox
 };

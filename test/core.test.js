@@ -18,6 +18,7 @@ const {
   resolveJid
 } = require('../system/lib/message');
 const { groupSettings, handleGroupParticipantsUpdate, renderGroupMessage } = require('../system/group-events');
+const { categoriesWithCommands } = require('../system/lib/menu');
 const { AI_REQUEST_COOLDOWN_MS, askGroq, buildGroqRequest, reserveAiRequest } = require('../system/lib/ai');
 const { safeMath } = require('../system/lib/net-tools');
 const { GroupSettingsStore } = require('../system/lib/group-settings');
@@ -219,9 +220,43 @@ test('command handler dispatches a menu response', async () => {
 
   await handleMessage(socket, message);
 
-  assert.equal(sent.length, 1);
+  // !menu answers with the category navigation plus the COMPLETE command
+  // index, so every executable command is visible without opening a category.
+  assert.ok(sent.length >= 1, 'menu response should contain text');
   assert.equal(sent[0].chatId, message.key.remoteJid);
   assert.ok(sent[0].payload.text, 'menu response should contain text');
+  // Navigation first: the interactive list, or its text fallback when the
+  // socket cannot relay interactive messages. Headers are styled, so the
+  // wording is checked font-independently.
+  assert.match(sent[0].payload.text.normalize('NFKC'), /Choose a category|Categories:/);
+
+  const index = sent.slice(1).map((entry) => entry.payload.text).join('\n');
+  const tokens = new Set([...index.matchAll(/(?:^|[\s(,•])!([a-z][a-z0-9]*)\b/gm)].map((match) => match[1]));
+  // The caller is a normal (non-owner, non-admin) user, so the index must carry
+  // every PUBLIC command of every category — and nothing it cannot execute.
+  let expected = 0;
+  for (const category of categoriesWithCommands()) {
+    for (const entry of category.commands) {
+      if (entry.permission !== 'public') {
+        assert.ok(!tokens.has(entry.name), `!${entry.name} is not executable by this user and must not be listed`);
+        continue;
+      }
+      expected += 1;
+      for (const name of [entry.name, ...entry.aliases]) {
+        assert.ok(tokens.has(name), `!${name} is missing from the !menu index`);
+      }
+    }
+  }
+  // The whole public directory, counted from the registry itself — no magic
+  // number that could quietly go stale.
+  const publicCommands = categoriesWithCommands()
+    .reduce((total, category) => total + category.commands.filter((entry) => entry.permission === 'public').length, 0);
+  assert.equal(expected, publicCommands, 'every public command is indexed exactly once');
+  assert.ok(publicCommands > 50, `expected the full public directory, got ${publicCommands}`);
+  for (const chunk of sent.slice(1)) {
+    assert.ok(chunk.payload.text.length <= 4096, 'an index message stays inside the WhatsApp text limit');
+    assert.doesNotMatch(chunk.payload.text, /undefined|NaN/);
+  }
 });
 
 test('command send failures are awaited instead of becoming unhandled rejections', async () => {
