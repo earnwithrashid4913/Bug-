@@ -96,7 +96,9 @@ const TELEGRAM_TO_WHATSAPP = Object.freeze({
   developer: 'owner',
   dev: 'owner',
   listsessions: 'sessions',
-  delpair: 'stopsession'
+  delpair: 'stopsession',
+  // "show my identifier" exists on both sides under different names.
+  myid: 'uid'
 });
 
 function telegramSet() {
