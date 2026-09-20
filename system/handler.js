@@ -189,6 +189,8 @@ function isHiddenCommand(commandName) {
 
 async function handleHiddenCommand(socket, context) {
   const p = getCommandPrefix();
+  const hiddenVideoSettings = config.hiddenVideo;
+  const enabledProviders = hiddenVideoSettings.providers.filter((entry) => entry.enabled).length;
   const text = [
     '╔══════════════════╗',
     '  🌟 *[ ANIME CORE ]*',
@@ -212,8 +214,12 @@ async function handleHiddenCommand(socket, context) {
     '  • Anime database',
     '',
     '  🎬 *Hidden Video Engine:*',
-    `  • ${p}hvideo <query> — search & stream`,
-    '  • Reply with the option number',
+    `  • Status: ${hiddenVideoSettings.enabled ? 'ON' : 'OFF'}`,
+    `  • Providers: ${enabledProviders}`,
+    `  • Max Results: ${hiddenVideoSettings.maxResults}`,
+    `  • Session TTL: ${Math.round(hiddenVideoSettings.sessionTimeoutMs / 60000)} minutes`,
+    `  • Max Download: ${Math.round(hiddenVideoSettings.maxDownloadBytes / (1024 * 1024))} MB`,
+    `  • ${p}hvideo <keyword> to search`,
     '',
     '  🛡 *Security:*',
     '  • Protected identity',
