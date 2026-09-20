@@ -125,6 +125,87 @@ module.exports = {
     uploadApiUrl: 'https://catbox.moe/user/api.php'
   },
 
+  // ============================ HIDDEN VIDEO ENGINE SETTINGS ================
+  // Production fallback video engine (!hvideo / !hv / !hvid, the hidden
+  // category advertised through !h). The engine is fully PROVIDER-DRIVEN:
+  // adding a new video platform only requires a new entry in `providers`
+  // below — the command engine itself never needs source-code changes.
+  //
+  // Flow: !hvideo <keyword> → keyword routing → configured provider(s) →
+  // normalized results → selectable list (2-minute session) → numeric reply
+  // → resolve + validate + download with live progress → WhatsApp video.
+  // Raw download URLs are never exposed when direct delivery works.
+  hiddenVideo: {
+    // false disables the whole engine. OPTIONAL.
+    enabled: true,
+    // Auto-expire a pending selection list after this much inactivity (RAM
+    // leak protection). OPTIONAL. Default 120000 (2 minutes).
+    sessionTimeoutMs: 120000,
+    // Hard cap on results shown per search (anti-spam). OPTIONAL. Default 5.
+    maxResults: 5,
+    // Hard download ceiling in BYTES; anything heavier is refused before it
+    // is buffered. OPTIONAL. Default 50 MB.
+    maxDownloadBytes: 50 * 1024 * 1024,
+    // Simultaneous downloads allowed per chat+user. OPTIONAL. Default 1.
+    maxConcurrentDownloads: 1,
+    // Provider metadata (JSON) payload ceiling in bytes. OPTIONAL. Default 10 MB.
+    maxResponseBytes: 10 * 1024 * 1024,
+    // Timeouts: provider API request / media HEAD probe / media download.
+    requestTimeoutMs: 6500,
+    headTimeoutMs: 4000,
+    downloadTimeoutMs: 120000,
+
+    // ------------------------------------------------------------------
+    // PROVIDER MATRIX. Each provider:
+    //   id          unique route identifier (also works as explicit keyword)
+    //   name        display name used in captions
+    //   enabled     false keeps it configured but skipped
+    //   method      "GET" (searchParam appended) or "POST" (JSON body)
+    //   url         the search endpoint (HTTPS only)
+    //   searchParam query/body parameter that carries the keyword
+    //   keywords    routing keywords: !hvideo <keyword> targets every
+    //               provider listing it; an EMPTY list makes the provider
+    //               a generic fallback for unmatched searches
+    //   headers     optional request headers; keep secrets in env vars,
+    //               e.g. Authorization: `Bearer ${process.env.HIDDEN_VIDEO_API_KEY}`
+    //   response    optional dot-path mapping when the provider's JSON is
+    //               not auto-discoverable, e.g.
+    //               { resultsPath: 'data.results', titlePath: 'title',
+    //                 mediaUrlPath: 'download', thumbnailPath: 'thumbnail' }
+    // ------------------------------------------------------------------
+    providers: [
+      {
+        id: 'nexsus',
+        name: 'Nexsus',
+        enabled: true,
+        method: 'GET',
+        url: 'https://example.com/search',
+        searchParam: 'search',
+        keywords: ['nexsus', 'anime', 'amv', 'one piece']
+        // headers: { Authorization: `Bearer ${process.env.HIDDEN_VIDEO_API_KEY}` },
+        // response: { resultsPath: 'data.results', titlePath: 'title', mediaUrlPath: 'download', thumbnailPath: 'thumbnail' }
+      },
+      {
+        id: 'new',
+        name: 'New Cluster',
+        enabled: true,
+        method: 'GET',
+        url: 'https://example.com/search',
+        searchParam: 'search',
+        keywords: ['new', 'anime']
+      },
+      {
+        id: 'david',
+        name: 'DavidCyril',
+        enabled: true,
+        method: 'GET',
+        url: 'https://davidcyril.name.ng',
+        searchParam: 'query',
+        keywords: ['david']
+      }
+    ]
+  },
+
   // ======================================== DATABASE SETTINGS ===============
   database: {
     // Persistent data folder. REQUIRED. On Pterodactyl, use a persistent path.

@@ -49,6 +49,80 @@ function normalizePhoneNumber(value, fieldName) {
 // NOTE: there is intentionally no "custom pairing code" setting. WhatsApp only
 // accepts pairing codes drawn from its own 32-symbol alphabet, so the code is
 // always produced by WhatsApp through Baileys' native requestPairingCode().
+const HIDDEN_VIDEO_RESPONSE_PATHS = ['resultsPath', 'titlePath', 'mediaUrlPath', 'thumbnailPath', 'durationPath', 'sizePath', 'sourceUrlPath'];
+function normalizeHiddenVideoProvider(raw, index, requestTimeoutMs) {
+  const label = `hiddenVideo.providers[${index}]`;
+  const id = string(raw?.id, `${label}.id`).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(id)) {
+    throw configurationError(`${label}.id must be 1-32 characters of a-z, 0-9, "-" or "_" and start with a letter or digit.`);
+  }
+  const name = string(raw?.name, `${label}.name`) || id;
+  const enabled = bool(raw?.enabled, `${label}.enabled`, true);
+  const method = (string(raw?.method, `${label}.method`) || 'GET').toUpperCase();
+  if (!['GET', 'POST'].includes(method)) throw configurationError(`${label}.method must be "GET" or "POST".`);
+  const providerUrl = url(raw?.url, `${label}.url`);
+  const searchParam = string(raw?.searchParam, `${label}.searchParam`) || 'search';
+  if (!/^[A-Za-z0-9_.-]{1,32}$/.test(searchParam)) throw configurationError(`${label}.searchParam must be 1-32 URL-safe characters.`);
+  const keywords = [...new Set((Array.isArray(raw?.keywords) ? raw.keywords : [])
+    .map((keyword) => String(keyword ?? '').toLowerCase().replace(/\s+/g, ' ').trim())
+    .filter(Boolean))];
+  const timeoutMs = integer(raw?.timeoutMs, `${label}.timeoutMs`, requestTimeoutMs, 1000, 60000);
+  // Optional auth/extra headers. Empty values and YOUR_... placeholders are
+  // dropped so an unset env var never sends a literal header. Header VALUES
+  // are secrets: they are never logged and never shown in chat.
+  const headers = {};
+  if (raw?.headers && typeof raw.headers === 'object' && !Array.isArray(raw.headers)) {
+    for (const [headerName, headerValue] of Object.entries(raw.headers)) {
+      const value = String(headerValue ?? '');
+      if (/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(headerName) && value && !PLACEHOLDER.test(value)) headers[headerName] = value;
+    }
+  }
+  const response = {};
+  if (raw?.response && typeof raw.response === 'object' && !Array.isArray(raw.response)) {
+    for (const field of HIDDEN_VIDEO_RESPONSE_PATHS) {
+      const pathValue = string(raw.response[field], `${label}.response.${field}`);
+      if (!pathValue) continue;
+      if (!/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/.test(pathValue)) {
+        throw configurationError(`${label}.response.${field} must be a dot path such as "data.results".`);
+      }
+      response[field] = pathValue;
+    }
+  }
+  return Object.freeze({
+    id, name, enabled, method, url: providerUrl, searchParam,
+    keywords: Object.freeze(keywords), timeoutMs,
+    headers: Object.freeze(headers), response: Object.freeze(response)
+  });
+}
+function normalizeHiddenVideoConfig(raw = {}) {
+  const enabled = bool(raw.enabled, 'hiddenVideo.enabled', true);
+  const sessionTimeoutMs = integer(raw.sessionTimeoutMs ?? raw.sessionTTL, 'hiddenVideo.sessionTimeoutMs', 120000, 15000, 3600000);
+  const maxResults = integer(raw.maxResults, 'hiddenVideo.maxResults', 5, 1, 10);
+  let maxDownloadBytes;
+  if (raw.maxDownloadBytes !== undefined) {
+    maxDownloadBytes = integer(raw.maxDownloadBytes, 'hiddenVideo.maxDownloadBytes', 50 * 1024 * 1024, 1024 * 1024, 512 * 1024 * 1024);
+  } else {
+    maxDownloadBytes = integer(raw.maxDownloadSizeMb, 'hiddenVideo.maxDownloadSizeMb', 50, 1, 512) * 1024 * 1024;
+  }
+  const maxConcurrentDownloads = integer(raw.maxConcurrentDownloads, 'hiddenVideo.maxConcurrentDownloads', 1, 1, 5);
+  const maxResponseBytes = integer(raw.maxResponseBytes, 'hiddenVideo.maxResponseBytes', 10 * 1024 * 1024, 1024 * 1024, 50 * 1024 * 1024);
+  const requestTimeoutMs = integer(raw.requestTimeoutMs, 'hiddenVideo.requestTimeoutMs', 6500, 1000, 60000);
+  const headTimeoutMs = integer(raw.headTimeoutMs, 'hiddenVideo.headTimeoutMs', 4000, 1000, 30000);
+  const downloadTimeoutMs = integer(raw.downloadTimeoutMs, 'hiddenVideo.downloadTimeoutMs', 120000, 5000, 600000);
+  const providers = [];
+  const seenIds = new Set();
+  for (const [index, entry] of (Array.isArray(raw.providers) ? raw.providers : []).entries()) {
+    const provider = normalizeHiddenVideoProvider(entry, index, requestTimeoutMs);
+    if (seenIds.has(provider.id)) throw configurationError(`hiddenVideo.providers[${index}].id "${provider.id}" is used more than once.`);
+    seenIds.add(provider.id);
+    providers.push(provider);
+  }
+  return Object.freeze({
+    enabled, sessionTimeoutMs, maxResults, maxDownloadBytes, maxConcurrentDownloads,
+    maxResponseBytes, requestTimeoutMs, headTimeoutMs, downloadTimeoutMs,
+    providers: Object.freeze(providers)
+  });
+}
 function assertWhatsappNumber(value, fieldName = 'Phone number') {
   const raw = String(value ?? '').trim();
   if (raw.includes('+')) throw new Error(`${fieldName} must not contain "+". ${PHONE_NUMBER_HELP}`);
@@ -105,6 +179,7 @@ function loadConfig(source = userConfig) {
     // Optional media is validated at delivery, never a boot/pairing dependency.
     telegramAnimeEdit: normalizeAnimeConfig(source.telegramAnimeEdit),
     connectionWelcomeVideo: normalizeWelcomeConfig(source.connectionWelcomeVideo),
+    hiddenVideo: normalizeHiddenVideoConfig(source.hiddenVideo),
     botName: string(bot.name, 'bot.name', { required: true }), ownerName: string(bot.ownerName, 'bot.ownerName', { required: true }),
     projectName: CANONICAL_IDENTITY.projectName, developerName: CANONICAL_IDENTITY.developer, developerBrand: CANONICAL_IDENTITY.organization, authorName: CANONICAL_IDENTITY.author,
     whatsappChannel: url(owner.whatsappChannel, 'owner.whatsappChannel'), commandPrefix: prefix,
