@@ -45,7 +45,7 @@ const STATIC_COMMANDS = Object.freeze([
   command('vd', 'media', 'Send stored video.', { permission: 'owner', usage: '<name> [-c]' }),
   command('list', 'media', 'List stored media.', { permission: 'owner' }),
   command('del', 'media', 'Delete stored media.', { permission: 'owner', usage: 'audio|video <name>' }),
-  command('menu', 'general', 'Open the interactive command menu.', { aliases: ['help'], usage: '[category]' }),
+  command('menu', 'general', 'Open the interactive command menu.', { aliases: ['help', 'm', 'cmds'], usage: '[category]' }),
   command('ping', 'general', 'Check bot latency.', { aliases: ['p'] }),
   command('request', 'general', 'Send a request or bug report to the owner.', { aliases: ['reportbug'], usage: '<message>' }),
 
@@ -53,20 +53,21 @@ const STATIC_COMMANDS = Object.freeze([
   command('self', 'mode', 'Switch the bot to self/owner-only mode.', { aliases: ['private'], permission: 'owner' }),
   command('mode', 'mode', 'Show or change message mode.', { permission: 'owner', aliases: ['botmode'], usage: '<public|self>' }),
 
-  command('play', 'downloader', 'Search and download audio from a supported video link or YouTube query.', { usage: '<query|url>' }),
-  command('ytmp3', 'downloader', 'Download audio from a supported video URL.', { aliases: ['audio', 'mp3'], usage: '<url>' }),
-  command('video', 'downloader', 'Download video from a supported video URL.', { aliases: ['ytmp4', 'mp4', 'ytvideo'], usage: '<query|url>' }),
-  command('spotify', 'downloader', 'Search Spotify and return official track information/links.', { usage: '<query>' }),
+  command('play', 'downloader', 'Search and download audio from a supported video link or YouTube query.', { aliases: ['song', 'music'], usage: '<query|url>' }),
+  command('ytmp3', 'downloader', 'Download audio from a supported video URL.', { aliases: ['audio', 'mp3', 'yta', 'ytaudio'], usage: '<url>' }),
+  command('video', 'downloader', 'Download video from a supported video URL.', { aliases: ['ytmp4', 'mp4', 'ytvideo', 'yt', 'youtube', 'ytv'], usage: '<query|url>' }),
+  command('spotify', 'downloader', 'Search Spotify and return official track information/links.', { aliases: ['sp', 'spot'], usage: '<query>' }),
   command('media', 'downloader', 'Download media from supported TikTok/Instagram/Facebook/video links.', { aliases: ['download', 'dl'], usage: '<url>' }),
+  command('aio', 'downloader', 'ALL IN ONE downloader: any supported video/media link from any site.', { aliases: ['allinone', 'alldownload', 'alldl', 'anydl'], usage: '<link>' }),
 
   command('getpp', 'media', 'Get a user or group profile picture.', { aliases: ['pp', 'profilepic', 'avatar'], usage: '[number|mention|reply]' }),
   command('setpp', 'media', 'Update the bot profile picture from a replied image.', { permission: 'owner' }),
   command('vv', 'media', 'Reveal a replied view-once photo or video.', { aliases: ['hey', 'revealonce', 'retrieve', 'viewonce'] }),
 
   command('save', 'media', 'Save a replied status and send it to the connected owner.', { aliases: ['savestatus', 'downloadstatus'] }),
-  command('tovid', 'converter', 'Convert a sticker to MP4 video (FFmpeg required).', { aliases: ['sticker2vid'] }),
+  command('tovid', 'converter', 'Convert a sticker to MP4 video (FFmpeg required).', { aliases: ['sticker2vid', 'tomp4'] }),
   command('take', 'sticker', 'Change sticker pack and author without losing animation.', { aliases: ['steal'], usage: '[pack|author]' }),
-  command('toimg', 'converter', 'Convert a replied sticker to an image.', { aliases: ['sticker2img', 'img'] }),
+  command('toimg', 'converter', 'Convert a replied sticker to an image.', { aliases: ['sticker2img', 'img', 'toimage'] }),
   command('convert', 'converter', 'Show conversion options.', { aliases: ['converter'] }),
   command('tts', 'converter', 'Convert text to speech audio.', { usage: '<text>' }),
   command('qr', 'converter', 'Create a QR code from text or a URL.', { aliases: ['qrcode'], usage: '<text>' }),
@@ -148,7 +149,7 @@ const STATIC_COMMANDS = Object.freeze([
   command('premium', 'premium', 'Show premium status for this chat/number.'),
 
   command('alive', 'info', 'Check uptime with an image and text fallback.'),
-  command('status', 'info', 'Show bot status and uptime.', { aliases: ['runtime'] }),
+  command('status', 'info', 'Show bot status and uptime.', { aliases: ['runtime', 'st'] }),
   command('owner', 'info', 'Show owner and developer details.', { aliases: ['creator'] }),
 
   command('sessions', 'sessions', 'Show the active ANIME MD WhatsApp session.'),
@@ -158,7 +159,7 @@ const STATIC_COMMANDS = Object.freeze([
   command('telegram', 'telegram', 'Show Telegram controller setup status.', { aliases: ['tg'] }),
 
   // --- ANIME / OTAKU ---
-  command('anime', 'anime', 'Search for an anime on MyAnimeList.', { usage: 'search|info|download <title> | top|trending|season|new|random|genres' }),
+  command('anime', 'anime', 'Search for an anime on MyAnimeList.', { aliases: ['ani'], usage: 'search|info|download <title> | top|trending|season|new|random|genres' }),
   command('manga', 'anime', 'Search for a manga on MyAnimeList.', { usage: '<title>' }),
   command('character', 'anime', 'Look up an anime character.', { aliases: ['char'], usage: '<name>' }),
   command('waifu', 'anime', 'Get a random waifu image.'),
@@ -189,18 +190,18 @@ const STATIC_COMMANDS = Object.freeze([
   command('pickup', 'funextra', 'Get a random pickup line.', { aliases: ['pickupline'] }),
   command('meteo', 'funextra', 'Get weather info for a city.', { aliases: ['weather'], usage: '<city>' }),
   command('lyrics', 'funextra', 'Search for song lyrics.', { aliases: ['lyric'], usage: '<song title>' }),
-  command('tiktok', 'downloader', 'Download a TikTok video without watermark.', { aliases: ['tt', 'ttdl'], usage: '<link>' }),
-  command('facebook', 'downloader', 'Download a Facebook video.', { aliases: ['fb', 'fbdl'], usage: '<link>' }),
-  command('twitter', 'downloader', 'Download a Twitter/X video.', { aliases: ['xdl', 'twdl'], usage: '<link>' }),
-  command('instagram', 'downloader', 'Download an Instagram reel/post/story.', { aliases: ['ig', 'igdl'], usage: '<link>' }),
+  command('tiktok', 'downloader', 'Download a TikTok video without watermark.', { aliases: ['tt', 'ttdl', 'tk'], usage: '<link>' }),
+  command('facebook', 'downloader', 'Download a Facebook video.', { aliases: ['fb', 'fbdl', 'fbvideo'], usage: '<link>' }),
+  command('twitter', 'downloader', 'Download a Twitter/X video.', { aliases: ['xdl', 'twdl', 'x', 'tw'], usage: '<link>' }),
+  command('instagram', 'downloader', 'Download an Instagram reel/post/story.', { aliases: ['ig', 'igdl', 'insta'], usage: '<link>' }),
   command('pinterest', 'downloader', 'Download a Pinterest pin image or video.', { aliases: ['pin', 'pindl'], usage: '<link>' }),
-  command('soundcloud', 'downloader', 'Download audio from SoundCloud.', { aliases: ['scdl'], usage: '<link>' }),
-  command('mediafire', 'downloader', 'Download a file from Mediafire.', { aliases: ['mfdl'], usage: '<link>' }),
-  command('gdrive', 'downloader', 'Download a file from Google Drive.', { aliases: ['gddl'], usage: '<link>' }),
-  command('terabox', 'downloader', 'Download a file from Terabox.', { aliases: ['tbdl'], usage: '<link>' }),
-  command('movie', 'downloader', 'Search for a movie across multiple sources.', { aliases: ['film', 'moviesearch'], usage: '<title>' }),
+  command('soundcloud', 'downloader', 'Download audio from SoundCloud.', { aliases: ['scdl', 'sc'], usage: '<link>' }),
+  command('mediafire', 'downloader', 'Download a file from Mediafire.', { aliases: ['mfdl', 'mf'], usage: '<link>' }),
+  command('gdrive', 'downloader', 'Download a file from Google Drive.', { aliases: ['gddl', 'gd', 'drive'], usage: '<link>' }),
+  command('terabox', 'downloader', 'Download a file from Terabox.', { aliases: ['tbdl', 'tb', 'tera'], usage: '<link>' }),
+  command('movie', 'downloader', 'Search for a movie across multiple sources.', { aliases: ['film', 'moviesearch', 'mv'], usage: '<title>' }),
   command('movielatest', 'downloader', 'Get latest movies from multiple sources.', { aliases: ['latestmovies', 'newmovies'] }),
-  command('series', 'downloader', 'Search for a TV series.', { aliases: ['tv', 'tvseries'], usage: '<title>' }),
+  command('series', 'downloader', 'Search for a TV series.', { aliases: ['tv', 'tvseries', 'srs'], usage: '<title>' }),
   command('serieslatest', 'downloader', 'Get latest TV series.', { aliases: ['latestseries', 'newseries'] })
 ]);
 
@@ -271,6 +272,33 @@ function categoriesWithCommands() {
   return [...map.values()].map((category) => ({ ...category, commands: [...category.commands] }));
 }
 
+/**
+ * The COMPLETE command index: every category with every execute name (the
+ * canonical command plus all of its aliases) that the caller may run.
+ *
+ * It is generated from the live registry at call time, so `!menu` can never go
+ * stale: a newly registered command appears on its own, a removed one
+ * disappears, and nothing has to be maintained by hand.
+ *
+ * @param {Array} categories categories (optionally already access-filtered)
+ * @param {string} prefix live command prefix
+ * @returns {string[]} index lines, ready to be chunked into messages
+ */
+function commandIndex(categories, prefix = '!') {
+  const lines = [];
+  for (const category of Array.isArray(categories) ? categories : []) {
+    const commands = Array.isArray(category?.commands) ? category.commands : [];
+    if (!commands.length) continue;
+    lines.push(`*${category.icon} ${category.label}* — ${commands.length} command${commands.length === 1 ? '' : 's'}`);
+    for (const entry of commands) {
+      lines.push([entry.name, ...entry.aliases].map((name) => `${prefix}${name}`).join(' • '));
+    }
+    lines.push('');
+  }
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
 function getCategory(id) {
   return categoriesWithCommands().find((category) => category.id === id || category.label.toLowerCase() === String(id || '').toLowerCase());
 }
@@ -323,6 +351,7 @@ module.exports = {
   allCategories: () => Object.values(CATEGORIES).map((category) => ({ ...category })),
   allAliases,
   categoriesWithCommands,
+  commandIndex,
   getCategory,
   helpText,
   registerCommands,

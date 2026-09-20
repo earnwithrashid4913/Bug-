@@ -320,7 +320,158 @@ async function handleTeraboxCommand(socket, context, argsText) {
   }
 }
 
+// ── ALL IN ONE Downloader (!aio) ───────────────────────────────────────────
+//
+// ONE entry point for any supported video/media link. A known platform is
+// routed to the specialised handler that ALREADY owns that platform's complete
+// fallback chain; anything else goes through a generic chain built from the
+// APIs this project already ships (DavidCyril AIO v1/v2/v3 → HD → website →
+// SaveTube → Cobalt). No second downloader layer and no new API surface.
+
+const { requestCobalt, downloadRemoteFile } = require('../system/lib/net-tools');
+const { config } = require('../system/config');
+const sourceCommands = require('./source-commands');
+
+// Long videos are sent as a document: WhatsApp rejects oversized video
+// messages, and a document always delivers.
+const AIO_VIDEO_SEND_LIMIT = 60 * 1024 * 1024;
+
+const AIO_ROUTES = Object.freeze([
+  { label: 'YouTube', test: /(?:youtube\.com|youtu\.be|yt\.be|youtube-nocookie\.com|m\.youtube\.com)/i },
+  { label: 'TikTok', test: /(?:tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com)/i, handler: (...args) => handleTiktokCommand(...args) },
+  { label: 'Facebook', test: /(?:facebook\.com|fb\.com|fb\.watch|fb\.me)/i, handler: (...args) => handleFacebookCommand(...args) },
+  { label: 'X / Twitter', test: /(?:twitter\.com|x\.com|t\.co)/i, handler: (...args) => handleXdlCommand(...args) },
+  { label: 'Instagram', test: /(?:instagram\.com|instagr\.am|ddinstagram\.com)/i, handler: (...args) => handleInstagramCommand(...args) },
+  { label: 'Pinterest', test: /(?:pinterest\.com|pin\.it)/i, handler: (...args) => handlePinterestCommand(...args) },
+  { label: 'SoundCloud', test: /(?:soundcloud\.com|snd\.sc)/i, handler: (...args) => handleSoundcloudCommand(...args) },
+  { label: 'Mediafire', test: /mediafire\.com/i, handler: (...args) => handleMediafireCommand(...args) },
+  { label: 'Google Drive', test: /(?:drive\.google\.com|docs\.google\.com)/i, handler: (...args) => handleGdriveCommand(...args) },
+  { label: 'Terabox', test: /(?:terabox\.com|teraboxapp\.com|1024terabox|teraboxlink)/i, handler: (...args) => handleTeraboxCommand(...args) }
+]);
+
+// Media type from the real bytes first (the only trustworthy source), then the
+// URL extension. Never guessed from the API's label.
+function aioKindOf(buffer, mediaUrl) {
+  const head = buffer.subarray(0, 12);
+  if (head[0] === 0xFF && head[1] === 0xD8) return 'image';
+  if (head[0] === 0x89 && head[1] === 0x50) return 'image';
+  if (head.subarray(4, 8).toString('latin1') === 'ftyp') return 'video';
+  if (head[0] === 0x1A && head[1] === 0x45 && head[2] === 0xDF) return 'video';
+  if (head.subarray(0, 3).toString('latin1') === 'ID3') return 'audio';
+  if (head[0] === 0xFF && (head[1] & 0xE0) === 0xE0) return 'audio';
+  if (/\.(mp3|m4a|opus|ogg|flac|wav)(?:[?#]|$)/i.test(mediaUrl)) return 'audio';
+  if (/\.(jpe?g|png|webp|gif)(?:[?#]|$)/i.test(mediaUrl)) return 'image';
+  return 'video';
+}
+
+async function sendAioMedia(socket, context, buffer, mediaUrl, title, source) {
+  const kind = aioKindOf(buffer, mediaUrl);
+  const size = `${(buffer.length / 1024 / 1024).toFixed(2)} MB`;
+  const caption = `*AIO DOWNLOAD COMPLETE* ✅\n${title ? `📝 ${title}\n` : ''}🔗 ${source}\n*Size:* ${size}\n\n> ${FOOTER}`;
+  if (kind === 'image') {
+    await socket.sendMessage(context.chatId, { image: buffer, caption }, { quoted: context.raw });
+  } else if (kind === 'audio') {
+    await socket.sendMessage(context.chatId, { audio: buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: context.raw });
+    await socket.sendMessage(context.chatId, { text: caption }, { quoted: context.raw });
+  } else if (kind === 'video' && buffer.length <= AIO_VIDEO_SEND_LIMIT) {
+    await socket.sendMessage(context.chatId, { video: buffer, mimetype: 'video/mp4', caption }, { quoted: context.raw });
+  } else {
+    const name = `${(title || 'aio_download').replace(/[^\w\-. ]+/g, '').trim() || 'aio_download'}.${kind === 'image' ? 'jpg' : kind === 'audio' ? 'mp3' : 'mp4'}`;
+    await socket.sendMessage(context.chatId, { document: buffer, mimetype: 'application/octet-stream', fileName: name, caption }, { quoted: context.raw });
+  }
+  return caption;
+}
+
+// Generic chain for every site without a specialised handler.
+const AIO_GENERIC_PROVIDERS = Object.freeze([
+  { label: 'AIO', run: (url) => dc.aioDownload(url), payload: (data) => data?.data || data },
+  { label: 'HD Video', run: (url) => dc.hdVideoDownload(url), payload: (data) => data },
+  { label: 'Website', run: (url) => dc.websiteDownload(url), payload: (data) => data },
+  { label: 'SaveTube', run: (url) => dc.savetubeDownload(url), payload: (data) => data }
+]);
+
+async function aioGenericDownload(socket, context, url) {
+  for (const provider of AIO_GENERIC_PROVIDERS) {
+    try {
+      const data = await provider.run(url);
+      const payload = provider.payload(data);
+      const mediaUrl = dc.pickUrl(payload);
+      if (!mediaUrl) continue;
+      const buffer = await dc.dlBuffer(mediaUrl);
+      if (!buffer || buffer.length < 1000) continue;
+      return await sendAioMedia(socket, context, buffer, mediaUrl, dc.pickTitle(payload), provider.label);
+    } catch (error) {
+      console.warn(`[AIO] ${provider.label} failed:`, error?.message);
+    }
+  }
+
+  // Final fallback: Cobalt, the generic provider this project already uses for
+  // !media — so an unsupported site still has one more real chance.
+  try {
+    const result = await requestCobalt(config.cobaltApiUrl, url);
+    if (!result?.url) throw new Error('no file returned');
+    const { buffer, type } = await downloadRemoteFile(result.url);
+    if (!buffer?.length) throw new Error('empty file');
+    const kind = String(type || '').includes('audio') ? 'audio' : String(type || '').includes('image') ? 'image' : 'video';
+    const caption = `*AIO DOWNLOAD COMPLETE* ✅\n🔗 Cobalt\n*Format:* ${String(type || 'file').split(';')[0]}\n*Size:* ${(buffer.length / 1024 / 1024).toFixed(2)} MB\n\n> ${FOOTER}`;
+    if (kind === 'image') await socket.sendMessage(context.chatId, { image: buffer, caption }, { quoted: context.raw });
+    else if (kind === 'audio') await socket.sendMessage(context.chatId, { audio: buffer, mimetype: String(type || 'audio/mpeg'), ptt: false }, { quoted: context.raw });
+    else if (buffer.length <= AIO_VIDEO_SEND_LIMIT) await socket.sendMessage(context.chatId, { video: buffer, mimetype: String(type || 'video/mp4'), caption }, { quoted: context.raw });
+    else await socket.sendMessage(context.chatId, { document: buffer, mimetype: String(type || 'application/octet-stream'), fileName: result.filename || 'aio_download', caption }, { quoted: context.raw });
+    return caption;
+  } catch (error) {
+    console.warn('[AIO] Cobalt failed:', error?.message);
+    return null;
+  }
+}
+
+async function handleAioCommand(socket, context, argsText, prefix = '!') {
+  const url = dc.extractUrl(argsText)
+    || dc.extractUrl(context.raw?.message?.conversation || '')
+    || dc.extractUrl(context.raw?.message?.extendedTextMessage?.text || '');
+
+  if (!url) {
+    return socket.sendMessage(context.chatId, {
+      text: [
+        `❓ *Usage:* ${String(prefix || '!')}aio <link>`,
+        '',
+        'ALL IN ONE downloader — any supported video/media link:',
+        'YouTube • TikTok • Instagram • Facebook • X/Twitter',
+        'Pinterest • SoundCloud • Mediafire • Google Drive • Terabox',
+        'and most other direct video pages.',
+        '',
+        `Ex: ${String(prefix || '!')}aio https://vm.tiktok.com/xxxxx`
+      ].join('\n')
+    }, { quoted: context.raw });
+  }
+
+  const route = AIO_ROUTES.find((entry) => entry.test.test(url));
+
+  // YouTube already has a dedicated, well-tested download path (Cobalt first,
+  // DavidCyril pool as fallback) — reuse it instead of duplicating it here.
+  if (route?.label === 'YouTube') {
+    await socket.sendMessage(context.chatId, { text: '🚀 *AIO* → YouTube' }, { quoted: context.raw });
+    return sourceCommands.download(socket, context, { name: 'video', text: url, args: [url] });
+  }
+
+  if (route?.handler) {
+    await socket.sendMessage(context.chatId, { text: `🚀 *AIO* → ${route.label}` }, { quoted: context.raw });
+    return route.handler(socket, context, url);
+  }
+
+  await socket.sendMessage(context.chatId, { text: '🚀 *AIO* → detecting source…' }, { quoted: context.raw });
+  const caption = await aioGenericDownload(socket, context, url);
+  if (!caption) {
+    return socket.sendMessage(context.chatId, {
+      text: `❌ *AIO could not download that link.*\n\nThe site may be unsupported, private or rate-limited right now.\nTry a direct media link, or a dedicated command such as ${String(prefix || '!')}tiktok / ${String(prefix || '!')}ig / ${String(prefix || '!')}mediafire.\n\n> ${FOOTER}`
+    }, { quoted: context.raw });
+  }
+  return undefined;
+}
+
 module.exports = {
+  AIO_ROUTES,
+  handleAioCommand,
   handleTiktokCommand,
   handleFacebookCommand,
   handleXdlCommand,

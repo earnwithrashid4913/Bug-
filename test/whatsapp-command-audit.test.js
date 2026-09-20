@@ -13,7 +13,8 @@ const input = {
   idch: 'https://whatsapp.com/channel/fixture', rps: 'rock', guess: 'start', gname: 'Fixture Group', gdesc: 'Fixture description', add: '15558888888',
   setname: 'Fixture Name', setprefix: '!', broadcast: 'Fixture announcement', sudo: '15558888888', delsudo: '15558888888', addprem: '15558888888 30d', delprem: '15558888888',
   stopsession: '15558888888', anime: 'search Fixture', manga: 'Fixture', character: 'Fixture', animevs: 'Naruto vs Bleach', ship: 'Alice Bob', meteo: 'Islamabad', lyrics: 'Fixture',
-  tiktok: 'https://www.tiktok.com/fixture', facebook: 'https://facebook.com/fixture', twitter: 'https://x.com/fixture', opentime: 'cancel', closetime: 'cancel', give: '1'
+  tiktok: 'https://www.tiktok.com/fixture', facebook: 'https://facebook.com/fixture', twitter: 'https://x.com/fixture', opentime: 'cancel', closetime: 'cancel', give: '1',
+  aio: 'https://www.tiktok.com/fixture'
 };
 function fixture(command) {
   if (['toimg', 'tovid', 'take'].includes(command)) return { stickerMessage: { mimetype: 'image/webp' } };
@@ -25,12 +26,14 @@ function textOf(socket) {
 
 test('complete public registry, alias branches, menu bounds and hidden exclusion audit', () => {
   const result = audit();
-  // The AnimeMD public surface is frozen: 269 dispatcher names/aliases, 143
+  // The AnimeMD public surface is frozen: 302 dispatcher names/aliases, 144
   // declared commands and 23 complete menu categories, all served by the one
   // dispatcher switch in system/handler.js. (Counts re-audited against the real
-  // registry: `allAliases()` and the dispatcher agree in both directions.)
-  assert.equal(result.routes.length, 269);
-  assert.equal(STATIC_COMMANDS.length, 143);
+  // registry: `allAliases()` and the dispatcher agree in both directions.
+  // +1 command / +3 execute names = the !aio all-in-one downloader;
+  // +30 execute names = short aliases such as !yt, !youtube, !m, !st.)
+  assert.equal(result.routes.length, 302);
+  assert.equal(STATIC_COMMANDS.length, 144);
   assert.equal(COMMANDS.length, STATIC_COMMANDS.length);
   assert.equal(result.categories.length, 23);
   assert.equal(result.hidden.length, 2);

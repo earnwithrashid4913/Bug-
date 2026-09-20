@@ -6,6 +6,7 @@ const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
 const { TelegramController } = require('../system/lib/telegram-controller');
+const { normalizeTelegramText } = require('../test-support/telegram-display');
 const { TelegramControllerStore } = require('../system/lib/telegram-controllers');
 const { authenticatedSelfJid, sendWelcomeVideo, welcomeCaption } = require('../system/lib/connection-welcome');
 // index.js renders the connected dashboard through the ONE authoritative
@@ -50,11 +51,18 @@ test('real success notification precedes optional media; premium UI and escaped 
   assert.deepEqual(events.map(event => event.type), ['sendPhoto', 'library', 'sendVideo']);
   const success = events[0].payload;
   assert.equal(success.chat_id, '10');
-  assert.match(success.caption, /ANIME-MD/);
-  assert.match(success.caption, /Pairing Completed Successfully/);
-  assert.match(success.caption, /WhatsApp Connected/);
-  assert.match(success.caption, /Secure Session/);
-  assert.match(success.caption, /System Ready/);
+  // The CONNECTED card is compact and highlights its fields with
+  // mathematical-bold glyphs, so the wording is asserted font-independently.
+  const caption = normalizeTelegramText(success.caption);
+  assert.match(caption, /LINK COMPLETE/);
+  assert.match(caption, /PAIRING COMPLETE/);
+  assert.match(caption, /WHATSAPP CONNECTED/);
+  assert.match(caption, /Secure Session/);
+  assert.match(caption, /SYSTEM READY/);
+  // No duplicated state lines and no Roman-Urdu restatement of the same fact.
+  assert.doesNotMatch(caption, /Session: ACTIVE/);
+  assert.doesNotMatch(caption, /Last Event|Last Update/);
+  assert.doesNotMatch(caption, /Roman Urdu/);
   assert.ok(success.reply_markup.inline_keyboard.length);
   assert.equal(events[2].payload.caption, '&lt;Gojo&gt; &amp; Infinity');
   assert.equal(events[2].payload.video, video.videoUrl);
@@ -123,8 +131,8 @@ test('library or Telegram video failure leaves real flow in SUCCESS with no pair
     await controller.notifySessionConnected('10', session);
     await controller.animeLibrary.queue;
     assert.equal(flow.state, 'SUCCESS');
-    const text = events.map(event => event.payload?.text || event.payload?.caption || '').join('');
-    assert.match(text, /WhatsApp Connected/);
+    const text = normalizeTelegramText(events.map(event => event.payload?.text || event.payload?.caption || '').join(''));
+    assert.match(text, /WHATSAPP CONNECTED/);
     assert.doesNotMatch(text, /Pairing could not|AUTH_SECRET|SECRET/);
     assert.equal(controller.animeLibrary.recentVideoIds.length, 0);
   }

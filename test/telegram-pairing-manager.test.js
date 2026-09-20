@@ -594,7 +594,9 @@ test('listAllSessions returns every controller session for bootstrap owners', as
   const { manager } = makeManager();
   await manager.requestPairing('10', '923001234567');
   await manager.requestPairing('20', '12025550123');
-  const all = manager.listAllSessions();
+  // CONTRACT: listAllSessions() is async (it is awaited by every consumer).
+  const all = await manager.listAllSessions();
+  assert.ok(all instanceof Array, 'listAllSessions resolves to an array');
   assert.equal(all.length, 2);
   assert.deepEqual(all.map((entry) => entry.number).sort(), ['12025550123', '923001234567']);
   // Regular controllers still only ever see their own sessions.

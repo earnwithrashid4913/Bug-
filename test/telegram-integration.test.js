@@ -6,7 +6,7 @@
 // the pairing path exercised is the input-validation fast fail. Real pairing
 // flows are covered by the unit tests with a fake Baileys implementation.
 
-const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
+const { displayAssert: assert, normalizeTelegramHeadings, normalizeTelegramText } = require('../test-support/telegram-display');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const os = require('node:os');
@@ -120,7 +120,7 @@ test('the Telegram controller wiring starts, greets with the ANIME MD intro, and
   // bootstrap owner for the /start event, with non-sensitive fields only.
   await waitFor((entry) => /ANIME MD • ACTIVITY/.test(normalizeTelegramHeadings(entry.payload.text || '')), 'owner activity box');
   const activity = sent.find((entry) => /ANIME MD • ACTIVITY/.test(normalizeTelegramHeadings(entry.payload.text || '')));
-  const activityText = activity.payload.text;
+  const activityText = normalizeTelegramText(activity.payload.text);
   assert.match(activityText, /⚡ Action: Start/);
   assert.match(activityText, /🆔 ID: 10/);
   assert.match(activityText, /👑 Tier: OWNER/);

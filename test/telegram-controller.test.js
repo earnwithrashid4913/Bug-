@@ -1,6 +1,6 @@
 'use strict';
 
-const { displayAssert: assert, normalizeTelegramHeadings } = require('../test-support/telegram-display');
+const { displayAssert: assert, normalizeTelegramHeadings, normalizeTelegramText } = require('../test-support/telegram-display');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -210,20 +210,33 @@ test('connected notifications use the connected box and are never sent early', a
   await controller.notifySessionConnected('10', { number: '923001234567', numberDisplay: '+92 300 1234567' });
   const notification = replies.pop();
   assert.match(notification.caption, /ANIME MD • CONNECTED/);
-  assert.match(notification.caption, /✅ WhatsApp Connected/);
-  // A private connected notification carries the REAL session number unmasked,
-  // and the dashboard lines must reflect the actual lifecycle instead of the
-  // pre-connect placeholders the card used to freeze on.
-  assert.match(notification.caption, /📱 Session: \+923001234567/);
-  assert.doesNotMatch(notification.caption, /•••••/);
-  assert.match(notification.caption, /🟢 Status: CONNECTED/);
-  assert.doesNotMatch(notification.caption, /🔴 Status: DISCONNECTED/);
-  assert.match(notification.caption, /⏱️ Uptime: \d{2}h \d{2}m \d{2}s/);
-  assert.match(notification.caption, /📅 Connected Since: \d{1,2} [A-Za-z]+ \d{4} • \d{2}:\d{2}:\d{2} UTC/);
-  assert.match(notification.caption, /⚡ Last Event: CONNECTED/);
-  assert.doesNotMatch(notification.caption, /Connected Since: Unavailable/);
-  assert.match(notification.caption, /🟢 Session: ACTIVE/);
-  assert.match(notification.caption, /Roman Urdu/);
+  // The card highlights its fields with mathematical-bold glyphs, so the
+  // wording is asserted font-independently (NFKC folds the glyphs to ASCII).
+  const caption = normalizeTelegramText(notification.caption);
+  assert.match(caption, /✦ LINK COMPLETE ✦/);
+  assert.match(caption, /✅ PAIRING COMPLETE/);
+  assert.match(caption, /🟢 WHATSAPP CONNECTED/);
+  // The viewer here is a bootstrap OWNER, so the connected card carries the
+  // REAL session number unmasked, and every value is that session's own.
+  assert.match(caption, /📱 Number: \+92 300 1234567/);
+  assert.doesNotMatch(caption, /•••••/);
+  assert.match(caption, /🟢 Status: CONNECTED/);
+  assert.doesNotMatch(caption, /🔴 Status: DISCONNECTED/);
+  assert.match(caption, /⏱️ Uptime: \d{2}h \d{2}m \d{2}s/);
+  assert.match(caption, /🔄 Reconnects: \d+/);
+  assert.match(caption, /📅 Connected: \d{1,2} [A-Za-z]+ \d{4} • \d{2}:\d{2}:\d{2} UTC/);
+  assert.doesNotMatch(caption, /Connected: Unavailable/);
+  assert.match(caption, /🔐 Secure Session/);
+  assert.match(caption, /⚡ SYSTEM READY/);
+  // The card states each fact exactly once: no duplicated "Session: ACTIVE",
+  // no internal Last Event / Last Update lines and no Roman-Urdu restatement.
+  assert.doesNotMatch(caption, /Session: ACTIVE/);
+  assert.doesNotMatch(caption, /Last Event|Last Update/);
+  assert.doesNotMatch(caption, /Roman Urdu/);
+  // The card body states the connection once in the header and once on the
+  // status line — the third occurrence is the card title itself.
+  const body = caption.split('\n').filter((line) => !line.includes('〔')).join('\n');
+  assert.equal((body.match(/CONNECTED/g) || []).length, 2, 'the connected state is stated in the header and on the status line only');
   // Before the controller runs, notifications are suppressed.
   controller.running = false;
   await controller.notifySessionConnected('10', { number: '923001234567' });
@@ -625,9 +638,11 @@ test('/listpaired is bootstrap-only and lists sessions of every controller', asy
   await controller.handleUpdate({ message: { chat: { id: 1 }, from: { id: 10 }, text: '/listpaired' } });
   const text = replies.at(-1).text;
   assert.match(text, /ALL SESSIONS/);
+  // Bootstrap owner view: the complete numbers, never masked.
   assert.match(text, /\+92 300 1234567/);
+  assert.match(text, /\+1 202 555 0123/);
   assert.match(text, /user 20/);
-  assert.match(text, /Total: 2 sessions/);
+  assert.match(normalizeTelegramText(text), /Total: 2 sessions/);
 });
 
 test('/addprem grants and /delprem revokes premium access (bootstrap only)', async () => {
@@ -1445,16 +1460,34 @@ test('sendOwnerActivity formats a compact activity box for every bootstrap owner
     log: { info: () => {}, warn: () => {}, error: () => {} }
   });
   controller.running = true;
-  await controller.sendOwnerActivity({ action: 'Pair Request', actor: { id: '30', username: 'joiner' }, userId: '30', details: ['📱 Number: +92 300 1234567'] });
+  await controller.sendOwnerActivity({ action: 'Pair Request', actor: { id: '30', username: 'joiner' }, userId: '30', number: '923001234567' });
   const messages = calls.filter((call) => call.method === 'sendMessage');
   assert.equal(messages.length, 2, 'both bootstrap owners receive the activity');
-  const text = messages[0].payload.text;
+  const text = normalizeTelegramText(messages[0].payload.text);
   assert.match(text, /ANIME MD • ACTIVITY/);
   assert.match(text, /👤 User: @joiner/);
   assert.match(text, /🆔 ID: 30/);
   assert.match(text, /⚡ Action: Pair Request/);
+  // The activity card is delivered to bootstrap owners ONLY, so it shows the
+  // complete WhatsApp number (never the masked form).
+  assert.match(text, /📱 Number: \+92 300 1234567/);
+  assert.doesNotMatch(text, /•••••/);
   assert.match(text, /🕒 Time:/);
   assert.doesNotMatch(text, /token|CODE|creds/i);
+});
+
+test('the activity card masks the number for a non-Admin/Owner audience', () => {
+  const { activityBox } = require('../system/lib/telegram-controller');
+  const event = { userId: '30', username: 'joiner', action: 'Pair Request', number: '923001234567' };
+  const owner = normalizeTelegramText(activityBox(event, { viewerRole: 'owner' }));
+  const admin = normalizeTelegramText(activityBox(event, { viewerRole: 'admin' }));
+  const user = normalizeTelegramText(activityBox(event, { viewerRole: 'user' }));
+  const groupOwner = normalizeTelegramText(activityBox(event, { viewerRole: 'owner', publicChat: true }));
+  assert.match(owner, /📱 Number: \+92 300 1234567/);
+  assert.match(admin, /📱 Number: \+92 300 1234567/);
+  assert.match(user, /📱 Number: \+92 ••••• 567/);
+  // A public chat masks for EVERY role — an admin never leaks a number there.
+  assert.match(groupOwner, /📱 Number: \+92 ••••• 567/);
 });
 
 // ---------------------------------------------------------------------------
