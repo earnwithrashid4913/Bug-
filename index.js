@@ -9,6 +9,7 @@ const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const {
   default: makeWASocket,
+  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   jidDecode,
@@ -708,7 +709,14 @@ async function startBot() {
         keys: makeCacheableSignalKeyStore(state.keys, logger.child({ level: 'silent' }))
       },
       logger,
-      browser: ['Ubuntu', 'Chrome', '20.0.04'],
+      // Stock Baileys Ubuntu Desktop descriptor (['Ubuntu', 'Chrome', <current
+      // Ubuntu version>]) — the SAME identity the Telegram pairing manager
+      // announces, and the format Baileys currently supports. The old inline
+      // tuple advertised Ubuntu too, but with a malformed version string
+      // ('20.0.04') that drifted from every other connection path. Chrome is
+      // deliberately KEPT: it is the client app name inside the descriptor, a
+      // plain string — no Chrome installation is involved or required.
+      browser: Browsers.ubuntu('Chrome'),
       fireInitQueries: false,
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: true,
