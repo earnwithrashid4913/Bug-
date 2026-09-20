@@ -90,6 +90,10 @@ async function launchQuizFromLobby(socket, remoteJid) {
 }
 
 async function sendGroupQuestion(socket, session, remoteJid) {
+  // A stopped/replaced session must never keep scheduling questions: the
+  // in-flight timeout chain closes over this session object, so every entry
+  // point re-validates against the live registry before doing anything.
+  if (groupSessions.get(sk(remoteJid)) !== session) return;
   const q = session.questions[session.currentIndex];
   const index = session.currentIndex + 1;
   const total = session.questions.length;
@@ -104,6 +108,11 @@ async function sendGroupQuestion(socket, session, remoteJid) {
 
   if (session.timer) clearTimeout(session.timer);
   session.timer = setTimeout(async () => {
+    // The question may have just been answered or the quiz stopped while this
+    // callback sat in the timer queue. Without this re-check the timeout used
+    // to announce "Nobody found the answer" over a correct answer, or keep a
+    // stopped quiz alive as a ghost loop.
+    if (!session.currentQuestionOpen || groupSessions.get(sk(remoteJid)) !== session) return;
     session.currentQuestionOpen = false;
     await socket.sendMessage(remoteJid, {
       text: '⏱️ *Time\'s up!*\n\n❌ Nobody found the answer.\n✅ The answer was: *' + q.choices.find(c => c.startsWith(q.answer + '.')) + '*'
@@ -130,9 +139,14 @@ async function handleGroupAnswer(socket, context) {
   playerData.answered = true;
 
   if (isCorrect) {
-    await socket.sendMessage(context.chatId, { react: { text: '✅', key: context.raw.key } });
-    session.currentQuestionOpen = false;
+    // Close the question and cancel the timeout SYNCHRONOUSLY, before the
+    // first await. Closing it after the reaction round-trip let the 30s
+    // timeout fire in that window and run the whole "Time's up → ranking →
+    // next question" chain alongside the correct-answer chain — producing a
+    // false "Nobody found the answer" and a duplicated next question.
     if (session.timer) clearTimeout(session.timer);
+    session.currentQuestionOpen = false;
+    await socket.sendMessage(context.chatId, { react: { text: '✅', key: context.raw.key } });
     playerData.score += q.xp;
     playerData.correctAnswers += 1;
     otaku.addXP(context.sender, q.xp);
@@ -160,6 +174,9 @@ async function showIntermediateRanking(socket, session, remoteJid) {
 }
 
 async function nextQuestion(socket, session, remoteJid) {
+  // A session that was stopped/replaced while the previous step was awaiting
+  // must not spawn the next question (the old ghost-quiz loop).
+  if (groupSessions.get(sk(remoteJid)) !== session) return;
   session.currentIndex++;
   if (session.currentIndex >= session.questions.length) { await endGroupQuiz(socket, session, remoteJid); return; }
   await new Promise(r => setTimeout(r, BETWEEN_QUESTIONS));

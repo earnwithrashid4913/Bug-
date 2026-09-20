@@ -2641,25 +2641,35 @@ class TelegramController {
     this.stopSpinner(flow);
     const generation = (flow.spinnerGeneration = (flow.spinnerGeneration || 0) + 1);
     flow.spinnerFrame = 0;
-    const tick = async () => {
+    // True while one frame edit is queued/in-flight. Beats that arrive during
+    // that window are skipped — at most ONE edit is ever pending, so a slow
+    // Telegram response can build no frame backlog (and no burst of edits).
+    let frameEditInFlight = false;
+    const tick = () => {
       if (!this.spinnerIsCurrent(flow, generation)) return;
-      flow.spinnerFrame = (flow.spinnerFrame + 1) % SPINNER_FRAMES.length;
-      const frame = SPINNER_FRAMES[flow.spinnerFrame];
-      try {
-        await this.queueFlowEdit(flow, async () => {
-          // Re-checked inside the queue slot: if the flow moved on to the
-          // code/connected/failed state while this frame was waiting its
-          // turn, the frame is dropped instead of overwriting the new state.
-          if (!this.spinnerIsCurrent(flow, generation)) return;
-          const text = pairingLoadingBox(flow.publicDisplay, frame, flow.stage);
-          flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, text, undefined))?.message_id || flow.messageId;
-        });
-      } catch {
-        // The spinner must never break the pairing flow.
-      }
-      if (!this.spinnerIsCurrent(flow, generation)) return;
+      // The next beat is scheduled from tick START, on a fixed cadence, NOT
+      // after the API round-trip. Scheduling after the edit used to stretch
+      // every frame to SPINNER_INTERVAL_MS + Telegram latency, which is what
+      // made the spinner visibly stutter. Frames may be skipped under load,
+      // but the animation never falls behind or bursts.
       flow.spinnerTimer = setTimeout(tick, SPINNER_INTERVAL_MS);
       flow.spinnerTimer.unref?.();
+      if (frameEditInFlight) return;
+      frameEditInFlight = true;
+      flow.spinnerFrame = (flow.spinnerFrame + 1) % SPINNER_FRAMES.length;
+      const frame = SPINNER_FRAMES[flow.spinnerFrame];
+      void this.queueFlowEdit(flow, async () => {
+        // Re-checked inside the queue slot: if the flow moved on to the
+        // code/connected/failed state while this frame was waiting its
+        // turn, the frame is dropped instead of overwriting the new state.
+        if (!this.spinnerIsCurrent(flow, generation)) return;
+        const text = pairingLoadingBox(flow.publicDisplay, frame, flow.stage);
+        flow.messageId = (await this.editMessage(flow.chatId, flow.messageId, text, undefined))?.message_id || flow.messageId;
+      }).catch(() => {
+        // The spinner must never break the pairing flow.
+      }).finally(() => {
+        frameEditInFlight = false;
+      });
     };
     flow.spinnerTimer = setTimeout(tick, SPINNER_INTERVAL_MS);
     flow.spinnerTimer.unref?.();

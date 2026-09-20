@@ -900,14 +900,35 @@ async function handleSpotifyCommand(socket, context, command) {
   }
 }
 
-async function handleMediaCommand(socket, context, command) {
-  if (!command.text) {
-    await sendResult(socket, context, { text: usageLine('media', '<url>', 'media https://vm.tiktok.com/…'), command: 'media' });
-    return;
-  }
-  await socket.sendMessage(context.chatId, { text: '⏳ *Downloading…*' }, { quoted: context.raw });
-  const url = command.text.trim();
+// ---------------------------------------------------------------------------
+// !media
+//
+// The download lifecycle is tracked with reactions on the invoking message
+// (⏳ while resolving/downloading, ✅ or ❌ when it settles) instead of a
+// one-way "⏳ *Downloading…*" text message. The old stub could never be
+// updated or removed — on any provider hang or failure it stayed in the chat
+// forever, which read as "the download never completes". Reactions are
+// ephemeral state: they always end in a final value and cannot be orphaned.
+// The success output (media + caption + the interactive card) is unchanged.
+// ---------------------------------------------------------------------------
 
+// Identical URLs resolve once: a second !media for the same link while one is
+// already running awaits the same result instead of racing a duplicate
+// download (duplicate provider spam, double bandwidth, interleaved sends).
+const mediaDownloadsInFlight = new Map();
+
+// A provider that answers HTTP 200 with an HTML/JSON error body would
+// otherwise be uploaded to WhatsApp as a broken "video" — request success is
+// not download success. Real media never starts with those markers.
+function assertMediaBuffer(buffer, stageLabel) {
+  if (!buffer?.length) throw new Error('The download source returned an empty file.');
+  const head = buffer.subarray(0, 256).toString('latin1').trimStart().toLowerCase();
+  if (head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('{') || head.startsWith('[')) {
+    throw new Error(`${stageLabel} returned an error page instead of media.`);
+  }
+}
+
+async function resolveMediaDownload(url) {
   // Detect platform for specialised fallback before generic AIO
   const isTikTok = /tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com/i.test(url);
   const isFacebook = /facebook\.com|fb\.com|fb\.watch/i.test(url);
@@ -938,16 +959,15 @@ async function handleMediaCommand(socket, context, command) {
     if (result?.url) {
       const mediaUrl = result.url;
       const buf = await dc.dlBuffer(mediaUrl);
+      assertMediaBuffer(buf, 'The download source');
       const type = buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA8 ? 'video'
         : buf[0] === 0xFF && buf[1] === 0xD8 ? 'image' : 'video';
       const caption = `*DOWNLOAD COMPLETE* ✅\n${result.title ? '📝 ' + result.title + '\n' : ''}\n*Size:* ${(buf.length / 1024).toFixed(1)} KB`;
-      if (type === 'image') {
-        await socket.sendMessage(context.chatId, { image: buf, caption }, { quoted: context.raw });
-      } else {
-        await socket.sendMessage(context.chatId, { video: buf, mimetype: 'video/mp4', caption }, { quoted: context.raw });
-      }
-      await sendResult(socket, context, { text: caption, command: 'media', ctx: { url } });
-      return;
+      return {
+        payload: type === 'image' ? { image: buf } : { video: buf, mimetype: 'video/mp4' },
+        caption,
+        cardText: caption
+      };
     }
   } catch (e) { console.warn('[media] Platform-specific DavidCyril failed:', e?.message); }
 
@@ -957,39 +977,66 @@ async function handleMediaCommand(socket, context, command) {
     const mediaUrl = dc.pickUrl(aioResult?.data || aioResult);
     if (mediaUrl) {
       const buf = await dc.dlBuffer(mediaUrl);
+      assertMediaBuffer(buf, 'The download source');
       const title = dc.pickTitle(aioResult?.data || aioResult);
       const caption = `*DOWNLOAD COMPLETE* ✅\n${title ? '📝 ' + title + '\n' : ''}\n*Size:* ${(buf.length / 1024).toFixed(1)} KB`;
-      await socket.sendMessage(context.chatId, { video: buf, mimetype: 'video/mp4', caption }, { quoted: context.raw });
-      await sendResult(socket, context, { text: caption, command: 'media', ctx: { url } });
-      return;
+      return {
+        payload: { video: buf, mimetype: 'video/mp4' },
+        caption,
+        cardText: caption
+      };
     }
   } catch (e) { console.warn('[media] AIO failed:', e?.message); }
 
   // Final fallback: Cobalt (existing provider)
-  try {
-    const result = await requestCobalt(config.cobaltApiUrl, url);
-    if (!result?.url) throw new Error('The download service returned no file for that link.');
-    const { buffer, type } = await downloadRemoteFile(result.url);
-    const isVideo = type.includes('video');
-    const isAudio = type.includes('audio');
-    const isImage = type.includes('image');
-    const format = (type.split(';')[0] || 'file').trim();
-    const size = `${(buffer.length / 1024).toFixed(1)} KB`;
-    const caption = '*DOWNLOAD COMPLETE* ✅';
-    const details = `${caption}\n\n*Size:* ${size}\n*Format:* ${format}`;
+  const cobalt = await requestCobalt(config.cobaltApiUrl, url);
+  if (!cobalt?.url) throw new Error('The download service returned no file for that link.');
+  const { buffer, type } = await downloadRemoteFile(cobalt.url);
+  assertMediaBuffer(buffer, 'The download service');
+  const isVideo = type.includes('video');
+  const isAudio = type.includes('audio');
+  const isImage = type.includes('image');
+  const format = (type.split(';')[0] || 'file').trim();
+  const size = `${(buffer.length / 1024).toFixed(1)} KB`;
+  const caption = '*DOWNLOAD COMPLETE* ✅';
+  const details = `${caption}\n\n*Size:* ${size}\n*Format:* ${format}`;
 
-    if (isImage) {
-      await socket.sendMessage(context.chatId, { image: buffer, caption }, { quoted: context.raw });
-    } else if (isVideo) {
-      await socket.sendMessage(context.chatId, { video: buffer, mimetype: type, caption }, { quoted: context.raw });
-    } else if (isAudio) {
-      await socket.sendMessage(context.chatId, { audio: buffer, mimetype: type, ptt: false }, { quoted: context.raw });
-    } else {
-      await socket.sendMessage(context.chatId, { document: buffer, mimetype: type, caption, fileName: result.filename || 'download.bin' }, { quoted: context.raw });
-    }
-    await sendResult(socket, context, { text: details, command: 'media', ctx: { url } });
+  const payload = isImage
+    ? { image: buffer }
+    : isVideo
+      ? { video: buffer, mimetype: type }
+      : isAudio
+        ? { audio: buffer, mimetype: type, ptt: false }
+        : { document: buffer, mimetype: type, fileName: cobalt.filename || 'download.bin' };
+  return { payload, caption, cardText: details };
+}
+
+async function handleMediaCommand(socket, context, command) {
+  if (!command.text) {
+    await sendResult(socket, context, { text: usageLine('media', '<url>', 'media https://vm.tiktok.com/…'), command: 'media' });
+    return;
+  }
+  const url = command.text.trim();
+  // Loading reaction instead of the orphaned "Downloading…" text stub.
+  await sourceCommands.react(socket, context, '⏳');
+
+  // Coalesce concurrent downloads of the same URL, then deliver — the media is
+  // only sent once the download has FULLY completed and validated.
+  let download = mediaDownloadsInFlight.get(url);
+  if (!download) {
+    download = resolveMediaDownload(url).finally(() => mediaDownloadsInFlight.delete(url));
+    mediaDownloadsInFlight.set(url, download);
+  }
+  try {
+    const { payload, caption, cardText } = await download;
+    await socket.sendMessage(context.chatId, { ...payload, caption }, { quoted: context.raw });
+    await sendResult(socket, context, { text: cardText, command: 'media', ctx: { url } });
+    await sourceCommands.react(socket, context, '✅');
   } catch (error) {
     console.error('[media] Download failed:', error);
+    // The loading reaction is replaced by the failure state; no stub message
+    // and no stuck ⏳ is left behind.
+    await sourceCommands.react(socket, context, '❌');
     await sendResult(socket, context, {
       text: `*DOWNLOAD FAILED* ❌\n${error.message}`,
       command: 'media',
@@ -1103,13 +1150,18 @@ async function handleSSCommand(socket, context, command) {
   }
   let url = command.text.trim();
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  await socket.sendMessage(context.chatId, { text: 'Capturing screenshot…' }, { quoted: context.raw });
+  // Loading reaction instead of the one-way "Capturing screenshot…" text: the
+  // old stub could not be updated or removed, so a slow/failed capture left a
+  // permanent "Capturing…" message in the chat. Reactions always settle.
+  await sourceCommands.react(socket, context, '📸');
   try {
     const { buffer, mimetype } = await screenshotUrl(url);
     if (!buffer?.length) throw new Error('The screenshot service returned no image.');
     await socket.sendMessage(context.chatId, { image: buffer, mimetype, caption: '*SCREENSHOT* 📸' }, { quoted: context.raw });
     await sendResult(socket, context, { text: `*SCREENSHOT READY* 📸\n➜ ${url}`, command: 'ss' });
+    await sourceCommands.react(socket, context, '✅');
   } catch (error) {
+    await sourceCommands.react(socket, context, '❌');
     await sendResult(socket, context, { text: `*SCREENSHOT FAILED* ❌\n${error.message}`, command: 'ss' });
   }
 }

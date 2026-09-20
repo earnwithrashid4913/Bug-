@@ -2,18 +2,42 @@
 
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
+// A stalled body must never hang a command forever: if no bytes arrive for
+// this long during a downloadRemoteFile() body read, the stream is aborted.
+const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  // The deadline covers the WHOLE exchange (headers + response body), not just
+  // the head: stopping the clock once the headers arrived used to leave every
+  // `response.text()`/body read unbounded, which is exactly how a command could
+  // hang forever on a provider that trickled or stalled mid-response. The
+  // abort carries a human-readable reason — undici rejections during the body
+  // read surface exactly this message.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutMessage = `Request timed out after ${Math.round(timeoutMs / 1000)}s.`;
+  const timer = setTimeout(() => controller.abort(new Error(timeoutMessage)), timeoutMs);
+  timer.unref?.();
+  // A caller-supplied signal is honoured too: either signal aborts the request.
+  const upstream = options.signal;
+  const onUpstreamAbort = () => controller.abort(upstream.reason);
+  if (upstream) {
+    if (upstream.aborted) controller.abort(upstream.reason);
+    else upstream.addEventListener('abort', onUpstreamAbort, { once: true });
+  }
   try {
     return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    // Header-phase timeout: normalise to the same readable sentence the
+    // body-phase abort already carries. A caller-supplied signal that fired
+    // keeps its own reason.
+    if (error?.name === 'AbortError' && !upstream?.aborted) throw new Error(timeoutMessage);
+    throw error;
   } finally {
-    clearTimeout(timer);
+    if (upstream) upstream.removeEventListener('abort', onUpstreamAbort);
   }
 }
 
-async function readLimitedBuffer(response, maxBytes = MAX_DOWNLOAD_BYTES) {
+async function readLimitedBuffer(response, maxBytes = MAX_DOWNLOAD_BYTES, onProgress) {
   const total = Number(response.headers.get('content-length') || 0);
   if (total > maxBytes) throw new Error(`File is too large (${Math.ceil(total / 1024 / 1024)} MB). Limit is ${Math.floor(maxBytes / 1024 / 1024)} MB.`);
 
@@ -23,6 +47,7 @@ async function readLimitedBuffer(response, maxBytes = MAX_DOWNLOAD_BYTES) {
     size += chunk.length;
     if (size > maxBytes) throw new Error('Download exceeded the safe size limit.');
     chunks.push(Buffer.from(chunk));
+    onProgress?.();
   }
   return Buffer.concat(chunks, size);
 }
@@ -118,19 +143,55 @@ async function requestCobalt(apiBase, url, { audio = false } = {}) {
 }
 
 async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES) {
-  const response = await fetchWithTimeout(url);
-  if (!response.ok) throw new Error(`Download failed (${response.status}).`);
-  const buffer = await readLimitedBuffer(response, maxBytes);
-  // A zero-byte or truncated body would otherwise be sent to WhatsApp as an
-  // unopenable file. Fail here so the user gets a message instead of a
-  // corrupt attachment.
-  if (buffer.length === 0) throw new Error('The download service returned an empty file.');
-  const declared = Number(response.headers.get('content-length') || 0);
-  if (declared > 0 && buffer.length < declared) {
-    throw new Error('The download was incomplete. Please try again.');
+  // The request above is bounded, but the place downloads actually HANG is the
+  // body read (a stalled CDN/tunnel sends headers and then goes quiet). This
+  // caller owns the abort controller and re-arms an idle deadline on every
+  // chunk, so a stalled stream is cancelled after DOWNLOAD_IDLE_TIMEOUT_MS and
+  // surfaces as a retryable failure instead of a command stuck mid-air.
+  const controller = new AbortController();
+  let stalled = false;
+  let idleTimer;
+  const armIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, DOWNLOAD_IDLE_TIMEOUT_MS);
+    idleTimer.unref?.();
+  };
+  let response;
+  armIdle();
+  try {
+    response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`Download failed (${response.status}).`);
+    armIdle();
+    const buffer = await readLimitedBuffer(response, maxBytes, armIdle);
+    // A zero-byte or truncated body would otherwise be sent to WhatsApp as an
+    // unopenable file. Fail here so the user gets a message instead of a
+    // corrupt attachment.
+    if (buffer.length === 0) throw new Error('The download service returned an empty file.');
+    const declared = Number(response.headers.get('content-length') || 0);
+    if (declared > 0 && buffer.length < declared) {
+      throw new Error('The download was incomplete. Please try again.');
+    }
+    const type = response.headers.get('content-type') || 'application/octet-stream';
+    return { buffer, type };
+  } catch (error) {
+    if (stalled) throw new Error('The download stalled and was stopped. Please try again.');
+    // undici reports a connection dropped before the body was complete as a
+    // raw "terminated"/premature-close error — surface it as the incomplete
+    // download it actually is instead of leaking internal wording.
+    if (error?.message === 'terminated' || error?.code === 'ERR_STREAM_PREMATURE_CLOSE') {
+      throw new Error('The download was cut off before it completed. Please try again.');
+    }
+    if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') throw new Error('The download timed out. Please try again.');
+    throw error;
+  } finally {
+    clearTimeout(idleTimer);
+    // Never leak the socket when the body was not fully consumed (failed status
+    // check, size-limit abort, truncation error, …).
+    if (response && !response.bodyUsed) await response.body?.cancel().catch(() => {});
   }
-  const type = response.headers.get('content-type') || 'application/octet-stream';
-  return { buffer, type };
 }
 
 async function uploadToCatbox(uploadApiUrl, buffer, { filename = 'upload.bin', mimetype = 'application/octet-stream' }) {
