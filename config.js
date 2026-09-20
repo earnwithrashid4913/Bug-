@@ -125,6 +125,36 @@ module.exports = {
     uploadApiUrl: 'https://catbox.moe/user/api.php'
   },
 
+  // ============================ HIDDEN VIDEO ENGINE SETTINGS ================
+  // Production fallback video engine (!hvideo / !hv / !hvid, the hidden
+  // category advertised through !h). Queries alternative video platforms in
+  // order, extracts stream URLs from irregular vendor JSON, and enforces
+  // session + size limits so abandoned selection lists or oversized files can
+  // never take the live bot down.
+  hiddenVideo: {
+    // false disables the whole engine. OPTIONAL.
+    enabled: true,
+    // Secure API matrix, tried in order (first success wins). `name` is the
+    // explicit keyword route (!hvideo <name>), `supportSearch: false` means
+    // the vendor only serves flat/direct endpoints and is skipped by generic
+    // searches. REQUIRED.
+    apis: [
+      { name: 'nexsus', url: 'https://example.com', supportSearch: true },
+      { name: 'new', url: 'https://example.com', supportSearch: true },
+      { name: 'david', url: 'https://davidcyril.name.ng', supportSearch: false }
+    ],
+    // Auto-expire a pending selection list after this much inactivity (RAM
+    // leak protection). OPTIONAL. Default 120000 (2 minutes).
+    sessionTimeoutMs: 120000,
+    // Refuse to buffer anything heavier than this; the user gets an alert
+    // with the direct URL instead of a crashed bot. OPTIONAL. Default 50.
+    maxDownloadSizeMb: 50,
+    // Per-request timeout for the vendor APIs. OPTIONAL. Default 6500.
+    requestTimeoutMs: 6500,
+    // Hard cap on results shown per search (anti-spam). OPTIONAL. Default 5.
+    maxResults: 5
+  },
+
   // ======================================== DATABASE SETTINGS ===============
   database: {
     // Persistent data folder. REQUIRED. On Pterodactyl, use a persistent path.

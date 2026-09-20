@@ -202,7 +202,8 @@ const STATIC_COMMANDS = Object.freeze([
   command('movie', 'downloader', 'Search for a movie across multiple sources.', { aliases: ['film', 'moviesearch', 'mv'], usage: '<title>' }),
   command('movielatest', 'downloader', 'Get latest movies from multiple sources.', { aliases: ['latestmovies', 'newmovies'] }),
   command('series', 'downloader', 'Search for a TV series.', { aliases: ['tv', 'tvseries', 'srs'], usage: '<title>' }),
-  command('serieslatest', 'downloader', 'Get latest TV series.', { aliases: ['latestseries', 'newseries'] })
+  command('serieslatest', 'downloader', 'Get latest TV series.', { aliases: ['latestseries', 'newseries'] }),
+  command('hvideo', 'downloader', 'Hidden video engine: search alternative platforms, then reply with the option number to stream.', { aliases: ['hv', 'hvid'], usage: '<query|number>' })
 ]);
 
 // Live command list. The array identity is stable (menu.js consumers destructure

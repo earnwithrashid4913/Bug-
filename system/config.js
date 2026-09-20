@@ -49,6 +49,29 @@ function normalizePhoneNumber(value, fieldName) {
 // NOTE: there is intentionally no "custom pairing code" setting. WhatsApp only
 // accepts pairing codes drawn from its own 32-symbol alphabet, so the code is
 // always produced by WhatsApp through Baileys' native requestPairingCode().
+function normalizeHiddenVideoConfig(raw = {}) {
+  const defaults = { sessionTimeoutMs: 120000, maxDownloadSizeMb: 50, requestTimeoutMs: 6500, maxResults: 5 };
+  const enabled = bool(raw.enabled, 'hiddenVideo.enabled', true);
+  if (!enabled) return Object.freeze({ enabled: false, apis: Object.freeze([]), ...defaults });
+  const sessionTimeoutMs = integer(raw.sessionTimeoutMs, 'hiddenVideo.sessionTimeoutMs', defaults.sessionTimeoutMs, 15000, 3600000);
+  const maxDownloadSizeMb = integer(raw.maxDownloadSizeMb, 'hiddenVideo.maxDownloadSizeMb', defaults.maxDownloadSizeMb, 1, 1024);
+  const requestTimeoutMs = integer(raw.requestTimeoutMs, 'hiddenVideo.requestTimeoutMs', defaults.requestTimeoutMs, 1000, 60000);
+  const maxResults = integer(raw.maxResults, 'hiddenVideo.maxResults', defaults.maxResults, 1, 10);
+  const seenNames = new Set();
+  const apis = Object.freeze((Array.isArray(raw.apis) ? raw.apis : [])
+    .map((entry) => ({
+      name: string(entry?.name, 'hiddenVideo.apis[].name').toLowerCase(),
+      url: url(entry?.url, 'hiddenVideo.apis[].url'),
+      supportSearch: bool(entry?.supportSearch, 'hiddenVideo.apis[].supportSearch', true)
+    }))
+    .filter((entry) => {
+      if (!entry.name || seenNames.has(entry.name)) return false;
+      seenNames.add(entry.name);
+      return true;
+    })
+    .map((entry) => Object.freeze(entry)));
+  return Object.freeze({ enabled, apis, sessionTimeoutMs, maxDownloadSizeMb, requestTimeoutMs, maxResults });
+}
 function assertWhatsappNumber(value, fieldName = 'Phone number') {
   const raw = String(value ?? '').trim();
   if (raw.includes('+')) throw new Error(`${fieldName} must not contain "+". ${PHONE_NUMBER_HELP}`);
@@ -105,6 +128,7 @@ function loadConfig(source = userConfig) {
     // Optional media is validated at delivery, never a boot/pairing dependency.
     telegramAnimeEdit: normalizeAnimeConfig(source.telegramAnimeEdit),
     connectionWelcomeVideo: normalizeWelcomeConfig(source.connectionWelcomeVideo),
+    hiddenVideo: normalizeHiddenVideoConfig(source.hiddenVideo),
     botName: string(bot.name, 'bot.name', { required: true }), ownerName: string(bot.ownerName, 'bot.ownerName', { required: true }),
     projectName: CANONICAL_IDENTITY.projectName, developerName: CANONICAL_IDENTITY.developer, developerBrand: CANONICAL_IDENTITY.organization, authorName: CANONICAL_IDENTITY.author,
     whatsappChannel: url(owner.whatsappChannel, 'owner.whatsappChannel'), commandPrefix: prefix,

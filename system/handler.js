@@ -56,6 +56,9 @@ const {
   handleTeraboxCommand,
 } = require('../commands/downloader-extended');
 const dc = require('../commands/davidcyril-api');
+// Hidden video engine (!hvideo, hidden category): fault-tolerant search across
+// alternative video platforms with session expiry and oversized-file guards.
+const hiddenVideo = require('../commands/hidden-video');
 // Universal image generation/effect providers (same DavidCyril client as the
 // downloaders and the movie/series systems).
 const imageGeneration = require('../commands/image-generation');
@@ -207,6 +210,10 @@ async function handleHiddenCommand(socket, context) {
     '  • Quiz system',
     '  • RPG Economy',
     '  • Anime database',
+    '',
+    '  🎬 *Hidden Video Engine:*',
+    `  • ${p}hvideo <query> — search & stream`,
+    '  • Reply with the option number',
     '',
     '  🛡 *Security:*',
     '  • Protected identity',
@@ -1709,6 +1716,10 @@ async function handleMessage(socket, rawMessage) {
       if (quizHandled) return;
     }
 
+    // Hidden video engine: a bare number belongs to an active !hvideo
+    // selection list before it can open a menu category.
+    if (/^\d{1,2}$/.test(context.text.trim()) && await hiddenVideo.handleHvideoSelectionReply(socket, context)) return;
+
     // Numeric reply for menu category selection
     if (/^\d+$/.test(context.text.trim()) && context.text.trim().length <= 2) {
       // Same access-filtered order the root menu printed, so reply "3" always
@@ -1883,6 +1894,13 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'allinone':
     case 'alldownload':
       await handleAioCommand(socket, context, command.text, getCommandPrefix());
+      break;
+
+    // --- HIDDEN VIDEO ENGINE (hidden category, advertised via !h) ---
+    case 'hvideo':
+    case 'hv':
+    case 'hvid':
+      await hiddenVideo.handleHvideoCommand(socket, context, command);
       break;
 
     // --- MEDIA ---
