@@ -71,9 +71,12 @@ module.exports = {
     // Public pairing: true lets ANY Telegram user pair their own WhatsApp
     // number. Every user only ever manages their own sessions. OPTIONAL;
     // false keeps controller-only access (telegram.ownerIds + /addowner).
-    publicMode: false,
-    // true restricts pairing to premium Telegram users (granted with
-    // /addprem by a bootstrap owner). OPTIONAL. Ignored for bootstrap owners.
+    // Keep this ON by default so public pairing is not silently closed after
+    // a restart when no persisted override exists.
+    publicMode: true,
+    // false keeps premium users eligible while also leaving public pairing
+    // open. Set true only when the owner intentionally wants premium-only
+    // pairing. Ignored for bootstrap owners.
     premiumOnly: false,
     // Communities a user must join BEFORE they can pair or use protected
     // commands. VERIFICATION REQUIRES ALL OF THEM — joining just one is not

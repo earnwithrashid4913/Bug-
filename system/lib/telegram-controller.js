@@ -36,6 +36,13 @@ const POLL_TIMEOUT_SECONDS = 25;
 // its own long-poll window so it is never aborted mid-poll.
 const API_TIMEOUT_MS = 15_000;
 const POLL_REQUEST_TIMEOUT_MS = (POLL_TIMEOUT_SECONDS * 1_000) + 10_000;
+// Poll failures are expected on long-running hosts (DNS resets, temporary
+// Telegram edge outages, proxy reconnects). Retry them slowly and with jitter
+// so a fleet of restarts cannot hammer getUpdates at the same time.
+const POLL_RETRY_BASE_DELAY_MS = 1_000;
+const POLL_RETRY_MAX_DELAY_MS = 5 * 60_000;
+const POLL_RETRY_JITTER = 0.2;
+const PERMANENT_POLL_HTTP_STATUSES = new Set([401, 403]);
 const SENSITIVE_COOLDOWN_MS = 20_000;
 const SENSITIVE_LOCK_TTL_MS = 2 * 60_000;
 const PENDING_NUMBER_TTL_MS = 5 * 60_000;
@@ -1778,15 +1785,21 @@ function accountMarkup() {
   ]] };
 }
 
-function adminPanelMarkup() {
-  return { inline_keyboard: [
+function adminPanelMarkup({ configuration = false } = {}) {
+  const rows = [
     [{ text: '👤 Users', callback_data: 'admin:users' }, { text: '📱 Sessions', callback_data: 'admin:sessions' }],
     [{ text: '⭐ Premium', callback_data: 'admin:premium' }, { text: '👑 VIP', callback_data: 'admin:vip' }],
     [{ text: '🚫 Block', callback_data: 'admin:block' }, { text: '📊 Usage', callback_data: 'admin:usage' }],
     [{ text: '🔎 Lookup', callback_data: 'admin:lookup' }, { text: '🛡 Access', callback_data: 'admin:access' }],
-    [{ text: '⚙️ System', callback_data: 'admin:system' }],
-    [{ text: '🏠 Home', callback_data: 'home' }]
-  ] };
+    [{ text: '⚙️ System', callback_data: 'admin:system' }]
+  ];
+  // Pairing policy remains bootstrap-owner controlled. The button appears in
+  // the Admin panel for the owner (where operational controls belong) rather
+  // than being buried in a separate screen; regular controllers never receive
+  // a control they are not authorized to change.
+  if (configuration) rows.push([{ text: '🔐 Pairing ON/OFF', callback_data: 'admin:config' }]);
+  rows.push([{ text: '🏠 Home', callback_data: 'home' }]);
+  return { inline_keyboard: rows };
 }
 
 function ownerPanelBox({ controllers = 0, premiumUsers = 0, totalUsers = 0, blockedUsers = 0, sessions = 0 }) {
@@ -1850,12 +1863,65 @@ function chatIsPrivate(chat) {
   return !chat?.type || chat.type === 'private';
 }
 
+function pollErrorKind(error) {
+  const status = Number(error?.httpStatus || error?.telegramErrorCode);
+  if (status === 401) return 'AUTH';
+  if (status === 403) return 'FORBIDDEN';
+  if (status === 409) return 'CONFLICT';
+  if (status === 429) return 'RATE_LIMIT';
+  if (status >= 500) return 'SERVER';
+  if (status === 408) return 'TIMEOUT';
+  return 'NETWORK';
+}
+
+function isPermanentPollError(error) {
+  return PERMANENT_POLL_HTTP_STATUSES.has(Number(error?.httpStatus || error?.telegramErrorCode));
+}
+
+function pollRetryDelay(attempt, random = Math.random) {
+  const cappedAttempt = Math.max(0, Math.min(Number(attempt) - 1, 8));
+  const base = Math.min(POLL_RETRY_BASE_DELAY_MS * 2 ** cappedAttempt, POLL_RETRY_MAX_DELAY_MS);
+  const draw = Number(random());
+  const unit = Math.max(0, Math.min(1, Number.isFinite(draw) ? draw : 0.5));
+  const jitter = 1 + ((unit * 2 - 1) * POLL_RETRY_JITTER);
+  return Math.max(250, Math.round(base * jitter));
+}
+
+function waitForPollRetry(delayMs, signal) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    // Keep the retry alive: when Telegram is the only configured transport,
+    // unref'ing this timer lets Node exit during a temporary outage.
+    const timer = setTimeout(finish, delayMs);
+    if (signal) {
+      if (signal.aborted) finish();
+      else signal.addEventListener('abort', finish, { once: true });
+    }
+  });
+}
+
+function groupStartMarkup(username) {
+  const safeUsername = String(username || '').replace(/^@/, '').trim();
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(safeUsername)) return undefined;
+  return { inline_keyboard: [[{
+    text: '🚀 START & PAIR WHATSAPP',
+    url: `https://t.me/${safeUsername}?start=pair`
+  }]] };
+}
+
 class TelegramController {
   constructor({
     token, owners = [], controllerStore, pairing, startImage = '', connectedImage = '',
     publicMode = false, premiumOnly = false, requiredChannels = [], sessionLimit = 5, codeSource = '',
     identity = {}, commandPrefix = '!', animeEdit = {},
-    fetchImpl = globalThis.fetch, log = console, activityLogger
+    fetchImpl = globalThis.fetch, log = console, activityLogger, random = Math.random
   }) {
     this.token = token;
     this.bootstrapOwners = new Set(owners.map(normalizeTelegramId));
@@ -1893,6 +1959,7 @@ class TelegramController {
     this.commandPrefix = String(commandPrefix || '!').slice(0, 4);
     this.fetch = fetchImpl;
     this.log = log;
+    this.random = typeof random === 'function' ? random : Math.random;
     this.animeLibrary = new AnimeLibraryClient(animeEdit, { fetchImpl, log });
     this.animeNotifiedSessions = new Set();
     // Optional owner-activity hook. index.js wires this to the bootstrap owner
@@ -1903,6 +1970,8 @@ class TelegramController {
     this.startedAt = undefined;
     this.bot = undefined;
     this.pollPromise = undefined;
+    this.pollAbortController = undefined;
+    this.pollRetryAttempts = 0;
     this.settingsLoaded = false;
     this.sensitiveRequests = new Map();
     this.sensitiveLocks = new Map();
@@ -1953,25 +2022,39 @@ class TelegramController {
 
   async loadSettings() {
     if (this.settingsLoaded) return;
-    this.settingsLoaded = true;
-    if (typeof this.controllerStore?.getSettings !== 'function') return;
+    if (typeof this.controllerStore?.getSettings !== 'function') {
+      this.settingsLoaded = true;
+      return;
+    }
     try {
       const persisted = await this.controllerStore.getSettings();
+      // A persisted ON setting is authoritative over config.js. Do not mark
+      // settings loaded before this read succeeds: a temporary disk error must
+      // never quietly reset public/premium pairing to the bootstrap defaults.
       if (typeof persisted?.publicMode === 'boolean') this.publicMode = persisted.publicMode;
       if (typeof persisted?.premiumOnly === 'boolean') this.premiumOnly = persisted.premiumOnly;
+      this.settingsLoaded = true;
     } catch (error) {
-      this.log.warn?.(`[telegram] Could not load persisted settings: ${error.message}`);
+      this.log.warn?.(`[telegram] Could not load persisted pairing settings; keeping the controller offline until they can be read: ${error.message}`);
+      throw error;
     }
   }
 
   async persistSetting(key, value) {
-    this[key] = Boolean(value);
-    if (typeof this.controllerStore?.setSetting !== 'function') return;
-    try {
-      await this.controllerStore.setSetting(key, Boolean(value));
-    } catch (error) {
-      this.log.warn?.(`[telegram] Could not persist the ${key} setting: ${error.message}`);
+    if (!['publicMode', 'premiumOnly'].includes(key)) throw new Error('Unknown Telegram pairing setting.');
+    const next = Boolean(value);
+    // Commit to disk first. Updating RAM first made the UI claim a setting was
+    // ON even when its write failed, and it reverted on the next restart.
+    if (typeof this.controllerStore?.setSetting === 'function') {
+      try {
+        await this.controllerStore.setSetting(key, next);
+      } catch (error) {
+        this.log.warn?.(`[telegram] Could not persist the ${key} setting; keeping its previous value: ${error.message}`);
+        throw error;
+      }
     }
+    this[key] = next;
+    return next;
   }
 
   // Owner comparison is type-safe: Telegram delivers ctx.from.id as a NUMBER
@@ -2370,32 +2453,58 @@ class TelegramController {
 
   async api(method, payload) {
     const timeoutMs = method === 'getUpdates' ? POLL_REQUEST_TIMEOUT_MS : API_TIMEOUT_MS;
-    let response;
+    // `stop()` must interrupt an in-flight long poll. Otherwise shutdown can
+    // leave a 25-second getUpdates request alive and a replacement controller
+    // can briefly poll in parallel. Keep the deadline active through JSON body
+    // parsing too, not only until response headers arrive.
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    timer.unref?.();
+    const stopSignal = method === 'getUpdates' ? this.pollAbortController?.signal : undefined;
+    const onStop = () => controller.abort();
+    if (stopSignal) {
+      if (stopSignal.aborted) controller.abort();
+      else stopSignal.addEventListener('abort', onStop, { once: true });
+    }
     try {
-      response = await this.fetch(`${TELEGRAM_API}/bot${this.token}/${method}`, {
+      const response = await this.fetch(`${TELEGRAM_API}/bot${this.token}/${method}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(timeoutMs)
+        signal: controller.signal
       });
+      let result;
+      try {
+        result = await response.json();
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        result = {};
+      }
+      if (!response.ok || !result?.ok) {
+        const error = new Error(result?.description || `Telegram API request failed (${response.status}).`);
+        error.httpStatus = response.status;
+        error.telegramErrorCode = result?.error_code;
+        throw error;
+      }
+      return result.result;
     } catch (error) {
-      // A timed-out or aborted request is a transient network condition, not a
-      // Telegram rejection. Normalise it to the same shape as an HTTP 408 so
-      // every existing retry/backoff path classifies it as transient instead of
-      // surfacing an opaque DOMException to the user.
-      if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+      if (stopSignal?.aborted && !timedOut) {
+        throw Object.assign(new Error('Telegram polling stopped.'), { code: 'POLL_STOPPED' });
+      }
+      // A timed-out/aborted request is transient network state, not a Telegram
+      // rejection. The poll loop applies bounded exponential recovery.
+      if (timedOut || error?.name === 'TimeoutError' || error?.name === 'AbortError') {
         const timeout = new Error(`Telegram API request timed out after ${Math.round(timeoutMs / 1000)}s (${method}).`);
         timeout.httpStatus = 408;
         throw timeout;
       }
       throw error;
+    } finally {
+      clearTimeout(timer);
+      stopSignal?.removeEventListener('abort', onStop);
     }
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.ok) {
-      const error = new Error(result.description || `Telegram API request failed (${response.status}).`);
-      error.httpStatus = response.status;
-      error.telegramErrorCode = result.error_code;
-      throw error;
-    }
-    return result.result;
   }
 
   // Live Telegram membership lookup. A bounded retry absorbs transient failures
@@ -3262,7 +3371,7 @@ class TelegramController {
     }
     const { sessions } = await this.sessionStats({ ownerId: senderId });
     const text = adminPanelBox({ controllers, premiumUsers, totalUsers, blockedUsers, sessions });
-    return this.present(chatId, messageId, text, adminPanelMarkup());
+    return this.present(chatId, messageId, text, adminPanelMarkup({ configuration: access === 'bootstrap' }));
   }
 
   async sendUserManagementView(chatId, senderId, { messageId } = {}) {
@@ -3423,11 +3532,44 @@ class TelegramController {
 
   // ------------------------------ update routing --------------------------
 
+  async handleGroupJoin(message) {
+    const chat = message?.chat;
+    if (!chat || !['group', 'supergroup'].includes(chat.type)) return;
+    const members = (Array.isArray(message.new_chat_members) ? message.new_chat_members : [])
+      .filter((member) => member?.id != null && String(member.id) !== String(this.bot?.id ?? ''));
+    if (!members.length) return;
+
+    const count = members.length;
+    const firstName = String(members[0]?.first_name || members[0]?.username || 'there').replace(/[\r\n]/g, ' ').slice(0, 60);
+    const who = count === 1 ? firstName : `${count} new members`;
+    const text = [
+      `👋 Welcome, ${who}!`,
+      '',
+      'To pair your own WhatsApp session, tap START & PAIR below.',
+      'It opens this bot in a private chat; press Start there, then choose Pair WhatsApp.'
+    ].join('\n');
+    const markup = groupStartMarkup(this.bot?.username);
+    try {
+      await this.api('sendMessage', {
+        chat_id: chat.id,
+        text: escapeTelegramHtml(text),
+        parse_mode: 'HTML',
+        ...(markup ? { reply_markup: markup } : {}),
+        ...(message.message_id ? { reply_parameters: { message_id: message.message_id } } : {})
+      });
+    } catch (error) {
+      // A group may prohibit bot messages or the service message may vanish.
+      // This welcome is optional and must never stop the polling loop.
+      this.log.warn?.(`[telegram] Could not send the group start prompt: ${error?.message || error}`);
+    }
+  }
+
   async handleUpdate(update) {
     if (update?.callback_query) return this.handleCallback(update.callback_query);
     this.prunePendingState();
-    let command = commandFromUpdate(update);
     const message = update?.message;
+    if (message?.new_chat_members?.length) await this.handleGroupJoin(message);
+    let command = commandFromUpdate(update);
     if (!command && message?.text?.trim() && message.from?.id != null && message.chat?.id != null) {
       const pending = this.pendingPairNumbers.get(String(message.from.id));
       if (pending && pending.expiresAt > Date.now() && String(pending.chatId) === String(message.chat.id)) {
@@ -3975,6 +4117,10 @@ class TelegramController {
 
       if (scope === 'admin') {
         if (!admin) throw Object.assign(new Error('Admin only'), { code: 'DENIED' });
+        if (verb === 'config') {
+          if (!isOwner) throw Object.assign(new Error('Only bootstrap owners can change pairing policy.'), { code: 'DENIED' });
+          return await this.sendSettingsView(chatId, senderId, { messageId, admin: true });
+        }
         if (verb === 'users') return await this.sendUserManagementView(chatId, senderId, { messageId });
         if (verb === 'sessions') return await this.sendAllSessionsView(chatId, senderId, { messageId, publicChat });
         if (verb === 'premium') {
@@ -4308,20 +4454,38 @@ class TelegramController {
     await this.loadSettings();
     this.running = true;
     this.startedAt = Date.now();
+    this.pollRetryAttempts = 0;
+    const pollAbortController = new AbortController();
+    this.pollAbortController = pollAbortController;
     this.pollPromise = (async () => {
       while (this.running) {
         try {
           await this.pollOnce();
+          this.pollRetryAttempts = 0;
           // Telegram long polling normally blocks for up to 25 seconds. Yield
           // here as well so an immediately returning proxy/API cannot spin a
           // microtask loop and starve startup, shutdown, or other bot work.
           await new Promise((resolve) => setImmediate(resolve));
         } catch (error) {
-          this.log.error?.(`[telegram] Poll failed: ${error.message}`);
-          await new Promise((resolve) => setTimeout(resolve, 5_000));
+          if (!this.running || error?.code === 'POLL_STOPPED') break;
+          const kind = pollErrorKind(error);
+          if (isPermanentPollError(error)) {
+            // Invalid credentials/forbidden bots cannot heal through retries.
+            // Stop cleanly and leave an explicit diagnostic rather than hiding
+            // a configuration error in an endless "fetch failed" loop.
+            this.running = false;
+            this.log.error?.(`[telegram] Polling stopped (${kind}, HTTP ${error.httpStatus}). Check the Telegram bot token and bot access, then restart the service.`);
+            break;
+          }
+          this.pollRetryAttempts += 1;
+          const delay = pollRetryDelay(this.pollRetryAttempts, this.random);
+          this.log.warn?.(`[telegram] Poll failed (${kind}); recovery retry ${this.pollRetryAttempts} in ${Math.ceil(delay / 1000)}s: ${error?.message || error}`);
+          await waitForPollRetry(delay, pollAbortController.signal);
         }
       }
-    })();
+    })().finally(() => {
+      if (this.pollAbortController === pollAbortController) this.pollAbortController = undefined;
+    });
     const username = this.bot?.username ? `@${this.bot.username}` : 'the configured Telegram bot';
     this.log.info?.(`[telegram] Controller verified as ${username}; long polling started for ${this.bootstrapOwners.size} bootstrap owner(s).`);
     // The intro describes the Telegram-side subsystems only. It never claims
@@ -4332,6 +4496,7 @@ class TelegramController {
 
   stop() {
     this.running = false;
+    this.pollAbortController?.abort();
     // Stop every active spinner so no orphaned timer keeps editing a message
     // after the controller is shut down.
     for (const flow of this.pairingFlows.values()) this.stopSpinner(flow);
@@ -4357,6 +4522,9 @@ module.exports = {
   API_TIMEOUT_MS,
   POLL_REQUEST_TIMEOUT_MS,
   POLL_TIMEOUT_SECONDS,
+  POLL_RETRY_BASE_DELAY_MS,
+  POLL_RETRY_MAX_DELAY_MS,
+  POLL_RETRY_JITTER,
   SPINNER_FRAMES,
   SESSION_STATE_BADGES,
   TIER_LABELS,
@@ -4423,6 +4591,8 @@ module.exports = {
   groupBusyBox,
   groupCooldownBox,
   groupDuplicateBox,
+  groupStartMarkup,
+  isPermanentPollError,
   menuCategoryBox,
   menuCategoryMarkup,
   premiumAccessBox,
@@ -4434,6 +4604,8 @@ module.exports = {
   GROUP_PAIRING_COOLDOWN_MS,
   MAX_GROUP_PAIRING_FLOWS,
   premiumRequiredBox,
+  pollErrorKind,
+  pollRetryDelay,
   pairingDisabledBox,
   sessionsBox,
   sessionsMarkup,

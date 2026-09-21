@@ -4,17 +4,52 @@ const axios = require('axios');
 const otaku = require('../system/lib/otaku');
 
 const JIKAN_API = 'https://api.jikan.moe/v4';
-const cache = new Map();
+// Jikan is rate-limited, but a timer per search query was also a memory/handle
+// leak under group traffic. Keep a small TTL/LRU cache and coalesce concurrent
+// requests for the same resource without creating thousands of 5-minute timers.
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 100;
+const cache = new Map(); // key -> { value, expiresAt }
+const inFlight = new Map();
+
+function cachedJikanValue(key, now = Date.now()) {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= now) {
+    cache.delete(key);
+    return undefined;
+  }
+  // Map insertion order is our tiny LRU implementation.
+  cache.delete(key);
+  cache.set(key, entry);
+  return entry.value;
+}
+
+function cacheJikanValue(key, value, now = Date.now()) {
+  cache.delete(key);
+  cache.set(key, { value, expiresAt: now + CACHE_TTL_MS });
+  while (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
+}
 
 async function jikanGet(endpoint, params) {
   params = params || {};
   const key = endpoint + JSON.stringify(params);
-  if (cache.has(key)) return cache.get(key);
-  await new Promise(r => setTimeout(r, 500));
-  const res = await axios.get(JIKAN_API + endpoint, { params, timeout: 10000 });
-  cache.set(key, res.data);
-  setTimeout(() => cache.delete(key), 5 * 60 * 1000);
-  return res.data;
+  const cached = cachedJikanValue(key);
+  if (cached !== undefined) return cached;
+  if (inFlight.has(key)) return inFlight.get(key);
+
+  const request = (async () => {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const res = await axios.get(JIKAN_API + endpoint, { params, timeout: 10000 });
+    cacheJikanValue(key, res.data);
+    return res.data;
+  })();
+  inFlight.set(key, request);
+  try {
+    return await request;
+  } finally {
+    if (inFlight.get(key) === request) inFlight.delete(key);
+  }
 }
 
 function formatAnime(anime) {
@@ -350,6 +385,9 @@ async function handleQuoteCommand(socket, context) {
 }
 
 module.exports = {
+  _jikanCache: cache,
+  _jikanInFlight: inFlight,
+  _jikanGet: jikanGet,
   handleAnimeCommand,
   handleMangaCommand,
   handleCharacterCommand,

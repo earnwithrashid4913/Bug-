@@ -31,3 +31,9 @@ test('documentation and deployment files point users to config.js', () => {
   assert.doesNotMatch(JSON.stringify(metadata), /gemini/i);
   assert.deepEqual(metadata.majorCapabilities, []);
 });
+
+test('default Telegram pairing policy keeps public and premium users eligible', () => {
+  const config = require('../config');
+  assert.equal(config.telegram.publicMode, true, 'public pairing must stay open by default');
+  assert.equal(config.telegram.premiumOnly, false, 'premium users remain eligible without closing public pairing');
+});

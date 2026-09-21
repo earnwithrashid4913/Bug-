@@ -1325,7 +1325,12 @@ class TelegramPairingManager {
     for (const session of [...this.sessions.values()]) {
       if (!session.registered && session.codeExpiresAt && session.codeExpiresAt < Date.now()) {
         session.setStatus(STATUS.EXPIRED);
-        void this.cleanupSession(session, { deleteCreds: true });
+        // The sweeper runs outside a request/response call stack. Consume and
+        // log cleanup failures here so a filesystem/socket error cannot become
+        // an unhandled rejection that destabilizes the long-running worker.
+        void this.cleanupSession(session, { deleteCreds: true }).catch((error) => {
+          this.log.error?.(`[telegram-pairing] Stale-session cleanup failed for ${sessionLogLabel(session)}: ${error.message}`);
+        });
       }
     }
   }

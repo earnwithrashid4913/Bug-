@@ -149,3 +149,40 @@ test('status-save persists downloaded bytes and confirms only after delivery to 
   const saved = await fsp.readdir(path.join(path.dirname(config.settingsDbPath), 'saved_status'));
   assert.equal(saved.length, 1);
 });
+
+test('group open/close schedules replace stale timers and fire only the current schedule', async () => {
+  const realSetTimeout = global.setTimeout;
+  const realClearTimeout = global.clearTimeout;
+  const timers = [];
+  const cleared = [];
+  global.setTimeout = (callback, delay) => {
+    const timer = { callback, delay };
+    timers.push(timer);
+    return timer;
+  };
+  global.clearTimeout = (timer) => { cleared.push(timer); };
+
+  try {
+    const sock = makeSocket();
+    await handler(sock, message('!opentime 30s'));
+    await handler(sock, message('!opentime 1m'));
+    assert.equal(timers.length, 2);
+    assert.deepEqual(cleared, [timers[0]], 'replacing a schedule cancels the previous timer');
+
+    timers[0].callback();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sock.actions.length, 0, 'a stale timer cannot alter the group after replacement');
+
+    await handler(sock, message('!opentime cancel'));
+    assert.deepEqual(cleared, [timers[0], timers[1]], 'cancel clears the currently scheduled timer');
+
+    await handler(sock, message('!closetime 30s'));
+    const closeTimer = timers[2];
+    closeTimer.callback();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(sock.actions, [{ jid: group, value: 'announcement' }]);
+  } finally {
+    global.setTimeout = realSetTimeout;
+    global.clearTimeout = realClearTimeout;
+  }
+});

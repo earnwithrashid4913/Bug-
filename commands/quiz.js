@@ -13,6 +13,23 @@ const TOTAL_QUESTIONS = 10;
 
 function sk(remoteJid) { return remoteJid; }
 
+// Timer callbacks run outside the command dispatcher's await/catch boundary.
+// Contain their failures here so a disconnected socket cannot become an
+// unhandled rejection or leave a dead quiz session/timer in memory.
+async function abortQuiz(socket, session, remoteJid, error) {
+  if (groupSessions.get(sk(remoteJid)) !== session) return;
+  if (session.timer) clearTimeout(session.timer);
+  if (session.lobbyTimer) clearTimeout(session.lobbyTimer);
+  groupSessions.delete(sk(remoteJid));
+  console.warn(`[quiz] Session stopped after a delivery failure: ${error?.message || error}`);
+  try {
+    await socket.sendMessage(remoteJid, { text: '⚠️ Quiz stopped because message delivery failed. Start a new quiz when the connection is ready.' });
+  } catch {
+    // The original send failure commonly means the socket is offline; no retry
+    // loop is useful here.
+  }
+}
+
 async function startQuiz(socket, context, args) {
   const category = (args[0] || 'random').toLowerCase();
   const difficulty = (args[1] || 'easy').toLowerCase();
@@ -48,7 +65,8 @@ async function startQuiz(socket, context, args) {
       '━━━━━━━━━━━━━━━━━━\n\n✅ *' + organizerName + '* joined! (1/' + MAX_PLAYERS + ')\n\n╚══════════════════╝'
   }, { quoted: context.raw });
 
-  session.lobbyTimer = setTimeout(async () => { await launchQuizFromLobby(socket, context.chatId); }, JOIN_TIMEOUT);
+  session.lobbyTimer = setTimeout(() =>
+    launchQuizFromLobby(socket, context.chatId).catch((error) => abortQuiz(socket, session, context.chatId, error)), JOIN_TIMEOUT);
 }
 
 async function joinQuiz(socket, context) {
@@ -107,18 +125,20 @@ async function sendGroupQuestion(socket, session, remoteJid) {
   });
 
   if (session.timer) clearTimeout(session.timer);
-  session.timer = setTimeout(async () => {
-    // The question may have just been answered or the quiz stopped while this
-    // callback sat in the timer queue. Without this re-check the timeout used
-    // to announce "Nobody found the answer" over a correct answer, or keep a
-    // stopped quiz alive as a ghost loop.
-    if (!session.currentQuestionOpen || groupSessions.get(sk(remoteJid)) !== session) return;
-    session.currentQuestionOpen = false;
-    await socket.sendMessage(remoteJid, {
-      text: '⏱️ *Time\'s up!*\n\n❌ Nobody found the answer.\n✅ The answer was: *' + q.choices.find(c => c.startsWith(q.answer + '.')) + '*'
-    });
-    await showIntermediateRanking(socket, session, remoteJid);
-    await nextQuestion(socket, session, remoteJid);
+  session.timer = setTimeout(() => {
+    return (async () => {
+      // The question may have just been answered or the quiz stopped while this
+      // callback sat in the timer queue. Without this re-check the timeout used
+      // to announce "Nobody found the answer" over a correct answer, or keep a
+      // stopped quiz alive as a ghost loop.
+      if (!session.currentQuestionOpen || groupSessions.get(sk(remoteJid)) !== session) return;
+      session.currentQuestionOpen = false;
+      await socket.sendMessage(remoteJid, {
+        text: '⏱️ *Time\'s up!*\n\n❌ Nobody found the answer.\n✅ The answer was: *' + q.choices.find(c => c.startsWith(q.answer + '.')) + '*'
+      });
+      await showIntermediateRanking(socket, session, remoteJid);
+      await nextQuestion(socket, session, remoteJid);
+    })().catch((error) => abortQuiz(socket, session, remoteJid, error));
   }, QUESTION_TIMEOUT);
 }
 
@@ -216,4 +236,4 @@ async function stopQuiz(socket, context) {
 function isQuizActive(remoteJid) { return groupSessions.get(sk(remoteJid))?.status === 'running'; }
 function isLobbyActive(remoteJid) { return groupSessions.get(sk(remoteJid))?.status === 'lobby'; }
 
-module.exports = { startQuiz, joinQuiz, stopQuiz, handleGroupAnswer, isQuizActive, isLobbyActive };
+module.exports = { startQuiz, joinQuiz, stopQuiz, handleGroupAnswer, isQuizActive, isLobbyActive, _abortQuiz: abortQuiz };

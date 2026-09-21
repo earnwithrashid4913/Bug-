@@ -264,6 +264,20 @@ function renderQrCode(qr, pairingState) {
 // polling loop can ever be created.
 const TELEGRAM_RETRY_BASE_DELAY_MS = 5_000;
 const TELEGRAM_RETRY_MAX_DELAY_MS = 5 * 60_000;
+const TELEGRAM_RETRY_JITTER = 0.2;
+
+function isPermanentTelegramStartError(error) {
+  const status = Number(error?.httpStatus || error?.telegramErrorCode);
+  return status === 401 || status === 403;
+}
+
+function telegramStartRetryDelay(attempt, random = Math.random) {
+  const exponent = Math.min(Math.max(0, attempt - 1), 6);
+  const base = Math.min(TELEGRAM_RETRY_BASE_DELAY_MS * 2 ** exponent, TELEGRAM_RETRY_MAX_DELAY_MS);
+  const draw = Number(random());
+  const unit = Math.max(0, Math.min(1, Number.isFinite(draw) ? draw : 0.5));
+  return Math.max(1_000, Math.round(base * (1 + ((unit * 2 - 1) * TELEGRAM_RETRY_JITTER))));
+}
 let telegramStartAttempts = 0;
 let telegramRetryTimer;
 
@@ -413,12 +427,15 @@ async function startTelegramWithRetry() {
       console.error(`[DATABASE] [telegram] Session restore failed: ${error.message}`);
     });
   } catch (error) {
+    if (isPermanentTelegramStartError(error)) {
+      console.error(`[TELEGRAM] [telegram] ${stamp()} Controller is disabled after a permanent Telegram API rejection (HTTP ${error.httpStatus}). Check telegram.botToken and bot access; it will not retry this configuration error automatically.`);
+      return;
+    }
     telegramStartAttempts += 1;
-    const exponent = Math.min(telegramStartAttempts - 1, 6);
-    const delay = Math.min(TELEGRAM_RETRY_BASE_DELAY_MS * 2 ** exponent, TELEGRAM_RETRY_MAX_DELAY_MS);
-    console.error(`[TELEGRAM] [telegram] ${stamp()} Controller failed to start (attempt ${telegramStartAttempts}): ${error.message}. Retrying in ${Math.ceil(delay / 1000)}s.`);
+    const delay = telegramStartRetryDelay(telegramStartAttempts);
+    console.error(`[TELEGRAM] [telegram] ${stamp()} Controller failed to start (attempt ${telegramStartAttempts}): ${error.message}. Recovery scheduled; Retrying in ${Math.ceil(delay / 1000)}s.`);
     if (telegramStartAttempts === 1) {
-      console.error('[TELEGRAM] Check telegram.botToken, telegram.ownerIds, and Telegram network access. Pairing stays unavailable until the controller starts.');
+      console.error('[TELEGRAM] Check Telegram network/DNS access and the controller data file. Pairing stays unavailable until the controller starts.');
     }
     if (stopping) return;
     telegramRetryTimer = setTimeout(() => {
@@ -980,6 +997,7 @@ module.exports = {
   MEMORY_LOG_INTERVAL_MS,
   TELEGRAM_RETRY_BASE_DELAY_MS,
   TELEGRAM_RETRY_MAX_DELAY_MS,
+  TELEGRAM_RETRY_JITTER,
   TERMINAL_DISCONNECT_REASONS,
   WORKER_COOLDOWN_MS,
   WORKER_GIVEUP_WINDOW_MS,
@@ -987,7 +1005,9 @@ module.exports = {
   disconnectStatusCode,
   formatPairingCode,
   liveStatus,
+  isPermanentTelegramStartError,
   shouldReconnect,
+  telegramStartRetryDelay,
   // Exposed for integration tests; the worker calls these during startup.
   startBot,
   startTelegramController,

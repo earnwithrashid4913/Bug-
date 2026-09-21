@@ -35,12 +35,24 @@ const ALL_BADGES = {
 
 let db = { users: {}, sessionSettings: {} };
 
+function plainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeDb(value) {
+  // A malformed-but-parseable file must not turn the expected object maps into
+  // arrays, null or inherited objects. Keep valid records and restore only the
+  // missing containers instead of making every later command fail.
+  return {
+    users: plainObject(value?.users) ? value.users : {},
+    sessionSettings: plainObject(value?.sessionSettings) ? value.sessionSettings : {},
+  };
+}
+
 function loadDb() {
   try {
     if (fs.existsSync(OTAKU_DB_PATH)) {
-      db = JSON.parse(fs.readFileSync(OTAKU_DB_PATH, 'utf-8'));
-      if (!db.users) db.users = {};
-      if (!db.sessionSettings) db.sessionSettings = {};
+      db = normalizeDb(JSON.parse(fs.readFileSync(OTAKU_DB_PATH, 'utf-8')));
     }
   } catch (e) {
     console.error('[otaku] DB load error:', e.message);
@@ -49,12 +61,25 @@ function loadDb() {
 }
 
 function saveDb() {
+  let tempPath;
   try {
     const dir = path.dirname(OTAKU_DB_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(OTAKU_DB_PATH, JSON.stringify(db, null, 2));
+    // Never write directly over the live database: a restart, out-of-space
+    // error or process crash during write must leave the last complete JSON
+    // snapshot readable on the next boot. rename() within one directory is
+    // atomic on the Linux filesystems used by the supported hosts.
+    tempPath = path.join(dir, `.${path.basename(OTAKU_DB_PATH)}.${process.pid}.${Date.now()}.tmp`);
+    fs.writeFileSync(tempPath, `${JSON.stringify(db, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tempPath, OTAKU_DB_PATH);
+    return true;
   } catch (e) {
     console.error('[otaku] DB save error:', e.message);
+    return false;
+  } finally {
+    if (tempPath) {
+      try { fs.unlinkSync(tempPath); } catch (error) { if (error.code !== 'ENOENT') console.error('[otaku] DB temporary-file cleanup error:', error.message); }
+    }
   }
 }
 
