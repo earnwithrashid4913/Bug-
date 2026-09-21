@@ -2825,15 +2825,24 @@ async function dispatchCommand(socket, context, command, rawMessage) {
         break;
       }
 
+      const timerKey = `${context.chatId}:open`;
+      // A replacement must cancel the previous schedule. Otherwise a user can
+      // cancel the latest timer while an older, untracked timer still changes
+      // the group later (and keeps a needless live timer handle meanwhile).
+      const previousTimer = groupTimers.get(timerKey);
+      if (previousTimer) clearTimeout(previousTimer);
       await socket.sendMessage(context.chatId, { text: '🔓 Group will open in *' + formatDuration(duration) + '*' }, { quoted: context.raw });
-      const timer = setTimeout(async () => {
-        try {
-          await socket.groupSettingUpdate(context.chatId, 'not_announcement');
-          await socket.sendMessage(context.chatId, { text: '🔓 *Auto-open triggered!*\nThe group is now open.' });
-        } catch (e) { console.error('[opentime] Error:', e.message); }
-        groupTimers.delete(context.chatId + ':open');
+      const timer = setTimeout(() => {
+        if (groupTimers.get(timerKey) !== timer) return;
+        Promise.resolve()
+          .then(() => socket.groupSettingUpdate(context.chatId, 'not_announcement'))
+          .then(() => socket.sendMessage(context.chatId, { text: '🔓 *Auto-open triggered!*\nThe group is now open.' }))
+          .catch((error) => console.error('[opentime] Error:', error.message))
+          .finally(() => {
+            if (groupTimers.get(timerKey) === timer) groupTimers.delete(timerKey);
+          });
       }, duration);
-      groupTimers.set(context.chatId + ':open', timer);
+      groupTimers.set(timerKey, timer);
       break;
     }
 
@@ -2852,15 +2861,21 @@ async function dispatchCommand(socket, context, command, rawMessage) {
         break;
       }
 
+      const timerKey = `${context.chatId}:close`;
+      const previousTimer = groupTimers.get(timerKey);
+      if (previousTimer) clearTimeout(previousTimer);
       await socket.sendMessage(context.chatId, { text: '🔒 Group will close in *' + formatDuration(duration2) + '*' }, { quoted: context.raw });
-      const timer2 = setTimeout(async () => {
-        try {
-          await socket.groupSettingUpdate(context.chatId, 'announcement');
-          await socket.sendMessage(context.chatId, { text: '🔒 *Auto-close triggered!*\nThe group is now locked.' });
-        } catch (e) { console.error('[closetime] Error:', e.message); }
-        groupTimers.delete(context.chatId + ':close');
+      const timer2 = setTimeout(() => {
+        if (groupTimers.get(timerKey) !== timer2) return;
+        Promise.resolve()
+          .then(() => socket.groupSettingUpdate(context.chatId, 'announcement'))
+          .then(() => socket.sendMessage(context.chatId, { text: '🔒 *Auto-close triggered!*\nThe group is now locked.' }))
+          .catch((error) => console.error('[closetime] Error:', error.message))
+          .finally(() => {
+            if (groupTimers.get(timerKey) === timer2) groupTimers.delete(timerKey);
+          });
       }, duration2);
-      groupTimers.set(context.chatId + ':close', timer2);
+      groupTimers.set(timerKey, timer2);
       break;
     }
 
