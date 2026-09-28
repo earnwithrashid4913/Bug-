@@ -5,7 +5,33 @@ const { performance } = require('node:perf_hooks');
 const { downloadRemoteFile, requestCobalt, youtubeSearch } = require('../system/lib/net-tools');
 const { FOOTER, font } = require('../system/lib/presentation');
 const { sessionDashboard } = require('../system/lib/session-status');
+const { config } = require('../system/config');
 const dc = require('./davidcyril-api');
+
+// Keep the provider order deterministic.  A bad optional environment value is
+// ignored instead of being attempted repeatedly for every command.
+function cobaltProviders() {
+  const configured = config.cobaltApiUrl;
+  const environmentOverride = process.env.COBALT_API_URL;
+  const fallback = process.env.COBALT_FALLBACK_API_URL;
+  return [...new Set([configured, environmentOverride, fallback, 'https://cobalt-api.kwiatekmiki.com']
+    .filter((value) => typeof value === 'string' && /^https:\/\//i.test(value)))];
+}
+
+function mediaErrorMessage(error, mode) {
+  const message = String(error?.message || '');
+  if (/Invalid YouTube URL/i.test(message)) return 'Invalid YouTube URL. Please send a YouTube link.';
+  if (/No (search results|YouTube results)/i.test(message)) return 'No YouTube result was found for that query.';
+  if (/all (audio|video) download sources failed/i.test(message)) {
+    return mode === 'video'
+      ? 'Video download failed: all configured providers are unavailable. Please try again later.'
+      : 'Audio download failed: all configured providers are unavailable. Please try again later.';
+  }
+  if (/timed out|stalled/i.test(message)) return `${mode === 'video' ? 'Video' : 'Audio'} download timed out. Please try again.`;
+  return mode === 'video'
+    ? 'Video download failed. Please try a different link or try again later.'
+    : 'Audio download failed. Please try a different link or try again later.';
+}
 async function react(socket, context, text) {
   try { await socket.sendMessage(context.chatId, { react: { text, key: context.raw.key } }); } catch { /* Reactions must not prevent the actual response. */ }
 }
@@ -43,7 +69,10 @@ async function download(socket, context, command) {
   if (!command.text) return reply(`Usage: ${command.name} ${command.name === 'ytmp3' || command.name === 'audio' || command.name === 'mp3' ? '<YouTube URL>' : '<search query or YouTube URL>'}`);
   try {
     const audioOnly = ['ytmp3', 'audio', 'mp3'].includes(command.name);
-    const videoMode = ['video', 'ytmp4', 'mp4', 'ytvideo'].includes(command.name);
+    // All documented video aliases must remain video commands.  Previously
+    // !yt, !youtube and !ytv silently entered the audio branch and were then
+    // reported as an audio-provider failure.
+    const videoMode = ['video', 'ytmp4', 'mp4', 'ytvideo', 'yt', 'youtube', 'ytv'].includes(command.name);
     let url = command.text;
     let video;
     if (audioOnly || /^https?:\/\//i.test(url)) {
@@ -61,10 +90,7 @@ async function download(socket, context, command) {
       // ── VIDEO: !video — keep existing Cobalt working, add DavidCyril as fallback ──
       let sent = false;
       // Primary: Cobalt (existing working provider)
-      const providers = [...new Set([
-        process.env.COBALT_API_URL || 'https://cobalt-api.kwiatekmiki.com',
-        process.env.COBALT_FALLBACK_API_URL
-      ].filter(Boolean))];
+      const providers = cobaltProviders();
       for (const provider of providers) {
         try {
           const result = await requestCobalt(provider, url, { audio: false });
@@ -73,7 +99,7 @@ async function download(socket, context, command) {
             sent = true;
             break;
           }
-        } catch (err) { console.warn('[Video] Cobalt provider failed:', err?.message || err); }
+        } catch (err) { console.warn(`[download] provider=cobalt endpoint=${provider} mode=video failed:`, err?.message || err); }
       }
       // Fallback: DavidCyril YouTube MP4 pool
       if (!sent) {
@@ -111,15 +137,11 @@ async function download(socket, context, command) {
           await socket.sendMessage(context.chatId, { audio: media, mimetype: 'audio/mpeg', ptt: false, fileName: `${audioTitle}.mp3` }, { quoted: context.raw });
           sent = true;
         }
-      } catch (err) { console.warn('[Play] DavidCyril YouTube MP3 failed:', err?.message || err); }
+      } catch (err) { console.warn('[download] provider=davidcyril mode=audio failed:', err?.message || err); }
       // Fallback: Cobalt (existing provider)
       if (!sent) {
         console.info('[Play] DavidCyril failed, trying Cobalt fallback.');
-        const cobaltProviders = [...new Set([
-          process.env.COBALT_API_URL || 'https://cobalt-api.kwiatekmiki.com',
-          process.env.COBALT_FALLBACK_API_URL
-        ].filter(Boolean))];
-        for (const provider of cobaltProviders) {
+        for (const provider of cobaltProviders()) {
           try {
             const result = await requestCobalt(provider, url, { audio: true });
             if (result?.url) {
@@ -129,7 +151,7 @@ async function download(socket, context, command) {
               sent = true;
               break;
             }
-          } catch (err) { console.warn('[Play] Cobalt fallback failed:', err?.message || err); }
+          } catch (err) { console.warn(`[download] provider=cobalt endpoint=${provider} mode=audio failed:`, err?.message || err); }
         }
       }
       if (!sent) throw new Error('All audio download sources failed.');
@@ -139,12 +161,14 @@ async function download(socket, context, command) {
   } catch (error) {
     console.error('[Play] Download failed:', error?.message || error);
     await react(socket, context, '❌');
-    const userMessage = /Invalid YouTube URL|No search results|No YouTube results/i.test(error?.message || '')
-      ? error.message
-      : 'Audio download is temporarily unavailable. Please try another source/query.';
+    const userMessage = mediaErrorMessage(error, videoModeForCommand(command.name));
     if (!command.quiet) await reply(`Download failed: ${userMessage}`);
     return { ok: false, error };
   }
+}
+
+function videoModeForCommand(name) {
+  return ['video', 'ytmp4', 'mp4', 'ytvideo', 'yt', 'youtube', 'ytv'].includes(String(name).toLowerCase()) ? 'video' : 'audio';
 }
 async function upload(socket, context, command, uploadQuoted) {
   if (!command.text) return uploadQuoted(socket, context);

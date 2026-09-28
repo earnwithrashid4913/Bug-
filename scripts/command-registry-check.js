@@ -33,7 +33,6 @@ function audit() {
   assert.equal(new Set(names).size, names.length, 'Duplicate switch cases');
   assert.equal(new Set(declared).size, declared.length, 'Duplicate declared names or aliases');
   assert.deepEqual([...names].sort(), allAliases(), 'Registry and dispatcher must agree in both directions');
-  assert.ok(hidden.length && /await handleHiddenCommand\(socket, context\)/.test(source), 'Existing manual-only route must remain connected');
   for (const name of hidden) assert.ok(!declared.includes(name) && !resolveCommand(name), 'Manual-only trigger leaked into public registry');
   const categories = categoriesWithCommands();
   assert.equal(categories.length, new Set(categories.map(c => c.id)).size);

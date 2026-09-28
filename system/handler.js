@@ -56,9 +56,6 @@ const {
   handleTeraboxCommand,
 } = require('../commands/downloader-extended');
 const dc = require('../commands/davidcyril-api');
-// Hidden video engine (!hvideo, hidden category): fault-tolerant search across
-// alternative video platforms with session expiry and oversized-file guards.
-const hiddenVideo = require('../commands/hidden-video');
 // Universal image generation/effect providers (same DavidCyril client as the
 // downloaders and the movie/series systems).
 const imageGeneration = require('../commands/image-generation');
@@ -178,67 +175,6 @@ function commandFromText(text) {
   const [name = '', ...args] = text.slice(prefix.length).trim().split(/\s+/);
   if (!name) return undefined;
   return { name: name.toLowerCase(), args, text: args.join(' ') };
-}
-
-// Hidden command: davidcaril.js — accessible ONLY via !h / !H / !hidden / !HIDDEN
-// Not exposed in the normal menu. Separate handler.
-const HIDDEN_TRIGGERS = new Set(['h', 'hidden']);
-function isHiddenCommand(commandName) {
-  return HIDDEN_TRIGGERS.has(commandName.toLowerCase());
-}
-
-async function handleHiddenCommand(socket, context) {
-  const p = getCommandPrefix();
-  const hiddenVideoSettings = config.hiddenVideo;
-  const enabledProviders = hiddenVideoSettings.providers.filter((entry) => entry.enabled).length;
-  const text = [
-    '╔══════════════════╗',
-    '  🌟 *[ ANIME CORE ]*',
-    '╠══════════════════╣',
-    '',
-    '  ⚡ *ANIME MD* — WhatsApp Bot',
-    '  🎌 Powered by F!xa Dev',
-    '',
-    '  🤖 *AI Features:*',
-    '  • Groq AI Chat',
-    '  • Multi-language support',
-    '',
-    '  👥 *Group Tools:*',
-    '  • Full admin suite',
-    '  • Anti-spam / Anti-link',
-    '  • Welcome & Goodbye',
-    '',
-    '  🎮 *Fun & Games:*',
-    '  • Quiz system',
-    '  • RPG Economy',
-    '  • Anime database',
-    '',
-    '  🎬 *Hidden Video Engine:*',
-    `  • Status: ${hiddenVideoSettings.enabled ? 'ON' : 'OFF'}`,
-    `  • Providers: ${enabledProviders}`,
-    `  • Max Results: ${hiddenVideoSettings.maxResults}`,
-    `  • Session TTL: ${Math.round(hiddenVideoSettings.sessionTimeoutMs / 60000)} minutes`,
-    `  • Max Download: ${Math.round(hiddenVideoSettings.maxDownloadBytes / (1024 * 1024))} MB`,
-    `  • ${p}hvideo <keyword> to search`,
-    '',
-    '  🛡 *Security:*',
-    '  • Protected identity',
-    '  • Sudo system',
-    '  • Premium access',
-    '',
-    `  📖 Type *${p}menu* for all commands`,
-    '',
-    '╚══════════════════╝',
-    `> *[ ANIME CORE ]* · ${config.ownerName}`
-  ].join('\n');
-
-  await sendButtons(socket, context.chatId, {
-    text,
-    footer: `${config.botName} · ${config.ownerName}`,
-    buttons: [{ label: '📖 MENU', id: `${p}menu home` }],
-    fallbackText: text,
-    quoted: context.raw
-  });
 }
 
 function ownerJids(socket) {
@@ -1722,10 +1658,6 @@ async function handleMessage(socket, rawMessage) {
       if (quizHandled) return;
     }
 
-    // Hidden video engine: a bare number belongs to an active !hvideo
-    // selection list before it can open a menu category.
-    if (/^\d{1,2}$/.test(context.text.trim()) && await hiddenVideo.handleHvideoSelectionReply(socket, context)) return;
-
     // Numeric reply for menu category selection
     if (/^\d+$/.test(context.text.trim()) && context.text.trim().length <= 2) {
       // Same access-filtered order the root menu printed, so reply "3" always
@@ -1757,11 +1689,6 @@ async function handleMessage(socket, rawMessage) {
   // then re-thrown so the caller (index.js / the pairing manager) still sees
   // the failure — a transport outage must never be swallowed.
   try {
-    // Hidden command: !h / !H / !hidden / !HIDDEN — not in normal menu
-    if (isHiddenCommand(command.name)) {
-      await handleHiddenCommand(socket, context);
-      return;
-    }
     if (resolveCommand(command.name) && !['ping', 'p'].includes(command.name)) {
       await sourceCommands.react(socket, context, '⭐');
     }
@@ -1900,13 +1827,6 @@ async function dispatchCommand(socket, context, command, rawMessage) {
     case 'allinone':
     case 'alldownload':
       await handleAioCommand(socket, context, command.text, getCommandPrefix());
-      break;
-
-    // --- HIDDEN VIDEO ENGINE (hidden category, advertised via !h) ---
-    case 'hvideo':
-    case 'hv':
-    case 'hvid':
-      await hiddenVideo.handleHvideoCommand(socket, context, command);
       break;
 
     // --- MEDIA ---
