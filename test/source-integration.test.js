@@ -72,7 +72,7 @@ test('stored media round-trip and exact deletion preserve unrelated runtime sett
     assert.deepEqual(await fs.readdir(path.join(dir, 'user_media')), []);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
-test('source downloader selects highest available video quality', async () => {
+test('source downloader keeps every documented video alias in video mode and selects the highest quality', async () => {
   const axios = require('axios');
   const originalFetch = global.fetch;
   const originalGet = axios.get;
@@ -83,8 +83,12 @@ test('source downloader selects highest available video quality', async () => {
   global.fetch = async () => new Response(JSON.stringify({ status: 'error', text: 'Download service refused this link.' }), { status: 400, headers: { 'content-type': 'application/json' } });
   axios.get = async () => ({ data: { status: true, title: 'Fixture', videos: { '360': 'https://example.com/360.mp4', '720': 'https://example.com/720.mp4' } } });
   try {
-    await source.download({ sendMessage: async (jid, payload) => sent.push(payload) }, context, { name: 'ytmp4', text: 'https://youtu.be/example', args: ['https://youtu.be/example'] });
-    assert.equal(sent.find(p => p.video).video.url, 'https://example.com/720.mp4');
+    for (const name of ['ytmp4', 'video', 'yt', 'youtube', 'ytv']) {
+      sent.length = 0;
+      await source.download({ sendMessage: async (jid, payload) => sent.push(payload) }, context, { name, text: 'https://youtu.be/example', args: ['https://youtu.be/example'] });
+      assert.equal(sent.find(p => p.video).video.url, 'https://example.com/720.mp4', `${name} must send video, not audio`);
+      assert.equal(sent.find(p => p.audio), undefined, `${name} must never enter the audio branch`);
+    }
   } finally { global.fetch = originalFetch; axios.get = originalGet; }
 });
 test('provider rendition maps resolve to the best media of the requested kind', () => {

@@ -45,17 +45,16 @@ test('the three scanned sets agree on counts', () => {
   assert.ok(result.counts.menuCommands < result.counts.menuExecuteNames);
 });
 
-test('intentionally hidden commands stay executable but unlisted', () => {
+test('retired hidden-video triggers are absent from every WhatsApp command surface', () => {
   const result = audit();
-  assert.deepEqual(result.executable.hiddenTriggers, ['h', 'hidden']);
+  assert.deepEqual(result.executable.hiddenTriggers, []);
   assert.deepEqual(result.registered.hidden, [], 'no public command is silently hidden from the menu');
-  for (const trigger of result.executable.hiddenTriggers) {
+  for (const trigger of ['h', 'hidden', 'hvideo', 'hv', 'hvid']) {
     assert.equal(resolveCommand(trigger), undefined, `${trigger} must not be a public command`);
     assert.ok(!result.menu.rendered.includes(trigger), `${trigger} must not appear in !menu`);
   }
-  // They are still real routes, so the feature is not dead.
   const routes = inspect().routes.map((route) => route.name);
-  assert.ok(!routes.includes('h') && !routes.includes('hidden'), 'hidden triggers use their own route, not the dispatcher');
+  assert.ok(!routes.includes('hvideo') && !routes.includes('hv') && !routes.includes('hvid'));
 });
 
 test('permission-restricted commands are listed, never silently dropped', () => {

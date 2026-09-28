@@ -149,4 +149,3 @@ Route checks prove registration/mapping, not external API availability or live W
 | movielatest | latestmovies, newmovies | !menu downloader | public | `handleMovieLatestCommand` | system/handler.js:2712 |
 | series | tv, tvseries, srs | !menu downloader | public | `handleSeriesSearchCommand` | system/handler.js:2718 |
 | serieslatest | latestseries, newseries | !menu downloader | public | `handleSeriesLatestCommand` | system/handler.js:2725 |
-| hvideo | hv, hvid | !menu downloader | public | `hiddenVideo.handleHvideoCommand` | system/handler.js:1906 |
