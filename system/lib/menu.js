@@ -280,6 +280,9 @@ function categoriesWithCommands() {
  * stale: a newly registered command appears on its own, a removed one
  * disappears, and nothing has to be maintained by hand.
  *
+ * Rendered in the mandated box style (╭━━〔 CATEGORY 〕━━╮ … ╰━━━╯) with the
+ * real per-category command count inside every box.
+ *
  * @param {Array} categories categories (optionally already access-filtered)
  * @param {string} prefix live command prefix
  * @returns {string[]} index lines, ready to be chunked into messages
@@ -289,10 +292,13 @@ function commandIndex(categories, prefix = '!') {
   for (const category of Array.isArray(categories) ? categories : []) {
     const commands = Array.isArray(category?.commands) ? category.commands : [];
     if (!commands.length) continue;
-    lines.push(`*${category.icon} ${category.label}* — ${commands.length} command${commands.length === 1 ? '' : 's'}`);
+    lines.push(`╭━━〔 ${category.icon} *${category.label}* 〕━━╮`);
+    lines.push(`┃  ${commands.length} Command${commands.length === 1 ? '' : 's'}`);
+    lines.push('┃');
     for (const entry of commands) {
-      lines.push([entry.name, ...entry.aliases].map((name) => `${prefix}${name}`).join(' • '));
+      lines.push(`┃  ${[entry.name, ...entry.aliases].map((name) => `${prefix}${name}`).join(' • ')}`);
     }
+    lines.push('╰━━━━━━━━━━━━━━━━━━╯');
     lines.push('');
   }
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
