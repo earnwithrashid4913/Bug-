@@ -32,6 +32,8 @@ const { sendButtons, sendList } = require('./lib/ui');
 const { styleHeaders } = require('./lib/presentation');
 const { backButton, contextButtons, menuButton, settingButtons } = require('./lib/whatsapp-actions');
 const { helpText: buildHelpText, categoriesWithCommands, commandIndex, getCategory, resolveCommand } = require('./lib/menu');
+const { assertValidDownload, detectMediaKind } = require('./lib/media-validation');
+const messageDedup = require('./lib/message-dedup');
 const {
   handleAnimeCommand,
   handleMangaCommand,
@@ -626,6 +628,21 @@ function menuHelpText(prefix, category, commands) {
   ].join('\n');
 }
 
+// The mandated banner heading every root menu. Owner/developer come from the
+// live configuration/canonical identity — never hardcoded per deploy.
+function menuBanner(botName) {
+  return [
+    `╭━━━〔 ✦ ${String(botName || 'ANIME MD').toUpperCase()} ✦ 〕━━━╮`,
+    '┃',
+    '┃  ⚡ *ANIME-MD MENU*',
+    '┃  ─────────────────────',
+    `┃  👑 Owner: ${config.ownerName}`,
+    `┃  🛠 Developer: ${config.developerName}`,
+    '┃',
+    '╰━━━━━━━━━━━━━━━━━━━━━━╯'
+  ].join('\n');
+}
+
 async function handleMenuCommand(socket, context, command) {
   const botName = await settingsStore.get('bot_name') || config.botName;
   const p = getCommandPrefix();
@@ -635,10 +652,11 @@ async function handleMenuCommand(socket, context, command) {
   if (!categoryId || categoryId === 'home') {
     const categories = visibleCategories;
     const totalCommands = categories.reduce((total, category) => total + category.commands.length, 0);
+    const banner = menuBanner(botName);
     try {
       await sendList(socket, context.chatId, {
         text: [
-          `*${botName}*`,
+          banner,
           '',
           `📋 *${totalCommands} commands* in ${categories.length} categories`,
           '',
@@ -662,8 +680,11 @@ async function handleMenuCommand(socket, context, command) {
           { label: '👑 Owner', id: `${p}owner` }
         ],
         fallbackText: [
-          '*ANIME MD*',
+          banner,
+          '',
           `Name: ${botName}`,
+          '',
+          'Choose a category:',
           '',
           '*Categories:*',
           ...categories.map((cat, i) => `${i + 1}. ${cat.icon} ${cat.label}  → ${p}menu ${cat.id}`),
@@ -868,14 +889,10 @@ const mediaDownloadsInFlight = new Map();
 
 // A provider that answers HTTP 200 with an HTML/JSON error body would
 // otherwise be uploaded to WhatsApp as a broken "video" — request success is
-// not download success. Real media never starts with those markers.
-function assertMediaBuffer(buffer, stageLabel) {
-  if (!buffer?.length) throw new Error('The download source returned an empty file.');
-  const head = buffer.subarray(0, 256).toString('latin1').trimStart().toLowerCase();
-  if (head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('{') || head.startsWith('[')) {
-    throw new Error(`${stageLabel} returned an error page instead of media.`);
-  }
-}
+// not download success. The real check lives in the ONE shared media
+// validation layer (system/lib/media-validation.js) so every download path
+// applies exactly the same rules.
+const assertMediaBuffer = assertValidDownload;
 
 async function resolveMediaDownload(url) {
   // Detect platform for specialised fallback before generic AIO
@@ -909,11 +926,16 @@ async function resolveMediaDownload(url) {
       const mediaUrl = result.url;
       const buf = await dc.dlBuffer(mediaUrl);
       assertMediaBuffer(buf, 'The download source');
-      const type = buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA8 ? 'video'
-        : buf[0] === 0xFF && buf[1] === 0xD8 ? 'image' : 'video';
+      const kind = detectMediaKind(buf, mediaUrl);
       const caption = `*DOWNLOAD COMPLETE* ✅\n${result.title ? '📝 ' + result.title + '\n' : ''}\n*Size:* ${(buf.length / 1024).toFixed(1)} KB`;
       return {
-        payload: type === 'image' ? { image: buf } : { video: buf, mimetype: 'video/mp4' },
+        payload: kind === 'image'
+          ? { image: buf }
+          : kind === 'audio'
+            ? { audio: buf, mimetype: 'audio/mpeg', ptt: false }
+            : kind === 'video'
+              ? { video: buf, mimetype: 'video/mp4' }
+              : { document: buf, mimetype: 'application/octet-stream', fileName: result.title || 'download.bin' },
         caption,
         cardText: caption
       };
@@ -1627,6 +1649,12 @@ async function handleStopSessionCommand(socket, context, command) {
 async function handleMessage(socket, rawMessage) {
   const context = await getMessageContext(socket, rawMessage);
   if (!context.chatId || !context.sender) return;
+
+  // A message re-delivered by WhatsApp (retries, reconnect replay) must be
+  // processed exactly once: duplicate events must never become duplicate
+  // replies, duplicate downloads or duplicate provider requests. The cache is
+  // bounded (see system/lib/message-dedup.js), so this stays low-RAM safe.
+  if (messageDedup.isDuplicate(socket, context.chatId, rawMessage?.key?.id)) return;
 
   // Feeds the !broadcast target list. Errors are swallowed on purpose: the
   // registry is a convenience and must never break message handling.
