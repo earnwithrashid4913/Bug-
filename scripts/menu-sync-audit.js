@@ -70,15 +70,16 @@ function menuSet(categories = categoriesWithCommands(), prefix = '!') {
   const lines = commandIndex(categories, prefix);
   const text = lines.join('\n');
   const rendered = [...text.matchAll(new RegExp(`(?:^|[\\s(])${prefix}([a-z][a-z0-9]*)`, 'gm'))].map((match) => match[1]);
-  // One entry per line; a line is "name • alias • alias".
-  const rows = lines.filter((line) => line.startsWith(prefix));
-  const canonicalRows = rows.map((line) => line.split(' • ')[0].slice(prefix.length));
+  // One entry per boxed row: "┃  !name • !alias • !alias".
+  const rowPattern = new RegExp(`^┃\\s*${prefix}`);
+  const rows = lines.filter((line) => rowPattern.test(line));
+  const canonicalRows = rows.map((line) => line.replace(/^┃\s*/, '').split(' • ')[0].slice(prefix.length));
   return {
     text,
     rendered,
     canonicalRows,
     rows: rows.length,
-    categories: lines.filter((line) => line.startsWith('*')).length
+    categories: lines.filter((line) => line.startsWith('╭━━〔')).length
   };
 }
 
