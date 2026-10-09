@@ -100,8 +100,8 @@ test('the rendered menu is message-safe and loses nothing to truncation', () => 
   for (const line of result.menu.text.split('\n')) {
     assert.ok(line.length <= 500, `a rendered line is longer than any WhatsApp limit: ${line.slice(0, 40)}`);
   }
-  // Category headers carry the real per-category counts, so a reader can verify
+  // Category boxes carry the real per-category counts, so a reader can verify
   // completeness without counting by hand.
-  const counts = [...result.menu.text.matchAll(/— (\d+) commands?/g)].map((match) => Number(match[1]));
+  const counts = [...result.menu.text.matchAll(/┃\s*(\d+) Commands?/g)].map((match) => Number(match[1]));
   assert.equal(counts.reduce((total, value) => total + value, 0), COMMANDS.length);
 });

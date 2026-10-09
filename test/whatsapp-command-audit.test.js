@@ -97,17 +97,20 @@ test('actual interactive and text category menus display every execute token wit
   }
 });
 
-test('manual-only Davidcaril triggers work with mixed case and current prefix, never resolve publicly', async t => {
+test('retired manual-only triggers stay retired: never resolve publicly, never answer, never leak into the menu', async t => {
   const h = makeHarness(); t.after(() => h.close());
   for (const prefix of ['!', '?']) {
     await h.handler.setCommandPrefix(prefix);
-    for (const trigger of ['h', 'H', 'hidden', 'HIDDEN', 'HiDdEn']) {
+    for (const trigger of ['h', 'H', 'hidden', 'HIDDEN', 'HiDdEn', 'hvideo', 'hv', 'hvid']) {
+      // No public resolution, in any case.
+      assert.equal(resolveCommand(trigger.toLowerCase()), undefined);
       const socket = h.socket(); h.calls.length = 0;
       await h.handler(socket, socket.message(`${prefix}${trigger}`));
-      assert.ok(h.calls.includes('handleHiddenCommand'));
-      assert.ok(!h.calls.includes('dispatchCommand'));
-      assert.match(textOf(socket), /ANIME CORE/);
-      assert.equal(resolveCommand(trigger), undefined);
+      // The retired engine is gone: the dispatcher's default branch is inert
+      // and no hidden surface answers.
+      assert.ok(!h.calls.includes('handleHiddenCommand'));
+      assert.doesNotMatch(textOf(socket), /ANIME CORE/);
+      assert.equal(socket.sends.filter(s => s.payload?.text || s.payload?.caption).length, 0, `${prefix}${trigger} produces no reply`);
     }
   }
 });

@@ -330,7 +330,63 @@ async function handleTeraboxCommand(socket, context, argsText) {
 
 const { requestCobalt, downloadRemoteFile } = require('../system/lib/net-tools');
 const { config } = require('../system/config');
+const { assertValidDownload, detectMediaKind } = require('../system/lib/media-validation');
 const sourceCommands = require('./source-commands');
+
+// ── Google / redirect-URL resolution ───────────────────────────────────────
+//
+// A Google search/redirect wrapper is NOT media: downloading it returns
+// Google's HTML page, which must never reach WhatsApp as a "video". Instead
+// the wrapper is resolved to the REAL destination and that destination is
+// routed through the normal AIO chains. Pure search pages (/search) have no
+// single media target and are rejected with a clean explanation.
+//
+// Returns the resolved absolute http(s) URL, or null when the wrapper carries
+// no resolvable destination. Throws only on unparseable input.
+function resolveRedirectedUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(String(url || '').trim());
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isGoogle = /(^|\.)google\.[a-z.]{2,}$/.test(host);
+  if (!isGoogle) return null;
+
+  if (parsed.pathname === '/url') {
+    const target = parsed.searchParams.get('url') || parsed.searchParams.get('q');
+    return safeResolvedTarget(target, host);
+  }
+  if (parsed.pathname === '/imgres') {
+    const target = parsed.searchParams.get('imgurl');
+    return safeResolvedTarget(target, host);
+  }
+  // /search (and every other Google page): no single media destination.
+  return null;
+}
+
+function safeResolvedTarget(target, sourceHost) {
+  if (!target) return null;
+  let resolved;
+  try {
+    resolved = new URL(target);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(resolved.protocol)) return null;
+  // Never resolve a wrapper back into the same wrapper host (loop guard).
+  if (resolved.hostname.toLowerCase() === sourceHost) return null;
+  return resolved.toString();
+}
+
+function isGoogleWrapper(url) {
+  try {
+    return /(^|\.)google\.[a-z.]{2,}$/.test(new URL(String(url || '').trim()).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 
 // Long videos are sent as a document: WhatsApp rejects oversized video
 // messages, and a document always delivers.
@@ -350,21 +406,15 @@ const AIO_ROUTES = Object.freeze([
 ]);
 
 // Media type from the real bytes first (the only trustworthy source), then the
-// URL extension. Never guessed from the API's label.
-function aioKindOf(buffer, mediaUrl) {
-  const head = buffer.subarray(0, 12);
-  if (head[0] === 0xFF && head[1] === 0xD8) return 'image';
-  if (head[0] === 0x89 && head[1] === 0x50) return 'image';
-  if (head.subarray(4, 8).toString('latin1') === 'ftyp') return 'video';
-  if (head[0] === 0x1A && head[1] === 0x45 && head[2] === 0xDF) return 'video';
-  if (head.subarray(0, 3).toString('latin1') === 'ID3') return 'audio';
-  if (head[0] === 0xFF && (head[1] & 0xE0) === 0xE0) return 'audio';
-  if (/\.(mp3|m4a|opus|ogg|flac|wav)(?:[?#]|$)/i.test(mediaUrl)) return 'audio';
-  if (/\.(jpe?g|png|webp|gif)(?:[?#]|$)/i.test(mediaUrl)) return 'image';
-  return 'video';
-}
+// URL extension. Never guessed from the API's label. Unknown binary is a
+// DOCUMENT — it is delivered as a file, never faked into a video/audio
+// message WhatsApp cannot play. The detection itself lives in the one shared
+// media validation layer (system/lib/media-validation.js).
+const aioKindOf = detectMediaKind;
 
 async function sendAioMedia(socket, context, buffer, mediaUrl, title, source) {
+  // No false success: an error page or an empty body is never "media".
+  assertValidDownload(buffer, 'The download source');
   const kind = aioKindOf(buffer, mediaUrl);
   const size = `${(buffer.length / 1024 / 1024).toFixed(2)} MB`;
   const caption = `*AIO DOWNLOAD COMPLETE* ✅\n${title ? `📝 ${title}\n` : ''}🔗 ${source}\n*Size:* ${size}\n\n> ${FOOTER}`;
@@ -376,7 +426,8 @@ async function sendAioMedia(socket, context, buffer, mediaUrl, title, source) {
   } else if (kind === 'video' && buffer.length <= AIO_VIDEO_SEND_LIMIT) {
     await socket.sendMessage(context.chatId, { video: buffer, mimetype: 'video/mp4', caption }, { quoted: context.raw });
   } else {
-    const name = `${(title || 'aio_download').replace(/[^\w\-. ]+/g, '').trim() || 'aio_download'}.${kind === 'image' ? 'jpg' : kind === 'audio' ? 'mp3' : 'mp4'}`;
+    const ext = kind === 'image' ? 'jpg' : kind === 'audio' ? 'mp3' : kind === 'video' ? 'mp4' : 'bin';
+    const name = `${(title || 'aio_download').replace(/[^\w\-. ]+/g, '').trim() || 'aio_download'}.${ext}`;
     await socket.sendMessage(context.chatId, { document: buffer, mimetype: 'application/octet-stream', fileName: name, caption }, { quoted: context.raw });
   }
   return caption;
@@ -398,7 +449,7 @@ async function aioGenericDownload(socket, context, url) {
       const mediaUrl = dc.pickUrl(payload);
       if (!mediaUrl) continue;
       const buffer = await dc.dlBuffer(mediaUrl);
-      if (!buffer || buffer.length < 1000) continue;
+      assertValidDownload(buffer, provider.label); // HTML/JSON/empty bodies are provider failures, not media
       return await sendAioMedia(socket, context, buffer, mediaUrl, dc.pickTitle(payload), provider.label);
     } catch (error) {
       console.warn(`[AIO] ${provider.label} failed:`, error?.message);
@@ -411,7 +462,7 @@ async function aioGenericDownload(socket, context, url) {
     const result = await requestCobalt(config.cobaltApiUrl, url);
     if (!result?.url) throw new Error('no file returned');
     const { buffer, type } = await downloadRemoteFile(result.url);
-    if (!buffer?.length) throw new Error('empty file');
+    assertValidDownload(buffer, 'The download service');
     const kind = String(type || '').includes('audio') ? 'audio' : String(type || '').includes('image') ? 'image' : 'video';
     const caption = `*AIO DOWNLOAD COMPLETE* ✅\n🔗 Cobalt\n*Format:* ${String(type || 'file').split(';')[0]}\n*Size:* ${(buffer.length / 1024 / 1024).toFixed(2)} MB\n\n> ${FOOTER}`;
     if (kind === 'image') await socket.sendMessage(context.chatId, { image: buffer, caption }, { quoted: context.raw });
@@ -443,6 +494,28 @@ async function handleAioCommand(socket, context, argsText, prefix = '!') {
         `Ex: ${String(prefix || '!')}aio https://vm.tiktok.com/xxxxx`
       ].join('\n')
     }, { quoted: context.raw });
+  }
+
+  // Google search/redirect wrappers are never downloaded themselves: the
+  // wrapper is resolved to the REAL destination and that destination goes
+  // through the normal routing below. A wrapper with no resolvable target is
+  // rejected with a clean explanation — never with Google's HTML as "video".
+  if (isGoogleWrapper(url)) {
+    const resolved = resolveRedirectedUrl(url);
+    if (!resolved) {
+      return socket.sendMessage(context.chatId, {
+        text: [
+          '❌ *That is a Google search/redirect link, not a media link.*',
+          '',
+          'Open the actual video/post page first, then send its direct link',
+          `(for example ${String(prefix || '!')}aio https://vm.tiktok.com/xxxxx).`,
+          '',
+          `> ${FOOTER}`
+        ].join('\n')
+      }, { quoted: context.raw });
+    }
+    await socket.sendMessage(context.chatId, { text: '🔗 *AIO* → Google redirect resolved, fetching the real source…' }, { quoted: context.raw });
+    return handleAioCommand(socket, context, resolved, prefix);
   }
 
   const route = AIO_ROUTES.find((entry) => entry.test.test(url));
@@ -481,4 +554,6 @@ module.exports = {
   handleMediafireCommand,
   handleGdriveCommand,
   handleTeraboxCommand,
+  resolveRedirectedUrl,
+  isGoogleWrapper,
 };

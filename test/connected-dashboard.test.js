@@ -525,7 +525,10 @@ test('!menu is case-insensitive and keeps prefix and alias behaviour', () => {
 test('the menu is rendered from the real registry with no fake, duplicate or stale entries', () => {
   const result = audit();
   const hidden = result.hidden;
-  assert.ok(hidden.length > 0, 'manual-only triggers stay out of the public registry');
+  // The hidden/manual-only trigger engine was retired (see
+  // test/hidden-video.test.js): no command is hidden from the public registry
+  // and no manual-only trigger exists anymore.
+  assert.deepEqual(hidden, [], 'the retired manual-only triggers stay retired');
   assert.equal(COMMANDS.length, STATIC_COMMANDS.length, 'no command is filtered out of the public registry');
 
   const declared = new Map();
