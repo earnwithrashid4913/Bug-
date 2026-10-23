@@ -72,24 +72,30 @@ test('stored media round-trip and exact deletion preserve unrelated runtime sett
     assert.deepEqual(await fs.readdir(path.join(dir, 'user_media')), []);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
-test('source downloader keeps every documented video alias in video mode and selects the highest quality', async () => {
-  const axios = require('axios');
-  const originalFetch = global.fetch;
-  const originalGet = axios.get;
-  const sent = [];
-  // Mock the transports the video chain actually uses, in its real order:
-  // Cobalt over fetch refuses the link, so the DavidCyril provider pool (axios)
-  // has to serve it and must pick the highest rendition it is offered.
-  global.fetch = async () => new Response(JSON.stringify({ status: 'error', text: 'Download service refused this link.' }), { status: 400, headers: { 'content-type': 'application/json' } });
-  axios.get = async () => ({ data: { status: true, title: 'Fixture', videos: { '360': 'https://example.com/360.mp4', '720': 'https://example.com/720.mp4' } } });
+test('source downloader keeps every documented video alias in video mode through the local engine', async () => {
+  // The local yt-dlp engine is the process/media boundary now: mock it so the
+  // aliases are audited without spawning a real download.
+  const local = require('../system/lib/local-downloader');
+  const originalVideo = local.downloadVideo;
+  const originalAudio = local.downloadAudio;
+  const videoBytes = Buffer.from('local video fixture');
+  const audioCalls = [];
+  local.downloadVideo = async () => ({ buffer: videoBytes, title: 'Fixture', fileName: 'Fixture.mp4', mimetype: 'video/mp4' });
+  local.downloadAudio = async () => { audioCalls.push('audio'); return { buffer: Buffer.from('audio'), title: 'Fixture', fileName: 'Fixture.mp3', mimetype: 'audio/mpeg' }; };
   try {
     for (const name of ['ytmp4', 'video', 'yt', 'youtube', 'ytv']) {
-      sent.length = 0;
-      await source.download({ sendMessage: async (jid, payload) => sent.push(payload) }, context, { name, text: 'https://youtu.be/example', args: ['https://youtu.be/example'] });
-      assert.equal(sent.find(p => p.video).video.url, 'https://example.com/720.mp4', `${name} must send video, not audio`);
+      const sent = [];
+      const result = await source.download({ sendMessage: async (jid, payload) => sent.push(payload) }, context, { name, text: 'https://youtu.be/example', args: ['https://youtu.be/example'] });
+      assert.equal(result.ok, true, `${name} completed through the local engine`);
+      assert.equal(sent.find(p => p.video)?.video, videoBytes, `${name} must send video, not audio`);
       assert.equal(sent.find(p => p.audio), undefined, `${name} must never enter the audio branch`);
+      assert.equal(sent.find(p => p.video)?.mimetype, 'video/mp4');
     }
-  } finally { global.fetch = originalFetch; axios.get = originalGet; }
+    assert.deepEqual(audioCalls, [], 'no video alias touched the audio path');
+  } finally {
+    local.downloadVideo = originalVideo;
+    local.downloadAudio = originalAudio;
+  }
 });
 test('provider rendition maps resolve to the best media of the requested kind', () => {
   const dc = require('../commands/davidcyril-api');

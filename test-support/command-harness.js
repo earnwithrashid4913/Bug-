@@ -49,6 +49,15 @@ function makeHarness() {
     if (filename === path.join(root, 'config.js')) return config;
     if (cache.has(filename)) return cache.get(filename).exports;
     if (filename === path.join(root, 'system/lib/runtime.js')) return { requestRestart: () => { calls.push('requestRestart'); return 'supervisor'; } };
+    if (filename === path.join(root, 'system/lib/local-downloader.js')) {
+      // The local yt-dlp engine is a process boundary, exactly like the network
+      // boundary mocked above. Handler flows get deterministic media without
+      // spawning a real downloader or touching a third-party API.
+      return {
+        downloadAudio: async () => ({ buffer: bytes, title: 'Fixture audio', fileName: 'Fixture audio.mp3', mimetype: 'audio/mpeg' }),
+        downloadVideo: async () => ({ buffer: bytes, title: 'Fixture video', fileName: 'Fixture video.mp4', mimetype: 'video/mp4' })
+      };
+    }
     if (filename === path.join(root, 'system/lib/sticker.js')) {
       const real = nativeRequire(filename);
       return { ...real, ...Object.fromEntries(['createImageSticker', 'createVideoSticker', 'convertStickerToImage', 'takeSticker', 'convertToVideo'].map(name => [name, async () => { calls.push(name); return bytes; }])) };

@@ -17,9 +17,43 @@ port allocation is not required. It uses WhatsApp and Telegram outbound APIs.
   `deployment.webPort` to it and explicitly enable `deployment.webPairingEnabled`.
 
 The application does not read `.env` or panel environment variables for bot
-configuration. Never paste session credentials or secrets into logs.
+configuration, with two deliberate path-only exceptions used by the Render
+manifest: `ANIME_MD_AUTH_DIR` and `ANIME_MD_DATA_DIR`. They select where the
+WhatsApp session and bot databases live; every other setting remains in
+`config.js`. Never paste session credentials or secrets into logs.
+
+### Render
+
+`render.yaml` mounts a 1 GB disk at `/var/data` (outside the checkout) and sets
+`ANIME_MD_AUTH_DIR=/var/data/session` and `ANIME_MD_DATA_DIR=/var/data/data`, so
+sessions and databases survive deploys instead of living on the ephemeral
+filesystem. Do not remove those variables while the disk is in use, or Render
+will silently start from an empty session and an empty database.
 
 ## Command media requirements
+
+`!play`, `!video` and their aliases download media **on your host** through
+[yt-dlp](https://github.com/yt-dlp/yt-dlp). No third-party download API or API
+key is used. Install the executable on PATH (a release binary, `pipx`, or your
+package manager):
+
+```sh
+# Debian/Ubuntu example: download the standalone binary
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
+yt-dlp --version
+```
+
+If the binary lives somewhere else, set `downloads.ytDlpPath` in `config.js` to
+its absolute path. `downloads.maxFileSizeMb` (default 50) and
+`downloads.timeoutMs` (default 180000) bound each download. Sites that demand a
+signed-in session can use an optional private Netscape cookie file through
+`downloads.cookiesFile`; never commit that file.
+
+Keep yt-dlp up to date: source sites change their internals, and an outdated
+binary is the usual reason a download starts failing. The engine is **not** a
+fallback to a web API — when the binary is missing, the commands report that the
+engine is not installed instead of calling a hosted service.
 
 The source-compatible `sticker` (video input), `tovid` and `sticker2vid`
 commands require an **FFmpeg executable on PATH**, with `libwebp` and `libx264`

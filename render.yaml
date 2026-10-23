@@ -7,6 +7,12 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.19.5
+      # The persistent disk below is mounted outside the checkout. These two
+      # path overrides keep WhatsApp credentials and bot databases on it.
+      - key: ANIME_MD_AUTH_DIR
+        value: /var/data/session
+      - key: ANIME_MD_DATA_DIR
+        value: /var/data/data
     disk:
       name: anime-md-auth-data
       mountPath: /var/data

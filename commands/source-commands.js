@@ -2,21 +2,10 @@
 
 // Source command flows adapted to AnimeMD's existing dispatcher and transport.
 const { performance } = require('node:perf_hooks');
-const { downloadRemoteFile, requestCobalt, youtubeSearch } = require('../system/lib/net-tools');
+const { youtubeSearch } = require('../system/lib/net-tools');
 const { FOOTER, font } = require('../system/lib/presentation');
 const { sessionDashboard } = require('../system/lib/session-status');
-const { config } = require('../system/config');
-const dc = require('./davidcyril-api');
-
-// Keep the provider order deterministic.  A bad optional environment value is
-// ignored instead of being attempted repeatedly for every command.
-function cobaltProviders() {
-  const configured = config.cobaltApiUrl;
-  const environmentOverride = process.env.COBALT_API_URL;
-  const fallback = process.env.COBALT_FALLBACK_API_URL;
-  return [...new Set([configured, environmentOverride, fallback, 'https://cobalt-api.kwiatekmiki.com']
-    .filter((value) => typeof value === 'string' && /^https:\/\//i.test(value)))];
-}
+const localDownloader = require('../system/lib/local-downloader');
 
 function mediaErrorMessage(error, mode) {
   const message = String(error?.message || '');
@@ -28,6 +17,7 @@ function mediaErrorMessage(error, mode) {
       : 'Audio download failed: all configured providers are unavailable. Please try again later.';
   }
   if (/timed out|stalled/i.test(message)) return `${mode === 'video' ? 'Video' : 'Audio'} download timed out. Please try again.`;
+  if (/yt-dlp|download engine/i.test(message)) return 'The download engine (yt-dlp) is not installed or failed on the bot host. Ask the owner to check DEPLOYMENT.md.';
   return mode === 'video'
     ? 'Video download failed. Please try a different link or try again later.'
     : 'Audio download failed. Please try a different link or try again later.';
@@ -76,7 +66,8 @@ async function download(socket, context, command) {
     let url = command.text;
     let video;
     if (audioOnly || /^https?:\/\//i.test(url)) {
-      const parsed = new URL(url);
+      let parsed;
+      try { parsed = new URL(url); } catch { throw new Error('Invalid YouTube URL'); }
       if (!['https:', 'http:'].includes(parsed.protocol) || !['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(parsed.hostname)) throw new Error('Invalid YouTube URL');
     } else {
       await react(socket, context, '🔍');
@@ -87,81 +78,33 @@ async function download(socket, context, command) {
     await react(socket, context, '⬇️');
 
     if (videoMode) {
-      // ── VIDEO: !video — keep existing Cobalt working, add DavidCyril as fallback ──
-      let sent = false;
-      // Primary: Cobalt (existing working provider)
-      const providers = cobaltProviders();
-      for (const provider of providers) {
-        try {
-          const result = await requestCobalt(provider, url, { audio: false });
-          if (result?.url) {
-            await socket.sendMessage(context.chatId, { video: { url: result.url }, mimetype: 'video/mp4', caption: `✅ ${video?.title || result.filename || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
-            sent = true;
-            break;
-          }
-        } catch (err) { console.warn(`[download] provider=cobalt endpoint=${provider} mode=video failed:`, err?.message || err); }
-      }
-      // Fallback: DavidCyril YouTube MP4 pool
-      if (!sent) {
-        console.info('[Video] Cobalt failed, trying DavidCyril YouTube MP4 fallback.');
-        const dcResult = await dc.downloadYtVideo(url);
-        if (dcResult?.ok && dcResult.url) {
-          await socket.sendMessage(context.chatId, { video: { url: dcResult.url }, mimetype: 'video/mp4', caption: `✅ ${video?.title || dcResult.title || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
-          sent = true;
-        }
-      }
-      // Fallback: DavidCyril AIO
-      if (!sent) {
-        console.info('[Video] YouTube MP4 pool failed, trying DavidCyril AIO fallback.');
-        try {
-          const aioResult = await dc.aioDownload(url);
-          const aioUrl = dc.pickUrl(aioResult?.data || aioResult);
-          if (aioUrl) {
-            await socket.sendMessage(context.chatId, { video: { url: aioUrl }, mimetype: 'video/mp4', caption: `✅ ${video?.title || dc.pickTitle(aioResult?.data || aioResult) || 'Video'}\n> ${FOOTER}` }, { quoted: context.raw });
-            sent = true;
-          }
-        } catch (err) { console.warn('[Video] AIO fallback failed:', err?.message || err); }
-      }
-      if (!sent) throw new Error('All video download sources failed.');
+      // ── VIDEO: !video — downloaded and merged locally by yt-dlp + FFmpeg.
+      // No third-party download API is involved; the file is sent only after it
+      // has been produced and validated by the local engine.
+      const media = await localDownloader.downloadVideo(url);
+      await socket.sendMessage(context.chatId, {
+        video: media.buffer,
+        mimetype: 'video/mp4',
+        caption: `✅ ${video?.title || media.title || 'Video'}\n> ${FOOTER}`
+      }, { quoted: context.raw });
     } else {
-      // ── AUDIO: !play — DavidCyril YouTube MP3 pool as primary, Cobalt as fallback ──
-      let sent = false;
-      let audioTitle = video?.title || 'audio';
-      // Primary: DavidCyril YouTube MP3 complete fallback pool
-      try {
-        const dcResult = await dc.downloadYtAudio(url);
-        if (dcResult?.ok && dcResult.url) {
-          audioTitle = dcResult.title || audioTitle;
-          if (audioTitle && audioTitle !== 'audio') await socket.sendMessage(context.chatId, { text: `🎵 ${audioTitle}` }, { quoted: context.raw });
-          const media = await dc.dlBuffer(dcResult.url, 120_000);
-          await socket.sendMessage(context.chatId, { audio: media, mimetype: 'audio/mpeg', ptt: false, fileName: `${audioTitle}.mp3` }, { quoted: context.raw });
-          sent = true;
-        }
-      } catch (err) { console.warn('[download] provider=davidcyril mode=audio failed:', err?.message || err); }
-      // Fallback: Cobalt (existing provider)
-      if (!sent) {
-        console.info('[Play] DavidCyril failed, trying Cobalt fallback.');
-        for (const provider of cobaltProviders()) {
-          try {
-            const result = await requestCobalt(provider, url, { audio: true });
-            if (result?.url) {
-              if (video?.title) await socket.sendMessage(context.chatId, { text: `🎵 ${video.title}` }, { quoted: context.raw });
-              const media = await downloadRemoteFile(result.url, 25 * 1024 * 1024);
-              await socket.sendMessage(context.chatId, { audio: media.buffer, mimetype: media.type || 'audio/mpeg', ptt: false, fileName: result.filename || `${video?.title || 'audio'}.mp3` }, { quoted: context.raw });
-              sent = true;
-              break;
-            }
-          } catch (err) { console.warn(`[download] provider=cobalt endpoint=${provider} mode=audio failed:`, err?.message || err); }
-        }
-      }
-      if (!sent) throw new Error('All audio download sources failed.');
+      // ── AUDIO: !play — extracted to MP3 locally by yt-dlp + FFmpeg.
+      const media = await localDownloader.downloadAudio(url);
+      const audioTitle = video?.title || media.title || 'audio';
+      if (audioTitle && audioTitle !== 'audio') await socket.sendMessage(context.chatId, { text: `🎵 ${audioTitle}` }, { quoted: context.raw });
+      await socket.sendMessage(context.chatId, {
+        audio: media.buffer,
+        mimetype: 'audio/mpeg',
+        ptt: false,
+        fileName: media.fileName
+      }, { quoted: context.raw });
     }
     await react(socket, context, '✅');
-    return { ok: true, title: video?.title || 'audio' };
+    return { ok: true, title: video?.title || (videoMode ? 'video' : 'audio') };
   } catch (error) {
     console.error('[Play] Download failed:', error?.message || error);
     await react(socket, context, '❌');
-    const userMessage = mediaErrorMessage(error, videoModeForCommand(command.name));
+    const userMessage = error?.userMessage || mediaErrorMessage(error, videoModeForCommand(command.name));
     if (!command.quiet) await reply(`Download failed: ${userMessage}`);
     return { ok: false, error };
   }
