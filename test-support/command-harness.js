@@ -55,7 +55,9 @@ function makeHarness() {
       // spawning a real downloader or touching a third-party API.
       return {
         downloadAudio: async () => ({ buffer: bytes, title: 'Fixture audio', fileName: 'Fixture audio.mp3', mimetype: 'audio/mpeg' }),
-        downloadVideo: async () => ({ buffer: bytes, title: 'Fixture video', fileName: 'Fixture video.mp4', mimetype: 'video/mp4' })
+        downloadVideo: async () => ({ buffer: bytes, title: 'Fixture video', fileName: 'Fixture video.mp4', mimetype: 'video/mp4' }),
+        searchVideo: async () => [{ url: 'https://youtu.be/fixture', title: 'Fixture' }],
+        searchAudio: async () => [{ url: 'https://soundcloud.com/fixture/track', title: 'Fixture track' }]
       };
     }
     if (filename === path.join(root, 'system/lib/sticker.js')) {

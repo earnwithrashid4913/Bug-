@@ -97,6 +97,48 @@ test('source downloader keeps every documented video alias in video mode through
     local.downloadAudio = originalAudio;
   }
 });
+test('a YouTube block during a name search falls back to the local audio source', async () => {
+  const netTools = require('../system/lib/net-tools');
+  const local = require('../system/lib/local-downloader');
+  const originalSearch = netTools.youtubeSearch;
+  const originalDownload = local.downloadAudio;
+  const originalSearchAudio = local.searchAudio;
+  const sent = [];
+  netTools.youtubeSearch = async () => [{ url: 'https://youtu.be/blocked', title: 'Blocked' }];
+  local.downloadAudio = async (url) => {
+    if (String(url).includes('youtu')) throw Object.assign(new Error('yt-dlp failed: Sign in to confirm you\u2019re not a bot'), { userMessage: 'cookies' });
+    return { buffer: Buffer.from('cloud audio'), title: 'Cloud Track', fileName: 'Cloud Track.m4a', mimetype: 'audio/mp4' };
+  };
+  local.searchAudio = async () => [{ title: 'Cloud Track', url: 'https://soundcloud.com/x/cloud-track' }];
+  try {
+    const result = await source.download({ sendMessage: async (jid, payload) => sent.push(payload) }, context, { name: 'play', text: 'some song', args: ['some', 'song'] });
+    assert.equal(result.ok, true);
+    assert.equal(result.source, 'soundcloud');
+    assert.equal(sent.find((payload) => payload.audio)?.mimetype, 'audio/mp4');
+  } finally {
+    netTools.youtubeSearch = originalSearch;
+    local.downloadAudio = originalDownload;
+    local.searchAudio = originalSearchAudio;
+  }
+});
+
+test('an explicit blocked YouTube link is reported, never replaced with another track', async () => {
+  const local = require('../system/lib/local-downloader');
+  const originalDownload = local.downloadAudio;
+  const originalSearchAudio = local.searchAudio;
+  let fallbackCalls = 0;
+  local.downloadAudio = async () => { throw Object.assign(new Error('yt-dlp failed: Sign in to confirm you\u2019re not a bot'), { userMessage: 'cookies' }); };
+  local.searchAudio = async () => { fallbackCalls += 1; return []; };
+  try {
+    const result = await source.download({ sendMessage: async () => ({}) }, context, { name: 'play', text: 'https://youtu.be/blocked', args: ['https://youtu.be/blocked'] });
+    assert.equal(result.ok, false);
+    assert.equal(fallbackCalls, 0, 'a direct link must not silently become a different song');
+  } finally {
+    local.downloadAudio = originalDownload;
+    local.searchAudio = originalSearchAudio;
+  }
+});
+
 test('provider rendition maps resolve to the best media of the requested kind', () => {
   const dc = require('../commands/davidcyril-api');
   // A quality map is a real provider response shape, not a single URL field.

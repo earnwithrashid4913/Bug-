@@ -156,9 +156,21 @@ module.exports = {
   // Audio/video downloads run on YOUR host through the yt-dlp executable.
   // No third-party download API is used for !play and !video.
   downloads: {
-    // yt-dlp command name (when it is on PATH) or an absolute path. REQUIRED for !play/!video.
+    // yt-dlp command name (when it is on PATH) or an absolute path. OPTIONAL:
+    // when nothing is found the engine installs itself (see autoInstall).
     // Example: "/usr/local/bin/yt-dlp". Install guide: DEPLOYMENT.md.
     ytDlpPath: 'yt-dlp',
+    // true lets the bot download the official yt-dlp build into binDir when the
+    // host has none, so !play/!video work on a fresh panel without manual setup.
+    // Set false to forbid any automatic download. OPTIONAL.
+    autoInstall: true,
+    // Where the automatic engine copies are stored. Leave blank to use
+    // <database.dataDir>/bin. OPTIONAL.
+    binDir: '',
+    // Optional FFmpeg binary. Leave blank to let the bot find ffmpeg on PATH or
+    // install a static build into binDir (needed to merge video and make MP3).
+    // Example: "/usr/bin/ffmpeg". OPTIONAL.
+    ffmpegPath: '',
     // Optional Netscape cookies.txt for sites that require a signed-in session.
     // Keep this file private and outside Git. Leave blank when not needed.
     cookiesFile: '',
