@@ -64,7 +64,12 @@ function loadConfig(source = userConfig) {
   if (!['pairing', 'qr'].includes(authMethod)) throw configurationError('whatsapp.authMethod must be "pairing" or "qr".');
   const prefix = string(bot.prefix, 'bot.prefix', { required: true });
   if (prefix.length > 4 || /\s/.test(prefix)) throw configurationError('bot.prefix must be 1-4 non-whitespace characters.');
-  const dataDir = runtimePath(database.dataDir, 'database.dataDir');
+  const downloads = source.downloads || {};
+  // Host-specific path overrides. Render mounts its persistent disk at /var/data,
+  // which is outside the checkout, so render.yaml points these two variables at
+  // the disk. Every other host keeps using config.js unchanged.
+  const dataDir = runtimePath(process.env.ANIME_MD_DATA_DIR || database.dataDir, 'database.dataDir');
+  const authDir = runtimePath(process.env.ANIME_MD_AUTH_DIR || whatsapp.authDir, 'whatsapp.authDir');
   const enabled = bool(telegram.enabled, 'telegram.enabled', true);
   const token = string(telegram.botToken, 'telegram.botToken');
   const ownerIds = Array.isArray(telegram.ownerIds) ? telegram.ownerIds.map(String).map((id) => id.trim()).filter((id) => id && !PLACEHOLDER.test(id)) : [];
@@ -109,7 +114,8 @@ function loadConfig(source = userConfig) {
     projectName: CANONICAL_IDENTITY.projectName, developerName: CANONICAL_IDENTITY.developer, developerBrand: CANONICAL_IDENTITY.organization, authorName: CANONICAL_IDENTITY.author,
     whatsappChannel: url(owner.whatsappChannel, 'owner.whatsappChannel'), commandPrefix: prefix,
     stickerPackname: string(commands.stickerPackname, 'commands.stickerPackname', { required: true }), stickerAuthor: string(commands.stickerAuthor, 'commands.stickerAuthor', { required: true }), publicMode: bool(bot.publicMode, 'bot.publicMode', true),
-    authMethod, authDir: runtimePath(whatsapp.authDir, 'whatsapp.authDir'), sessionId: string(whatsapp.sessionId, 'whatsapp.sessionId'), sessionOverwrite: bool(whatsapp.sessionOverwrite, 'whatsapp.sessionOverwrite', false),
+    downloadsYtDlpPath: string(downloads.ytDlpPath, 'downloads.ytDlpPath', { required: true }), downloadsCookiesFile: downloads.cookiesFile ? runtimePath(downloads.cookiesFile, 'downloads.cookiesFile') : '', downloadsMaxFileSizeMb: integer(downloads.maxFileSizeMb, 'downloads.maxFileSizeMb', 50, 1, 512), downloadsTimeoutMs: integer(downloads.timeoutMs, 'downloads.timeoutMs', 180000, 10000, 600000),
+    authMethod, authDir, sessionId: string(whatsapp.sessionId, 'whatsapp.sessionId'), sessionOverwrite: bool(whatsapp.sessionOverwrite, 'whatsapp.sessionOverwrite', false),
     dataDir, premiumDbPath: db('premiumDbPath', 'premium.json'), groupSettingsDbPath: db('groupSettingsDbPath', 'groups.json'), modeDbPath: db('modeDbPath', 'mode.json'), sudoDbPath: db('sudoDbPath', 'sudo.json'), warningDbPath: db('warningDbPath', 'warnings.json'), economyDbPath: db('economyDbPath', 'economy.json'), settingsDbPath: db('settingsDbPath', 'settings.json'), automationDbPath: db('automationDbPath', 'automation.json'), chatsDbPath: db('chatsDbPath', 'chats.json'),
     telegramEnabled: enabled, telegramBotToken: PLACEHOLDER.test(token) ? '' : token, telegramBotLink: optionalTelegramLink(telegram.botLink), telegramOwnerIds: Object.freeze(ownerIds), telegramControllerDbPath: optionalPath(telegram.controllerDbPath, path.join(dataDir, 'telegram-controllers.json'), 'telegram.controllerDbPath'), telegramPublicMode, telegramPremiumOnly, telegramRequiredChannels: Object.freeze(telegramRequiredChannels.map((channel) => Object.freeze({ ...channel }))),
     theme: Object.freeze({ name: string(theme.name, 'theme.name', { required: true }) }), webHost: string(deployment.webHost, 'deployment.webHost', { required: true }), webPort: integer(deployment.webPort, 'deployment.webPort', 3000, 1, 65535), webPairingEnabled: bool(deployment.webPairingEnabled, 'deployment.webPairingEnabled', false),

@@ -120,7 +120,9 @@ module.exports = {
     groqApiKey: 'YOUR_GROQ_API_KEY',
     // Groq model for !ai. OPTIONAL. Example: "openai/gpt-oss-20b".
     groqModel: 'openai/gpt-oss-20b',
-    // Cobalt server for video downloads. OPTIONAL HTTPS URL.
+    // Optional Cobalt server used only by the generic !media/!aio fallback.
+    // !play and !video no longer call it: they use the local yt-dlp engine
+    // configured in `downloads` below. OPTIONAL HTTPS URL.
     cobaltApiUrl: 'https://cobalt-api.kwiatekmiki.com',
     // Catbox endpoint for !tourl uploads. OPTIONAL HTTPS URL.
     uploadApiUrl: 'https://catbox.moe/user/api.php'
@@ -148,6 +150,22 @@ module.exports = {
     automationDbPath: '',
     // Known-chat registry used by !broadcast. OPTIONAL. Example: "./data/chats.json".
     chatsDbPath: ''
+  },
+
+  // ==================================== DOWNLOAD ENGINE SETTINGS ===========
+  // Audio/video downloads run on YOUR host through the yt-dlp executable.
+  // No third-party download API is used for !play and !video.
+  downloads: {
+    // yt-dlp command name (when it is on PATH) or an absolute path. REQUIRED for !play/!video.
+    // Example: "/usr/local/bin/yt-dlp". Install guide: DEPLOYMENT.md.
+    ytDlpPath: 'yt-dlp',
+    // Optional Netscape cookies.txt for sites that require a signed-in session.
+    // Keep this file private and outside Git. Leave blank when not needed.
+    cookiesFile: '',
+    // Maximum media size sent to WhatsApp, in MB (1-512). OPTIONAL.
+    maxFileSizeMb: 50,
+    // Hard per-command download timeout in milliseconds. OPTIONAL.
+    timeoutMs: 180000
   },
 
   // ========================================= THEME SETTINGS =================

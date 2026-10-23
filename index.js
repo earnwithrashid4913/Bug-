@@ -195,6 +195,29 @@ function startDiagnostics() {
   memoryTimer.unref();
 }
 
+// The primary socket is only started from a saved session (or SESSION_ID).
+// When whatsapp.authMethod is "pairing" and Telegram pairing is not configured,
+// there is no way to obtain that session: startBot() deliberately does not open
+// an unauthenticated primary socket. Report that honestly with the exact fix
+// instead of claiming Telegram owns a pairing flow that is switched off.
+function primaryIdleGuidance(options = {}) {
+  const telegramReady = options.telegramReady !== undefined
+    ? Boolean(options.telegramReady)
+    : Boolean(config.telegramEnabled && config.telegramBotToken && config.telegramOwnerIds.length);
+  if (telegramReady) {
+    return {
+      ready: true,
+      message: 'No primary session is restored. Use an authorized Telegram controller to pair a session.',
+      fix: ''
+    };
+  }
+  return {
+    ready: false,
+    message: 'No WhatsApp session is saved, whatsapp.authMethod is "pairing", and Telegram pairing is disabled — the bot cannot connect.',
+    fix: 'Fix config.js: (1) set telegram.enabled=true plus telegram.botToken and telegram.ownerIds, or (2) set whatsapp.authMethod="qr" and scan the QR in this terminal, or (3) supply a saved session with whatsapp.sessionId. The process stays online; no WhatsApp connection is open.'
+  };
+}
+
 function disconnectStatusCode(lastDisconnect) {
   const error = lastDisconnect?.error;
   if (!error) return undefined;
@@ -688,12 +711,17 @@ async function startBot() {
   // Reading the disk is the only check that stays correct across reconnects,
   // restarts and a session being added or removed while the bot is running.
   if (config.authMethod === 'pairing' && !hasSession(config.authDir)) {
-    setStatus('telegram_pairing', 'No primary session is restored. Use an authorized Telegram controller to pair a session.');
-    // With no restored primary session and no Telegram token, Node otherwise
-    // has no active handles and the supervisor would repeatedly restart the
-    // healthy worker. Keep the process alive for later panel/env configuration.
+    const guidance = primaryIdleGuidance();
+    setStatus('telegram_pairing', guidance.message);
+    // With no restored primary session, Node otherwise has no active handles
+    // and the supervisor would repeatedly restart the healthy worker. Keep the
+    // process alive so the panel does not crash-loop while the owner fixes the
+    // configuration. This branch is a REAL dead end when Telegram is disabled:
+    // the bot used to claim "Telegram Pairing owns new sessions" even then, so
+    // print the exact fix instead of a contradictory line.
     ensureKeepAlive();
-    console.info('[BOOT] [WHATSAPP] [startup] Primary WhatsApp socket is idle; Telegram Pairing owns new sessions.');
+    (guidance.ready ? console.info : console.error)(`[BOOT] [WHATSAPP] [startup] ${guidance.message}`);
+    if (!guidance.ready) console.error(`[BOOT] [WHATSAPP] [startup] ${guidance.fix}`);
     return;
   }
 
@@ -1003,6 +1031,7 @@ module.exports = {
   WORKER_GIVEUP_WINDOW_MS,
   decodeJid,
   disconnectStatusCode,
+  primaryIdleGuidance,
   formatPairingCode,
   liveStatus,
   isPermanentTelegramStartError,

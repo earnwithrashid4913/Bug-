@@ -172,6 +172,14 @@ default.
 Run `npm run start:dry` to validate `config.js` without opening WhatsApp.
 Run `npm test` and `npm run lint` before deployment.
 
+`!play`, `!video` and their aliases download media locally with **yt-dlp** on
+PATH; no download API or key is involved. See [DEPLOYMENT.md](./DEPLOYMENT.md)
+for the install commands and the `downloads` settings in `config.js`.
+
+The Render manifest mounts a persistent disk at `/var/data` and points
+`ANIME_MD_AUTH_DIR` and `ANIME_MD_DATA_DIR` at it, so sessions and databases
+survive deploys. Other hosts keep using the paths in `config.js`.
+
 ## External-runtime limitation
 
 Automated tests use a mocked Baileys socket for isolation and lifecycle checks.
