@@ -172,9 +172,11 @@ default.
 Run `npm run start:dry` to validate `config.js` without opening WhatsApp.
 Run `npm test` and `npm run lint` before deployment.
 
-`!play`, `!video` and their aliases download media locally with **yt-dlp** on
-PATH; no download API or key is involved. See [DEPLOYMENT.md](./DEPLOYMENT.md)
-for the install commands and the `downloads` settings in `config.js`.
+`!play`, `!video` and their aliases download media locally with **yt-dlp**; no
+download API or key is involved. The bot installs yt-dlp and FFmpeg itself on
+the first download when the host has neither, so no manual setup is required;
+see [DEPLOYMENT.md](./DEPLOYMENT.md) and the `downloads` settings in
+`config.js` for paths, mirrors and the off switch.
 
 The Render manifest mounts a persistent disk at `/var/data` and points
 `ANIME_MD_AUTH_DIR` and `ANIME_MD_DATA_DIR` at it, so sessions and databases

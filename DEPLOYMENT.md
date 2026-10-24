@@ -34,30 +34,60 @@ will silently start from an empty session and an empty database.
 
 `!play`, `!video` and their aliases download media **on your host** through
 [yt-dlp](https://github.com/yt-dlp/yt-dlp). No third-party download API or API
-key is used. Install the executable on PATH (a release binary, `pipx`, or your
-package manager):
+key is used.
+
+**Nothing has to be installed by hand.** On a fresh panel the bot provisions
+itself on the first download command:
+
+1. `downloads.ytDlpPath` when it points at a real binary,
+2. `yt-dlp` on PATH,
+3. the copy already stored in `downloads.binDir`,
+4. a Python installation that already has the `yt_dlp` module,
+5. otherwise the official standalone build for this platform is downloaded once
+   into `downloads.binDir` and verified with `--version`.
+
+FFmpeg is handled the same way: it is taken from PATH or `downloads.ffmpegPath`,
+otherwise a static build is downloaded into `downloads.binDir`. That binary is
+what extracts MP3 and merges video, so `!play` and `!video` work out of the box.
+When FFmpeg genuinely cannot be obtained, `!play` still returns a ready-to-play
+M4A and `!video` asks for a progressive MP4 instead of failing.
+
+`downloads.binDir` defaults to `<database.dataDir>/bin`, which sits on the
+persistent disk on Render and Pterodactyl, so the binaries survive a redeploy.
+If a host cannot reach GitHub, point `ANIME_MD_YTDLP_URL` and
+`ANIME_MD_FFMPEG_URL` at a mirror, or install both packages yourself:
 
 ```sh
-# Debian/Ubuntu example: download the standalone binary
+# Debian/Ubuntu (optional — the bot installs these itself when missing)
+sudo apt-get update && sudo apt-get install -y ffmpeg
 sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
 sudo chmod a+rx /usr/local/bin/yt-dlp
 yt-dlp --version
 ```
 
-If the binary lives somewhere else, set `downloads.ytDlpPath` in `config.js` to
-its absolute path. `downloads.maxFileSizeMb` (default 50) and
-`downloads.timeoutMs` (default 180000) bound each download. Sites that demand a
-signed-in session can use an optional private Netscape cookie file through
-`downloads.cookiesFile`; never commit that file.
+Set `downloads.autoInstall` to `false` to forbid all automatic downloads.
+`downloads.maxFileSizeMb` (default 50) and `downloads.timeoutMs` (default
+180000) bound each download. Sites that demand a signed-in session can use an
+optional private Netscape cookie file through `downloads.cookiesFile`; never
+commit that file.
+
+When YouTube answers a name search with its bot check, `!play` skips the
+blocked results and can take the track from SoundCloud through the same local
+engine (no API, no key). Only a title that really matches the query is accepted,
+so the bot never sends a different song; if nothing matches, the reply explains
+that cookies are needed. Video commands stay on YouTube, because the other
+local sources carry no video.
 
 Keep yt-dlp up to date: source sites change their internals, and an outdated
-binary is the usual reason a download starts failing. The engine is **not** a
-fallback to a web API — when the binary is missing, the commands report that the
-engine is not installed instead of calling a hosted service.
+binary is the usual reason a download starts failing. Delete `downloads.binDir`
+to force a fresh copy. The engine is **not** a fallback to a web API — when the
+binary is missing and cannot be installed, the commands say so instead of
+calling a hosted service.
 
 The source-compatible `sticker` (video input), `tovid` and `sticker2vid`
-commands require an **FFmpeg executable on PATH**, with `libwebp` and `libx264`
-encoders. For a Debian/Ubuntu bot host, install it with:
+commands still require an **FFmpeg executable on PATH**, with `libwebp` and
+`libx264` encoders. Installing the system package is the reliable way to get
+those encoders; for a Debian/Ubuntu bot host:
 
 ```sh
 sudo apt-get update

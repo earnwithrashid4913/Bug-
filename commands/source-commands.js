@@ -2,7 +2,7 @@
 
 // Source command flows adapted to AnimeMD's existing dispatcher and transport.
 const { performance } = require('node:perf_hooks');
-const { youtubeSearch } = require('../system/lib/net-tools');
+const netTools = require('../system/lib/net-tools');
 const { FOOTER, font } = require('../system/lib/presentation');
 const { sessionDashboard } = require('../system/lib/session-status');
 const localDownloader = require('../system/lib/local-downloader');
@@ -17,7 +17,7 @@ function mediaErrorMessage(error, mode) {
       : 'Audio download failed: all configured providers are unavailable. Please try again later.';
   }
   if (/timed out|stalled/i.test(message)) return `${mode === 'video' ? 'Video' : 'Audio'} download timed out. Please try again.`;
-  if (/yt-dlp|download engine/i.test(message)) return 'The download engine (yt-dlp) is not installed or failed on the bot host. Ask the owner to check DEPLOYMENT.md.';
+  if (/yt-dlp|download engine/i.test(message)) return 'The download engine is starting up or could not run on the bot host. Please try again in a minute; the owner can check DEPLOYMENT.md if it keeps failing.';
   return mode === 'video'
     ? 'Video download failed. Please try a different link or try again later.'
     : 'Audio download failed. Please try a different link or try again later.';
@@ -54,6 +54,16 @@ async function request(url) {
   if (!response.ok) throw new Error(`API HTTP ${response.status}`);
   return response.json();
 }
+async function sendAudioMedia(socket, context, media, title) {
+  const audioTitle = title || media.title || 'audio';
+  if (audioTitle && audioTitle !== 'audio') await socket.sendMessage(context.chatId, { text: `🎵 ${audioTitle}` }, { quoted: context.raw });
+  await socket.sendMessage(context.chatId, {
+    audio: media.buffer,
+    mimetype: media.mimetype || 'audio/mpeg',
+    ptt: false,
+    fileName: media.fileName
+  }, { quoted: context.raw });
+}
 async function download(socket, context, command) {
   const reply = text => socket.sendMessage(context.chatId, { text }, { quoted: context.raw });
   if (!command.text) return reply(`Usage: ${command.name} ${command.name === 'ytmp3' || command.name === 'audio' || command.name === 'mp3' ? '<YouTube URL>' : '<search query or YouTube URL>'}`);
@@ -63,44 +73,83 @@ async function download(socket, context, command) {
     // !yt, !youtube and !ytv silently entered the audio branch and were then
     // reported as an audio-provider failure.
     const videoMode = ['video', 'ytmp4', 'mp4', 'ytvideo', 'yt', 'youtube', 'ytv'].includes(command.name);
-    let url = command.text;
-    let video;
-    if (audioOnly || /^https?:\/\//i.test(url)) {
+    let candidates;
+    let searched = false;
+    if (audioOnly || /^https?:\/\//i.test(command.text)) {
       let parsed;
-      try { parsed = new URL(url); } catch { throw new Error('Invalid YouTube URL'); }
+      try { parsed = new URL(command.text); } catch { throw new Error('Invalid YouTube URL'); }
       if (!['https:', 'http:'].includes(parsed.protocol) || !['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(parsed.hostname)) throw new Error('Invalid YouTube URL');
+      candidates = [{ url: command.text, title: '' }];
     } else {
+      searched = true;
       await react(socket, context, '🔍');
-      [video] = await youtubeSearch(url, 1);
-      if (!video) throw new Error('No search results');
-      url = video.url;
+      let found;
+      try {
+        found = await netTools.youtubeSearch(command.text, 5);
+      } catch (searchError) {
+        // The page scraper can be blocked by a consent page or a markup change;
+        // the local engine can search YouTube itself, so a name still works.
+        console.warn('[Play] Page search failed, using the local engine:', searchError?.message || searchError);
+        found = await localDownloader.searchVideo(command.text, undefined, 5);
+      }
+      candidates = (found || []).filter((entry) => entry?.url).map((entry) => ({ url: entry.url, title: entry.title || '' }));
+      if (!candidates.length) throw new Error('No search results');
     }
     await react(socket, context, '⬇️');
 
-    if (videoMode) {
-      // ── VIDEO: !video — downloaded and merged locally by yt-dlp + FFmpeg.
-      // No third-party download API is involved; the file is sent only after it
-      // has been produced and validated by the local engine.
-      const media = await localDownloader.downloadVideo(url);
-      await socket.sendMessage(context.chatId, {
-        video: media.buffer,
-        mimetype: 'video/mp4',
-        caption: `✅ ${video?.title || media.title || 'Video'}\n> ${FOOTER}`
-      }, { quoted: context.raw });
-    } else {
-      // ── AUDIO: !play — extracted to MP3 locally by yt-dlp + FFmpeg.
-      const media = await localDownloader.downloadAudio(url);
-      const audioTitle = video?.title || media.title || 'audio';
-      if (audioTitle && audioTitle !== 'audio') await socket.sendMessage(context.chatId, { text: `🎵 ${audioTitle}` }, { quoted: context.raw });
-      await socket.sendMessage(context.chatId, {
-        audio: media.buffer,
-        mimetype: 'audio/mpeg',
-        ptt: false,
-        fileName: media.fileName
-      }, { quoted: context.raw });
+    let lastError;
+    for (const candidate of candidates) {
+      try {
+        let media;
+        if (videoMode) {
+          // ── VIDEO: !video — downloaded and merged locally by yt-dlp + FFmpeg.
+          // No third-party download API is involved; the file is sent only after
+          // it has been produced and validated by the local engine.
+          media = await localDownloader.downloadVideo(candidate.url);
+          await socket.sendMessage(context.chatId, {
+            video: media.buffer,
+            mimetype: media.mimetype || 'video/mp4',
+            caption: `✅ ${candidate.title || media.title || 'Video'}\n> ${FOOTER}`
+          }, { quoted: context.raw });
+        } else {
+          // ── AUDIO: !play — extracted to MP3 locally by yt-dlp + FFmpeg.
+          media = await localDownloader.downloadAudio(candidate.url);
+          await sendAudioMedia(socket, context, media, candidate.title);
+        }
+        await react(socket, context, '✅');
+        return { ok: true, title: candidate.title || media.title || (videoMode ? 'video' : 'audio') };
+      } catch (error) {
+        lastError = error;
+        // A single blocked or removed search result must not fail the command when
+        // another result can still be delivered; direct links only have one shot.
+        if (!shouldTryNextCandidate(error)) break;
+        console.warn('[Play] Trying the next search result:', error?.message || error);
+      }
     }
-    await react(socket, context, '✅');
-    return { ok: true, title: video?.title || (videoMode ? 'video' : 'audio') };
+    // YouTube sometimes refuses every result for a host (bot check) even though
+    // the query is valid. Audio can come from the second local source instead of
+    // failing the command; an explicit link is never replaced by another track.
+    if (searched && !videoMode && shouldTryNextCandidate(lastError)) {
+      console.warn('[Play] YouTube refused every result; trying the local SoundCloud source.');
+      let tracks = [];
+      try {
+        tracks = await localDownloader.searchAudio(command.text, undefined, 3);
+      } catch (searchError) {
+        console.warn('[Play] SoundCloud search failed:', searchError?.message || searchError);
+      }
+      for (const track of tracks) {
+        try {
+          const media = await localDownloader.downloadAudio(track.url);
+          await sendAudioMedia(socket, context, media, track.title);
+          await react(socket, context, '✅');
+          return { ok: true, title: track.title || media.title, source: 'soundcloud' };
+        } catch (error) {
+          lastError = error;
+          if (!shouldTryNextCandidate(error)) break;
+        }
+      }
+    }
+    throw lastError || new Error('No search results');
   } catch (error) {
     console.error('[Play] Download failed:', error?.message || error);
     await react(socket, context, '❌');
@@ -110,6 +159,10 @@ async function download(socket, context, command) {
   }
 }
 
+function shouldTryNextCandidate(error) {
+  const message = String(error?.message || '');
+  return /sign in to confirm|not a bot|video unavailable|private video|removed|requested format|no compatible|http error 403|only images are available/i.test(message);
+}
 function videoModeForCommand(name) {
   return ['video', 'ytmp4', 'mp4', 'ytvideo', 'yt', 'youtube', 'ytv'].includes(String(name).toLowerCase()) ? 'video' : 'audio';
 }
