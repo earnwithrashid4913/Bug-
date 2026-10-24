@@ -5,7 +5,8 @@ const { getContextInfo } = require('./message');
 const netTools = require('./net-tools');
 const local = require('./local-downloader');
 const { config } = require('../config');
-const { MediaError, youtubeUrl, createLocalProvider, classifyError, createProviderChain } = require('./youtube-engine');
+const { MediaError, youtubeUrl, classifyError } = require('./youtube-engine');
+const { createRecoveredProvider } = require('./youtube-recovered');
 
 // A single host-wide budget, including metadata requests. Fail fast rather than
 // retaining an unbounded queue of WhatsApp messages or media jobs in memory.
@@ -55,11 +56,11 @@ function receiptTracker(socket, timeoutMs = 45000) {
 }
 
 function createFlow(socket, {
-  provider = createProviderChain([createLocalProvider()]),
+  provider = createRecoveredProvider(),
   search = async query => {
-    try { return await netTools.youtubeSearch(query, 1); }
+    try { return await netTools.youtubeSearch(query, 5); }
     catch {
-      try { return await local.searchVideo(query, undefined, 1); }
+      try { return await local.searchVideo(query, undefined, 5); }
       catch (error) {
         if (/No .*results/i.test(error.message)) throw new MediaError('SEARCH', 'No YouTube results were found.');
         throw classifyError(error.message);
@@ -106,7 +107,7 @@ function createFlow(socket, {
     s.expires = now() + ttlMs;
   }
   async function menu(s) {
-    const text = `*ANIME MD • MEDIA SELECT*\n\n🎵 *${s.info.title}*\n👤 ${s.info.uploader}\n⏱ ${duration(s.info.duration)}\n🔗 ${s.info.url}\n\nChoose a format below:\n1. HD VIDEO\n2. AUDIO MP3\n3. VOICE TYPE\n\nReply to this message with 1, 2 or 3, or send:\n${s.id} 2\nExpires in ${Math.round(ttlMs / 60000)} minutes.`;
+    const text = `*ANIME MD • MEDIA SELECT*\n\n🎵 *${s.info.title}*\n👤 ${s.info.uploader}\n⏱ ${s.info.durationText || duration(s.info.duration)}\n🔗 ${s.info.url}\n\nChoose a format below:\n1. HD VIDEO\n2. AUDIO MP3\n3. VOICE TYPE\n\nReply to this message with 1, 2 or 3, or send:\n${s.id} 2\nExpires in ${Math.round(ttlMs / 60000)} minutes.`;
     let image;
     try { image = await thumbnail(s.info.thumbnail); }
     catch { log('THUMBNAIL_UNAVAILABLE', 'thumbnail'); }
@@ -120,10 +121,21 @@ function createFlow(socket, {
     s.state = 'selecting';
   }
   async function showQualities(s) {
-    if (!s.info.qualities.length) throw new MediaError('QUALITY', 'No compatible MP4 with audio is available within the size limit.');
-    const rows = s.info.qualities.map((f, index) => `${index + 1}. ${f.height}p`).join('\n');
-    const message = await send(s.ctx, { text: `*ANIME MD • VIDEO QUALITY*\n${s.info.title}\n\n${rows}\n\nReply to this message with a number, or send ${s.id} 1.\nNo quality is substituted silently.` });
+    if (provider.qualities) {
+      try { s.info.qualities = await withSlot(() => provider.qualities(s.info)); }
+      catch (error) { log(error.code || 'QUALITY_LOOKUP_FAILED', 'optional-quality'); }
+    }
+    s.qualityOptions = [...s.info.qualities];
+    if (s.info.autoVideo) s.qualityOptions.push({ label: 'Automatic video • previous downloader (quality chosen by provider)' });
+    if (!s.qualityOptions.length) throw new MediaError('QUALITY', 'No compatible MP4 with audio is available within the size limit.');
+    const rows = s.qualityOptions.map((f, index) => `${index + 1}. ${f.label || `${f.height}p`}`).join('\n');
+    const message = await send(s.ctx, { text: `*ANIME MD • VIDEO QUALITY*\n${s.info.title}\n\n${rows}\n\nReply to this message with a number, or send ${s.id} 1.\nExplicit resolutions are never downgraded. Automatic mode does not promise HD.` });
     bindMenu(s, message); s.state = 'quality';
+  }
+  async function showSources(s) {
+    const rows = s.candidates.map((entry, index) => `${index + 1}. ${entry.title || 'YouTube result'}\n${entry.url}`).join('\n');
+    const message = await send(s.ctx, { text: `*Choose another search result explicitly*\n${rows}\nReply with a number quoting this message or send ${s.id} 1. No source changes without your selection.` });
+    bindMenu(s, message); s.state = 'sources';
   }
   async function deliver(s, kind, height) {
     s.state = 'working'; s.kind = kind; s.height = height;
@@ -137,10 +149,11 @@ function createFlow(socket, {
         await status(s, 'Uploading to WhatsApp');
         // Never retry an upload: an exception can occur after WhatsApp accepted
         // the media. A repeat click cannot cause a duplicate upload.
+        if (media.notice) await send(s.ctx, { text: media.notice });
         const result = await send(s.ctx, {
-          [kind === 'video' ? 'video' : 'audio']: { url: media.file },
+          [media.asDocument ? 'document' : kind === 'video' ? 'video' : 'audio']: { url: media.file },
           mimetype: media.mimetype, fileName: media.fileName,
-          ...(kind === 'video' ? { caption: `*${s.info.title}* • ${height}p\nANIME MD` } : { ptt: kind === 'voice' })
+          ...(kind === 'video' ? { caption: `*${s.info.title}* • ${height === undefined ? 'automatic quality' : `${height}p`}\nANIME MD` } : { ptt: kind === 'voice' })
         });
         s.state = 'confirming';
         await status(s, 'Uploaded • waiting for WhatsApp delivery receipt');
@@ -158,7 +171,7 @@ function createFlow(socket, {
       s.state = uncertain ? 'uncertain' : 'failed';
       log(error.code || 'OPERATION_FAILED', s.state);
       await status(s, uncertain ? 'Upload outcome unknown • no automatic resend' : 'Failed');
-      if (!s.quiet) await send(s.ctx, { text: uncertain ? 'WhatsApp upload failed or was not confirmed. It may already have been accepted; this request will not resend automatically.' : `${safeError(error)}\nRetry this request: ${s.id} retry` });
+      if (!s.quiet) await send(s.ctx, { text: uncertain ? 'WhatsApp upload failed or was not confirmed. It may already have been accepted; this request will not resend automatically.' : `${safeError(error)}\nRetry this request: ${s.id} retry${s.candidates?.length > 1 ? `\nChoose a different search result explicitly: ${s.id} sources` : ''}` });
       return { ok: false, state: s.state };
     } finally { if (media) await media.cleanup().catch(() => log('CLEANUP_FAILED', 'cleanup')); s.expires = now() + ttlMs; }
   }
@@ -176,23 +189,25 @@ function createFlow(socket, {
     try {
       s.statusKey = (await send(ctx, { text: '*ANIME MD* • Searching / fetching media information…' }))?.key;
       s.info = await withSlot(async () => {
-        let url;
+        let url, seed = {};
         if (/^[a-z][a-z\d+.-]*:|^(www\.|youtube\.com|youtu\.be)|^\S+\.\S+\//i.test(input)) url = youtubeUrl(input);
         else {
           if (directAudio.has(command.name) || directVideo.has(command.name)) throw new MediaError('INPUT', 'This command requires a YouTube URL. Use play or video to search.');
           const found = await search(input);
           if (!Array.isArray(found) || !found[0]?.url) throw new MediaError('SEARCH', 'No YouTube results were found.');
-          url = youtubeUrl(found[0].url);
+          s.candidates = found.filter(entry => entry?.url);
+          seed = s.candidates[0];
+          url = youtubeUrl(seed.url);
         }
-        return provider.inspect(url);
+        return provider.inspect(url, seed);
       });
       await menu(s); // Thumbnail and full menu always precede any media upload.
       await status(s, 'Choose a format from the media message');
       if (directAudio.has(command.name)) return deliver(s, 'audio');
       if (directVideo.has(command.name)) {
-        if (!s.info.qualities.length) throw new MediaError('QUALITY', 'No compatible video formats are available.');
-        const height = s.info.qualities[0].height;
-        await status(s, `Direct video • choosing highest available ${height}p`);
+        if (!s.info.qualities.length && !s.info.autoVideo) throw new MediaError('QUALITY', 'No compatible video formats are available.');
+        const height = s.info.autoVideo ? undefined : s.info.qualities[0].height;
+        await status(s, height === undefined ? 'Direct video • previous automatic format selection' : `Direct video • choosing highest available ${height}p`);
         return deliver(s, 'video', height);
       }
       return { ok: true, pending: true, id: s.id };
@@ -205,7 +220,7 @@ function createFlow(socket, {
     }
   }
   async function select(ctx) {
-    const match = /^([a-f0-9]{12})\s+(\d{1,2}|retry)$/i.exec(ctx.text || '');
+    const match = /^([a-f0-9]{12})\s+(\d{1,2}|retry|sources)$/i.exec(ctx.text || '');
     const quoted = getContextInfo(ctx.raw?.message)?.stanzaId;
     let s = match ? sessions.get(match[1].toLowerCase()) :
       /^\d{1,2}$/.test(ctx.text || '') && quoted ? [...sessions.values()].find(entry => entry.menuKey === quoted) : null;
@@ -224,11 +239,19 @@ function createFlow(socket, {
       // Claim the session synchronously, before the first await, to block clicks
       // arriving while the quality message or provider operation is in flight.
       s.state = 'working';
+      if (value === 'sources' && s.candidates?.length > 1) { await showSources(s); return true; }
+      if (previous === 'sources') {
+        const entry = s.candidates[Number(value) - 1];
+        if (!entry) throw new MediaError('CHOICE', 'Choose one of the listed search results.');
+        s.info = await withSlot(() => provider.inspect(youtubeUrl(entry.url), entry));
+        s.kind = undefined; s.height = undefined;
+        await menu(s); return true;
+      }
       if (value === 'retry' && previous === 'failed' && s.kind) { await deliver(s, s.kind, s.height); return true; }
       if (previous === 'failed') { s.state = previous; await send(ctx, { text: 'Start a new request to refresh the source information.' }); return true; }
       const index = Number(value) - 1;
       if (previous === 'quality') {
-        const quality = s.info.qualities[index];
+        const quality = s.qualityOptions[index];
         if (!quality) throw new MediaError('CHOICE', 'Choose one of the listed resolution numbers.');
         await deliver(s, 'video', quality.height);
       } else if (value === '1') await showQualities(s);
@@ -250,7 +273,7 @@ function forSocket(socket) {
 async function select(socket, context) {
   const flow = services.get(socket);
   if (flow) return flow.select(context);
-  if (!/^([a-f0-9]{12})\s+(\d{1,2}|retry)$/i.test(context.text || '')) return false;
+  if (!/^([a-f0-9]{12})\s+(\d{1,2}|retry|sources)$/i.test(context.text || '')) return false;
   await socket.sendMessage(context.chatId, { text: 'This media selection expired or the bot restarted. Start a new request.' }, { quoted: context.raw });
   return true;
 }

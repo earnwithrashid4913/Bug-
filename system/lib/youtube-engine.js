@@ -73,16 +73,27 @@ function run(command, args, { timeoutMs, directory, maxBytes }) {
     child.once('close', code => finish(code ? classifyError(stderr) : null));
   });
 }
-function classifyError(text) {
+function classifyError(detail) {
+  const text = String(detail || '');
+  const status = Number(text.match(/(?:HTTP(?: Error| status)?|status(?: code)?|Download failed)[\s:(]*(\d{3})\b/i)?.[1]);
+  // Specific messages precede broad HTTP/provider wording. In PR61 "requested
+  // format is not available" incorrectly hit "not available" => RESTRICTED.
+  if (/requested format|no (?:compatible |video |audio )?formats?|no such format|only images are available/i.test(text)) return new MediaError('QUALITY', 'The requested media format is unavailable. Try automatic video or another available format.');
   if (/timed out|timeout|stalled/i.test(text)) return new MediaError('TIMEOUT', 'The media source timed out. Please try again.');
-  if (/unreadable.*metadata|no metadata/i.test(text)) return new MediaError('METADATA', 'The source returned malformed or incomplete metadata.');
-  if (/could not be started|not installed|not found|could not run|unrecognized.*js-runtimes|javascript runtime|challenge.*solver/i.test(text)) return new MediaError('ENGINE', 'The download engine could not run. Ask the owner to check yt-dlp and FFmpeg.');
-  if (/429|5\d\d|temporar|connection reset/i.test(text)) return new MediaError('TRANSIENT', 'The media source is temporarily unavailable. Please try again later.');
-  if (/403|404|not available|private|removed|sign in|age.restrict|not a bot|cookies|geo|region/i.test(text)) return new MediaError('RESTRICTED', 'YouTube refused this video. It may be restricted, unavailable, or require an authorized session.');
-  if (/requested format|no.*format/i.test(text)) return new MediaError('QUALITY', 'That format is no longer available. Start a new request to refresh the qualities.');
-  if (/exceed|max.file|too large/i.test(text)) return new MediaError('SIZE', 'That media is too large. Choose a smaller quality or a shorter video.');
-  return new MediaError('MEDIA', 'The source or media processing failed. Please try another accessible video.');
+  if (/TLS|SSL|certificate|ECONN|ENOTFOUND|EAI_AGAIN|getaddrinfo|DNS|network is unreachable|connection (?:reset|refused|closed)|fetch failed/i.test(text)) return new MediaError('NETWORK', 'The bot host could not reach the media service (network, DNS or TLS failure). This is not evidence that the video requires login.');
+  if (/unreadable.*metadata|no metadata|malformed|unexpected.*JSON/i.test(text)) return new MediaError('METADATA', 'The source returned malformed or incomplete metadata.');
+  if (/could not be started|not installed|download engine.*not found|could not run|ENOENT|unrecognized.*js-runtimes|javascript runtime|challenge.*solver|ffmpeg.*(?:missing|not found|required)/i.test(text)) return new MediaError('ENGINE', 'A required media tool or runtime is missing or incompatible. Ask the owner to check the download configuration.');
+  if (status === 429 || status >= 500 || /too many requests|temporar/i.test(text)) return new MediaError('TRANSIENT', 'The media service is rate-limited or temporarily unavailable. Please try again later.');
+  if (status === 404 || /private video|video (?:is )?unavailable|video.*(?:removed|does not exist)/i.test(text)) return new MediaError('UNAVAILABLE', 'The requested video or media URL is unavailable, private, removed or expired.');
+  if (/age.restrict|confirm your age|not available in your country|geo.restrict|region.block/i.test(text)) return new MediaError('RESTRICTED', 'The source explicitly reports an age or regional restriction for this video.');
+  if (/not a bot|bot.check|sign in to confirm.*bot/i.test(text)) return new MediaError('BOT_CHECK', 'YouTube challenged this host as automated traffic. This does not establish that the video needs a personal login.');
+  if (/login required|sign in|authentication required|members.only/i.test(text)) return new MediaError('AUTH', 'This provider explicitly requires an authorized session for this request.');
+  if (status === 403 || /forbidden/i.test(text)) return new MediaError('FORBIDDEN', 'The media service denied access (HTTP 403). The media URL may have expired or the host may be blocked; authentication is not established as the cause.');
+  if (/exceed|max.file|too large|larger than/i.test(text)) return new MediaError('SIZE', 'That media is too large. Choose a smaller quality or a shorter video.');
+  if (/signature|extract(?:ion|or)|unable to extract|nsig/i.test(text)) return new MediaError('EXTRACTOR', 'The extractor could not resolve this source. Check its version and JavaScript components; this is not a confirmed authentication error.');
+  return new MediaError('PROVIDER', 'The media provider failed without a recognized reason. Try another provider or check server diagnostics.');
 }
+
 async function retry(operation, sleep = ms => new Promise(r => setTimeout(r, ms))) {
   for (let attempt = 0; ; attempt++) {
     try { return await operation(); }

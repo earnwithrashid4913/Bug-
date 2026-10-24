@@ -416,7 +416,7 @@ function engineError(detail, cause) {
 }
 
 function baseArgs(options) {
-  const args = ['--ignore-config', '--no-playlist', '--no-warnings', '--no-progress', '--no-color', '--socket-timeout', '30', '--retries', '2'];
+  const args = ['--no-playlist', '--no-warnings', '--no-progress', '--no-color', '--socket-timeout', '30', '--retries', '2'];
   if (options.jsRuntime) args.push('--js-runtimes', `node:${options.jsRuntime}`);
   if (options.cookiesFile) args.push('--cookies', options.cookiesFile);
   return args;

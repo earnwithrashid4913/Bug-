@@ -49,9 +49,8 @@ function makeHarness() {
     if (filename === path.join(root, 'config.js')) return config;
     if (cache.has(filename)) return cache.get(filename).exports;
     if (filename === path.join(root, 'system/lib/runtime.js')) return { requestRestart: () => { calls.push('requestRestart'); return 'supervisor'; } };
-    if (filename === path.join(root, 'system/lib/youtube-engine.js')) {
-      const real = nativeRequire(filename);
-      return { ...real, createLocalProvider: () => ({
+    if (filename === path.join(root, 'system/lib/youtube-recovered.js')) {
+      return { createRecoveredProvider: () => ({
         inspect: async url => ({ url, title: 'Fixture', uploader: 'Fixture uploader', duration: 60,
           thumbnail: '', audio: true, qualities: [{ height: 720, selector: '22' }] }),
         download: async (info, kind) => ({ file: '/mock/media', fileName: 'Fixture.mp4',
