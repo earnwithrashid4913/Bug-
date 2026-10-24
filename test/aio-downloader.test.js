@@ -94,7 +94,8 @@ test('!aio is registered once, with working aliases, in the downloader category'
 test('!aio shows up in the !menu index and in the downloader category view', async (t) => {
   const h = makeHarness(); t.after(() => h.close());
   const root = h.socket();
-  await h.handler(root, root.message('!menu'));
+  // The complete directory lives behind the "Show All Commands" navigation.
+  await h.handler(root, root.message('!menu all'));
   const index = root.sends.map((entry) => entry.payload?.text || '').join('\n');
   assert.match(index, /!aio • !allinone • !alldownload/, 'the whole alias set is advertised once');
 

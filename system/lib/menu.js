@@ -321,8 +321,9 @@ function helpText(prefix = '!', categoryId = '') {
   const category = categoryId ? getCategory(categoryId) : undefined;
   if (category) {
     return [
-      `*${configSafeName(category)}*`,
-      '',
+      `╭━━〔 ${category.icon} *${category.label}* 〕━━╮`,
+      `┃  ${category.commands.length} Command${category.commands.length === 1 ? '' : 's'}`,
+      '┃',
       ...category.commands.flatMap((entry) => [
         `${prefix}${entry.name}${entry.usage ? ` ${entry.usage}` : ''}${entry.aliases.length ? `  (${entry.aliases.map(alias => `${prefix}${alias}`).join(', ')})` : ''}`,
         entry.description,
@@ -333,21 +334,28 @@ function helpText(prefix = '!', categoryId = '') {
   }
 
   const categories = categoriesWithCommands();
+  const totalCommands = categories.reduce((total, category) => total + category.commands.length, 0);
+  // Owner/developer come from the ONE canonical identity/config — never
+  // hardcoded, so a deployment rename cannot produce a stale card.
+  const { config } = require('../config');
   return [
-    '*ANIME MD*',
+    `╭━━━〔 ✦ ${config.botName.toUpperCase()} ✦ 〕━━━╮`,
+    '┃',
+    '┃  ⚡ *COMMAND LIST*',
+    '┃  ─────────────────────',
+    `┃  👑 Owner: ${config.ownerName}`,
+    `┃  🛠 Developer: ${config.developerName}`,
+    `┃  📋 ${totalCommands} commands • ${categories.length} categories`,
+    '┃',
+    '╰━━━━━━━━━━━━━━━━━━━━━━╯',
     '',
-    '*General commands*',
-    ...categories.map((category, index) => `${index + 1}. ${category.icon} ${category.title} — ${prefix}menu ${category.id}`),
+    ...categories.map((category, index) => `${index + 1}. ${category.icon} *${category.label}* — ${prefix}menu ${category.id} (${category.commands.length})`),
     '',
     `Type ${prefix}menu <category> or reply with a category number.`,
     '',
-    `Owner: Rashid Hussain`,
-    `Developer: F!xa Dev`
+    `👑 Owner: ${config.ownerName}`,
+    `🛠 Developer: ${config.developerName}`
   ].join('\n');
-}
-
-function configSafeName(category) {
-  return `${category.icon} ${category.label}`;
 }
 
 module.exports = {

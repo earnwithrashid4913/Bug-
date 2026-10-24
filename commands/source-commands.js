@@ -4,6 +4,7 @@
 const { performance } = require('node:perf_hooks');
 const { FOOTER, font } = require('../system/lib/presentation');
 const { sessionDashboard } = require('../system/lib/session-status');
+const { config } = require('../system/config');
 const youtubeFlow = require('../system/lib/youtube-flow');
 
 async function react(socket, context, text) {
@@ -23,13 +24,13 @@ async function ping(socket, context) {
   const latency = Math.round(performance.now() - started);
   const index = latency <= 500 ? 0 : latency <= 1000 ? 1 : latency <= 2000 ? 2 : 3;
   const urls = ['https://i.ibb.co/KxDP90wf/37fe119a1c79.jpg', 'https://i.ibb.co/dwwcKFsC/52a445e39696.jpg', 'https://i.ibb.co/CK6ks0Cd/9fbbd0c276b6.jpg', 'https://i.ibb.co/0RkR9kV9/0baea924809e.jpg'];
-  await imageOrText(socket, context, urls[index], `> *${font('PONG!')}* ${['⚡', '📡', '🐢', '😴'][index]}\n\n> Latence: ${latency}ms\n> Message-send latency\n\n> ${FOOTER}`);
+  await imageOrText(socket, context, urls[index], `> *${font('PONG!')}* ${['⚡', '📡', '🐢', '😴'][index]}\n\n> Latency: ${latency}ms\n> Message-send latency\n\n> ${FOOTER}`);
 }
 async function alive(socket, context) {
   // Uptime/status are resolved by the one authoritative session renderer from
   // this socket's live session mirror (or, when a socket has none, from that
   // socket's real identity and the process runtime) — never a placeholder.
-  const text = `❤️ *${font('ANIME-MD')}*\n\n${sessionDashboard(socket.animeSessionStatus, { socket, compact: true })}\n\n> ${FOOTER}`;
+  const text = `❤️ *${font(config.botName)}*\n\n${sessionDashboard(socket.animeSessionStatus, { socket, compact: true })}\n\n> ${FOOTER}`;
   await imageOrText(socket, context, 'https://i.ibb.co/5WN6ZV1h/a17b5bc5feb6.jpg', text);
 }
 

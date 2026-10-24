@@ -617,8 +617,9 @@ function menuIndexChunks(prefix, categories) {
 
 function menuHelpText(prefix, category, commands) {
   return [
-    `*${category.icon} ${category.label}*`,
-    '',
+    `╭━━〔 ${category.icon} *${category.label}* 〕━━╮`,
+    `┃  ${commands.length} Command${commands.length === 1 ? '' : 's'}`,
+    '┃',
     ...commands.flatMap(entry => [
       `${prefix}${entry.name}${entry.usage ? ` ${entry.usage}` : ''}${entry.aliases.length ? `  (${entry.aliases.map(alias => `${prefix}${alias}`).join(', ')})` : ''}`,
       entry.description,
@@ -628,13 +629,30 @@ function menuHelpText(prefix, category, commands) {
   ].join('\n');
 }
 
-// The mandated banner heading every root menu. Owner/developer come from the
-// live configuration/canonical identity — never hardcoded per deploy.
+// Width-aware page splitter for long menu texts: pages break on the last whole
+// line below the limit (never mid-word/mid-line), so every page stands alone.
+function paginateText(text, limit) {
+  const pages = [];
+  let remaining = text;
+  while (remaining.length > limit) {
+    const cut = remaining.lastIndexOf('\n', limit);
+    if (cut <= 0) break;
+    pages.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+    if (!remaining) break;
+  }
+  if (remaining) pages.push(remaining);
+  return pages.length ? pages : [text];
+}
+
+// The mandated premium banner heading of every root menu. Owner/developer
+// come from the live configuration/canonical identity — never hardcoded per
+// deploy. The bot name follows the runtime !setname setting.
 function menuBanner(botName) {
   return [
-    `╭━━━〔 ✦ ${String(botName || 'ANIME MD').toUpperCase()} ✦ 〕━━━╮`,
+    `╭━━━〔 ✦ ${String(botName || config.botName).toUpperCase()} ✦ 〕━━━╮`,
     '┃',
-    '┃  ⚡ *ANIME-MD MENU*',
+    '┃  ⚡ *COMMAND CENTER*',
     '┃  ─────────────────────',
     `┃  👑 Owner: ${config.ownerName}`,
     `┃  🛠 Developer: ${config.developerName}`,
@@ -646,8 +664,27 @@ function menuBanner(botName) {
 async function handleMenuCommand(socket, context, command) {
   const botName = await settingsStore.get('bot_name') || config.botName;
   const p = getCommandPrefix();
-  const categoryId = command.args[0]?.toLowerCase();
+  const categoryId = command.args[0]?.toLowerCase() || '';
+  // Decimal page for pagination (e.g. `!menu downloader 2`). Ignored where a
+  // view does not paginate.
+  const pageArg = Number.parseInt(command.args[1], 10);
+  const page = Number.isInteger(pageArg) && pageArg >= 1 ? pageArg : 1;
   const visibleCategories = await visibleMenuCategories(socket, context);
+
+  // -----------------------------------------------------------------------
+  // "Show All Commands": the complete live-registry index (every category
+  // with every executable alias), chunked into whole messages. Kept behind
+  // its own navigation so a simple `!menu` no longer floods the chat with
+  // several long list messages — the premium root card below opens it on
+  // request, exactly like the reference layout's "Show All Commands" button.
+  // -----------------------------------------------------------------------
+  if (categoryId === 'all') {
+    const chunks = menuIndexChunks(p, visibleCategories);
+    for (const chunk of chunks) {
+      await socket.sendMessage(context.chatId, { text: styleHeaders(chunk) }, { quoted: context.raw });
+    }
+    return;
+  }
 
   if (!categoryId || categoryId === 'home') {
     const categories = visibleCategories;
@@ -660,22 +697,23 @@ async function handleMenuCommand(socket, context, command) {
           '',
           `📋 *${totalCommands} commands* in ${categories.length} categories`,
           '',
-          'Choose a category:',
+          '🗂 Choose a category below — or open the complete index with *Show All Commands*.',
           '',
-          'The complete command list follows below.'
+          '💬 Interactive list: tap a category, or reply with its number.'
         ].join('\n'),
         footer: `Developer: ${config.developerName}`,
-        title: 'Browse Categories',
+        title: '📂 Browse Categories',
         sections: [{
-          title: 'Categories',
+          title: '⚫ CATEGORIES',
           rows: categories.map((cat) => ({
             header: cat.icon,
             title: cat.label,
-            description: `${cat.commands.length} commands`,
+            description: `${cat.commands.length} command${cat.commands.length === 1 ? '' : 's'} • ${p}menu ${cat.id}`,
             id: `${p}menu ${cat.id}`
           }))
         }],
         actions: [
+          { label: '📚 All Commands', id: `${p}menu all` },
           { label: '📊 Status', id: `${p}status` },
           { label: '👑 Owner', id: `${p}owner` }
         ],
@@ -684,12 +722,13 @@ async function handleMenuCommand(socket, context, command) {
           '',
           `Name: ${botName}`,
           '',
-          'Choose a category:',
+          `📋 *${totalCommands} commands* in ${categories.length} categories`,
           '',
-          '*Categories:*',
-          ...categories.map((cat, i) => `${i + 1}. ${cat.icon} ${cat.label}  → ${p}menu ${cat.id}`),
+          '🗂 *Choose a category:*',
+          ...categories.map((cat, i) => `${i + 1}. ${cat.icon} ${cat.label}  (${cat.commands.length}) → ${p}menu ${cat.id}`),
           '',
           `Reply with the number to open a category.`,
+          `📚 Full index: ${p}menu all`,
           '',
           `Developer: ${config.developerName}`
         ].join('\n'),
@@ -698,14 +737,11 @@ async function handleMenuCommand(socket, context, command) {
     } catch (error) {
       await socket.sendMessage(context.chatId, { text: helpText(p) }, { quoted: context.raw });
     }
-
-    // ALL COMMANDS IN ONE GO: every executable command of every category the
-    // caller may run, generated from the live registry (never a hand-written
-    // list). A category is then opened with `!menu <category>` — or with the
-    // number/row above — for its usage lines, aliases and descriptions.
-    for (const chunk of menuIndexChunks(p, categories)) {
-      await socket.sendMessage(context.chatId, { text: styleHeaders(chunk) }, { quoted: context.raw });
-    }
+    // PAGINATION NOTE: the root card carries the live per-category counts and
+    // its own backward navigation (`!menu <category>` rows + the numbered
+    // reply shortcut). The full per-command index is one `!menu all` away, so
+    // the registry can never be shown stale while the default view stays
+    // compact and mobile-friendly.
     return;
   }
 
@@ -716,9 +752,26 @@ async function handleMenuCommand(socket, context, command) {
     return;
   }
 
+  // Pagination for long categories: the WhatsApp text ceiling is 4096
+  // characters. When the whole category exceeds the threshold, the listing is
+  // split into pages whose next page opens through a real `!menu <id> <n>`
+  // action — no fake navigation row, it calls the same handler.
+  const PAGE_TEXT_LIMIT = 3_500;
+  const baseText = menuHelpText(p, category, category.commands);
+  let text = baseText;
+  let pages = [baseText];
+  if (baseText.length > PAGE_TEXT_LIMIT) {
+    pages = paginateText(baseText, PAGE_TEXT_LIMIT);
+    text = pages[Math.min(page, pages.length) - 1] + `\n\n📄 Page ${Math.min(page, pages.length)}/${pages.length}`;
+  }
+
   // One shared rendering includes every execute alias in both interactive
   // bodies and the plain-text fallback; list rows keep canonical actions.
-  const text = menuHelpText(p, category, category.commands);
+  const navActions = [
+    { label: '☰ All Categories', id: `${p}menu` },
+    ...(page < pages.length ? [{ label: '⏭ Next Page', id: `${p}menu ${category.id} ${page + 1}` }] : []),
+    { label: '🏠 Main Menu', id: `${p}menu home` }
+  ];
 
   try {
     await sendList(socket, context.chatId, {
@@ -734,10 +787,7 @@ async function handleMenuCommand(socket, context, command) {
           id: `${p}${cmd.name}`
         }))
       }],
-      actions: [
-        { label: '☰ All Categories', id: `${p}menu` },
-        { label: '🏠 Main Menu', id: `${p}menu home` }
-      ],
+      actions: navActions,
       fallbackText: text,
       quoted: context.raw
     });
@@ -1901,7 +1951,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
       }
       try {
         const imageBuffer = await downloadMediaBuffer(imageMessage, videoMessage ? 'video' : 'image');
-        const sticker = await (videoMessage ? createVideoSticker : createImageSticker)(imageBuffer, { packname: 'ANIME-MD', author: 'GoatMods' });
+        const sticker = await (videoMessage ? createVideoSticker : createImageSticker)(imageBuffer, { packname: config.stickerPackname, author: config.stickerAuthor });
         await socket.sendMessage(context.chatId, { sticker }, { quoted: context.raw });
         await sendResult(socket, context, { text: '*STICKER READY* 🎨', command: 'sticker' });
       } catch (error) {
@@ -1922,7 +1972,7 @@ async function dispatchCommand(socket, context, command, rawMessage) {
         const buffer = await downloadMediaBuffer(sticker, 'sticker');
         if (['take', 'steal'].includes(command.name)) {
           const [packname, author] = command.text.split('|').map(value => value.trim());
-          const result = await takeSticker(buffer, { packname: packname || 'ANIME-MD', author: author || 'GoatMods' });
+          const result = await takeSticker(buffer, { packname: packname || config.stickerPackname, author: author || config.stickerAuthor });
           await socket.sendMessage(context.chatId, { sticker: result }, { quoted: context.raw });
         } else {
           await socket.sendMessage(context.chatId, { video: await convertToVideo(buffer), mimetype: 'video/mp4', caption: sourceCommands.FOOTER }, { quoted: context.raw });
@@ -2844,3 +2894,5 @@ module.exports.initializeMode = initializeMode;
 module.exports.modeStore = modeStore;
 module.exports.getCommandPrefix = getCommandPrefix;
 module.exports.setCommandPrefix = setCommandPrefix;
+// Exposed for pagination regression tests (used by the category view).
+module.exports.paginateText = paginateText;

@@ -209,28 +209,83 @@ test('command handler dispatches a menu response', async () => {
       return { key: { id: 'test-message' } };
     }
   };
+  const send = (text) => handleMessage(socket, {
+    key: {
+      remoteJid: '15551234568@s.whatsapp.net',
+      participant: '15551234568@s.whatsapp.net',
+      fromMe: false
+    },
+    message: { conversation: text }
+  });
+
+  // ROOT MENU: the premium category card only. It must NOT flood the chat with
+  // the whole 144-command index — the complete list is one "Show All
+  // Commands" navigation away (`!menu all`).
+  await send('!menu');
+
+  // Navigation first: the interactive list, or its text fallback when the
+  // socket cannot relay interactive messages. Headers are styled, so the
+  // wording is checked font-independently.
+  assert.ok(sent.length >= 1, 'menu response should contain text');
+  assert.equal(sent[0].chatId, '15551234568@s.whatsapp.net');
+  assert.ok(sent[0].payload.text || sent[0].payload.interactiveMessage, 'menu response should contain text');
+  const rootText = String(sent[0].payload.interactiveMessage?.body?.text || sent[0].payload.text || '').normalize('NFKC');
+  assert.match(rootText, /Choose a category|ANIME MD|COMMAND CENTER/);
+  // Every visible category is navigable, and every id printed by the card is a
+  // real registered category: the fallback lists each id, the interactive list
+  // has one row per category with its honest live count.
+  const listedIds = new Set([...rootText.matchAll(new RegExp(String.raw`menu ([a-z][a-z0-9]*)`, 'g'))].map((match) => match[1]));
+  assert.ok(listedIds.has('general') && listedIds.has('downloader'), 'public categories are listed');
+  // Owner-only categories stay access-filtered out of a normal user's card.
+  assert.ok(!listedIds.has('owner') && !listedIds.has('sudo'), 'non-executable categories are not advertised');
+  if (sent[0].payload.interactiveMessage) {
+    const select = sent[0].payload.interactiveMessage.nativeFlowMessage.buttons.find((b) => b.name === 'single_select');
+    const rows = JSON.parse(select.buttonParamsJson).sections.flatMap((section) => section.rows);
+    for (const row of rows) {
+      const id = row.id.replace(/^!menu\s+/, '');
+      const category = categoriesWithCommands().find((entry) => entry.id === id);
+      assert.ok(category, `the card advertises a real category: ${id}`);
+      assert.match(row.description, `${category.commands.length} command`, `${id}: the advertised count matches the registry`);
+    }
+    // "Show All Commands" navigation points at the real command.
+    const actionIds = sent[0].payload.interactiveMessage.nativeFlowMessage.buttons
+      .filter((b) => b.name === 'quick_reply')
+      .map((b) => JSON.parse(b.buttonParamsJson).id);
+    assert.ok(actionIds.some((id) => /menu all$/.test(id)), '"Show All Commands" action present');
+  } else {
+    // The plain-text fallback must still teach the user how to reach the
+    // complete index ("Show All Commands" navigation without interactivity).
+    assert.match(rootText, /menu all/, 'the fallback promotes the full-index navigation');
+  }
+  // No full-index dump behind the root card: the root view stays compact.
+  const afterRoot = sent.slice(1).filter((entry) => entry.payload.text).length;
+  assert.equal(afterRoot, 0, 'the root menu must not send long index messages');
+});
+
+test('"!menu all" renders the complete public command index in ≤4096-char pages', async () => {
+  const sent = [];
+  const socket = {
+    user: { id: '15551234567@s.whatsapp.net' },
+    decodeJid: (jid) => jid.replace(/:\d+@/, '@'),
+    sendMessage: async (chatId, payload, options) => {
+      if (!payload.react) sent.push({ chatId, payload, options });
+      return { key: { id: 'test-message' } };
+    }
+  };
   const message = {
     key: {
       remoteJid: '15551234568@s.whatsapp.net',
       participant: '15551234568@s.whatsapp.net',
       fromMe: false
     },
-    message: { conversation: '!menu' }
+    message: { conversation: '!menu all' }
   };
 
   await handleMessage(socket, message);
 
-  // !menu answers with the category navigation plus the COMPLETE command
-  // index, so every executable command is visible without opening a category.
-  assert.ok(sent.length >= 1, 'menu response should contain text');
-  assert.equal(sent[0].chatId, message.key.remoteJid);
-  assert.ok(sent[0].payload.text, 'menu response should contain text');
-  // Navigation first: the interactive list, or its text fallback when the
-  // socket cannot relay interactive messages. Headers are styled, so the
-  // wording is checked font-independently.
-  assert.match(sent[0].payload.text.normalize('NFKC'), /Choose a category|Categories:/);
-
-  const index = sent.slice(1).map((entry) => entry.payload.text).join('\n');
+  // The complete index still carries EVERY public command (and its aliases):
+  // the navigation is behind the root card, the directory itself is complete.
+  const index = sent.map((entry) => entry.payload.text).join('\n');
   const tokens = new Set([...index.matchAll(/(?:^|[\s(,•])!([a-z][a-z0-9]*)\b/gm)].map((match) => match[1]));
   // The caller is a normal (non-owner, non-admin) user, so the index must carry
   // every PUBLIC command of every category — and nothing it cannot execute.
@@ -243,7 +298,7 @@ test('command handler dispatches a menu response', async () => {
       }
       expected += 1;
       for (const name of [entry.name, ...entry.aliases]) {
-        assert.ok(tokens.has(name), `!${name} is missing from the !menu index`);
+        assert.ok(tokens.has(name), `!${name} is missing from the "menu all" index`);
       }
     }
   }
@@ -253,8 +308,8 @@ test('command handler dispatches a menu response', async () => {
     .reduce((total, category) => total + category.commands.filter((entry) => entry.permission === 'public').length, 0);
   assert.equal(expected, publicCommands, 'every public command is indexed exactly once');
   assert.ok(publicCommands > 50, `expected the full public directory, got ${publicCommands}`);
-  for (const chunk of sent.slice(1)) {
-    assert.ok(chunk.payload.text.length <= 4096, 'an index message stays inside the WhatsApp text limit');
+  for (const chunk of sent) {
+    assert.ok(chunk.payload.text.length <= 4096, 'an index page stays inside the WhatsApp text limit');
     assert.doesNotMatch(chunk.payload.text, /undefined|NaN/);
   }
 });

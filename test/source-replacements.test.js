@@ -39,7 +39,11 @@ test('Groq personas retain source temperature, token budget, identity and multil
   const love = buildGroqRequest('Bonjour', 'llama-3.1-8b-instant', 'ANIME-MD', 'love');
   assert.equal(love.temperature, 0.8);
   assert.equal(love.max_tokens, 1024);
-  assert.match(love.messages[0].content, /GoatMods/);
+  // The persona keeps its romantic identity but no longer carries a legacy
+  // third-party brand name (ANIME MD identity regression).
+  assert.match(love.messages[0].content, /sensuelle|romantique/);
+  assert.match(love.messages[0].content, /élu|crush/);
+  assert.doesNotMatch(love.messages[0].content, /GoatMods/i);
   assert.match(love.messages[0].content, /langue de l'utilisateur/);
   assert.match(love.messages[0].content, /3-4 phrases/);
   assert.equal(love.messages[1].content, 'Bonjour');
@@ -94,7 +98,7 @@ test('real FFmpeg conversion: PNG to MP4 to animated sticker to MP4, and EXIF ta
   const png = await sharp({ create: { width: 32, height: 32, channels: 4, background: '#f08080' } }).png().toBuffer();
   const video = await createSimpleVideo(png);
   assert.equal(video.toString('ascii', 4, 8), 'ftyp');
-  const sticker = await createVideoSticker(video, { packname: 'ANIME-MD', author: 'GoatMods' });
+  const sticker = await createVideoSticker(video, { packname: 'ANIME-MD', author: 'F!xa Dev' });
   assert.equal(sticker.toString('ascii', 8, 12), 'WEBP');
   const frame = await extractFirstFrameFromWebP(sticker);
   assert.equal((await sharp(frame).metadata()).format, 'png');

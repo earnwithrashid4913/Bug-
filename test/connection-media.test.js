@@ -195,8 +195,11 @@ test('welcome caption uses only authenticated own display data; LID is not false
   const caption = welcomeCaption({ user: { id: '923001234567:4@s.whatsapp.net', name: 'Own User' } }).normalize('NFKC');
   assert.match(caption, /USER : Own User/);
   assert.match(caption, /NUMBER : \+923001234567/);
-  assert.match(caption, /GOJO'S SYSTEM/);
+  assert.match(caption, /SYSTEM STATUS/);
+  assert.match(caption, /ANIME MD/);
   assert.match(caption, /TODAY'S THOUGHT/);
+  // One consistent premium identity: the legacy third-party brand stays gone.
+  assert.doesNotMatch(caption, /GOJO|GOAT|LIMITLESS/i);
   assert.doesNotMatch(caption, /Rashid|F!xa|undefined|TOKEN|creds/);
   assert.match(welcomeCaption({ user: { id: '123456789@lid' } }).normalize('NFKC'), /NUMBER : Unavailable/);
 });

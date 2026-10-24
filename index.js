@@ -24,7 +24,8 @@ const { MemoryCache } = require('./system/lib/cache');
 const { formatPairingCodeDisplay: formatPairingCode } = require('./system/lib/pairing-number');
 const { hasSession, prepareSession } = require('./system/session');
 const { sendButtons } = require('./system/lib/ui');
-const { authenticatedSelfJid, sendWelcomeVideo, welcomeCaption } = require('./system/lib/connection-welcome');
+const { FOOTER, font } = require('./system/lib/presentation');
+const { authenticatedSelfJid, sendWelcomeVideo, welcomeCaption, safeMediaCaption } = require('./system/lib/connection-welcome');
 const { TelegramController } = require('./system/lib/telegram-controller');
 const { TelegramControllerStore } = require('./system/lib/telegram-controllers');
 const { TelegramPairingManager } = require('./system/lib/telegram-pairing-manager');
@@ -495,11 +496,13 @@ async function sendConnectionSuccess(socket) {
   if (delivery.video) delivery.delivered = true;
 
   // 2. Existing image fallback when the video is disabled or could not be sent.
+  //    Every media caption is bounded to WhatsApp's own caption ceiling by the
+  //    shared safeMediaCaption() helper.
   if (!delivery.video) {
     try {
       await socket.sendMessage(target, {
         image: { url: config.connectionSuccessImage },
-        caption: config.connectionWelcomeVideo.enabled ? welcomeCaption(socket, sessionStatus) : `*${config.botName}*`
+        caption: safeMediaCaption(welcomeCaption(socket, sessionStatus))
       });
       delivery.image = true;
       delivery.delivered = true;
@@ -511,10 +514,17 @@ async function sendConnectionSuccess(socket) {
 
   // 3. The connected dashboard card. Every value is resolved from this
   //    session's own live status/identity — never hardcoded, never masked.
+  //    The design follows the one shared ANIME MD identity used by the menu,
+  //    the !owner card and every other premium template.
   const text = [
-    `*${config.botName}*`,
-    '',
-    '*Connected Successfully* ✓',
+    `╭━━━〔 ✦ ${font(config.botName)} ✦ 〕━━━╮`,
+    '┃',
+    '┃  ✅ *CONNECTED SUCCESSFULLY* ✓',
+    '┃  ─────────────────────',
+    '┃  🟢 System Ready',
+    '┃  🟡 Anime Power Unlocked',
+    '┃',
+    '╰━━━━━━━━━━━━━━━━━━━━━━╯',
     '',
     sessionDashboard(sessionStatus, {
       socket,
@@ -522,7 +532,7 @@ async function sendConnectionSuccess(socket) {
     }),
     '',
     'Your WhatsApp session is now active and ready to use.',
-    '🔐 Secure Session • 🟢 System Ready'
+    '🔐 Secure Session • ⚡ Fast Response'
   ].join('\n');
 
   // The menu button follows the live prefix (!setprefix changes it at runtime).
@@ -530,8 +540,8 @@ async function sendConnectionSuccess(socket) {
   try {
     await sendButtons(socket, target, {
       text,
-      footer: config.botName,
-      buttons: [{ label: '📖 MENU', id: `${prefix}menu home` }],
+      footer: `${config.botName} • ${FOOTER}`,
+      buttons: [{ label: '📖 MENU', id: `${prefix}menu home` }, { label: '📚 All Commands', id: `${prefix}menu all` }],
       fallbackText: `${text}\n\nType ${prefix}menu to open the command menu.`
     });
     delivery.card = true;

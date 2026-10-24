@@ -35,7 +35,7 @@ test('ping measures awaited send and falls back to text without losing the measu
   await source.ping(socket, context);
   const text = sent.at(-1).text.normalize('NFKC');
   assert.match(text, /PONG/);
-  assert.ok(Number(text.match(/Latence: (\d+)ms/)[1]) >= 15);
+  assert.ok(Number(text.match(/Latency: (\d+)ms/)[1]) >= 15);
   assert.doesNotMatch(text, /Measuring/);
 });
 test('alive image failure produces completed uptime text', async () => {
@@ -44,7 +44,8 @@ test('alive image failure produces completed uptime text', async () => {
     if (payload.image) throw new Error('offline image');
     text = payload.text.normalize('NFKC');
   } }, context);
-  assert.match(text, /ANIME-MD/);
+  // The unified ANIME MD identity (no hyphenated legacy variant).
+  assert.match(text, /ANIME MD/);
   assert.match(text, /\d+h \d+m \d+s/);
 });
 test('uploader without URL uses the existing quoted-media implementation', async () => {

@@ -32,8 +32,11 @@ function welcomeCaption(socket, status, { dashboard = 'compact' } = {}) {
   // from it). Media captions stay bounded, so the compact dashboard travels with
   // the video/image; the full dashboard is used by the text card.
   const live = status || socket?.animeSessionStatus;
+  // Premium ANIME MD identity: one consistent brand for the welcome card.
+  // Only the bot brand and the authenticated account's own data appear — never
+  // owner/developer personal names (kept out of media captions on purpose).
   const lines = [
-    `╭━━━〔 🌀 ${font('LIMITLESS • ACTIVE')} 〕━━━╮`,
+    `╭━━━〔 🌀 ${font('ANIME MD')} 〕━━━╮`,
     '',
     `          ✦ ${font('CONNECTED')} ✦`,
     `       ${font('SUCCESSFULLY')} ✓`,
@@ -43,11 +46,11 @@ function welcomeCaption(socket, status, { dashboard = 'compact' } = {}) {
     `👤 ${font('USER')} : ${name}`,
     `📱 ${font('NUMBER')} : ${number}`,
     '',
-    `╭─〔 🌀 ${font("GOJO'S SYSTEM")} 〕─╮`,
+    `╭─〔 ⚡ ${font('SYSTEM STATUS')} 〕─╮`,
     '│',
-    `│  ∞  ${font('LIMITLESS')}     ✓ ${font('ON')}`,
-    `│  ◉  ${font('INFINITY')}      ✓ ${font('ON')}`,
-    `│  ⚡  ${font('ANIME-MD')}      ✓ ${font('READY')}`,
+    `│  🟢  ${font('SESSION')}      ✓ ${font('ON')}`,
+    `│  ⚡  ${font('COMMANDS')}    ✓ ${font('READY')}`,
+    `│  🔐  ${font('SECURITY')}    ✓ ${font('ACTIVE')}`,
     '│',
     '╰────────────────────────────╯',
     '',
@@ -68,7 +71,7 @@ function welcomeCaption(socket, status, { dashboard = 'compact' } = {}) {
     '│ ♾️ Anime Power Unlocked',
     '╰━━━━━━━━━━━━━━━━━━╯',
     '',
-    `        「 ${font('GOJO IS HERE')} 」`,
+    `        「 ${font('ANIME MD ACTIVE')} 」`,
     '             The system is alive. 🌀',
     '',
     sessionDashboard(live, {
