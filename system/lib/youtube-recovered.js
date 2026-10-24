@@ -23,37 +23,47 @@ function mediaType(buffer, kind) {
   try { assertValidDownload(buffer, 'Media provider'); }
   catch { throw new MediaError('CORRUPT', 'The provider returned empty media or an error page instead of a file.'); }
   const text = buffer.toString('latin1', 0, 16);
+  if (buffer[0] === 255 && (buffer[1] & 0xf6) === 0xf0) {
+    if (kind === 'video') throw new MediaError('CORRUPT', 'Audio returned for video.');
+    return { ext: 'aac', mimetype: 'audio/aac', asDocument: true };
+  }
   if (text.startsWith('ID3') || (buffer[0] === 255 && (buffer[1] & 224) === 224)) {
     if (kind === 'video') throw new MediaError('CORRUPT', 'The video provider returned audio instead of video.');
     return { ext: 'mp3', mimetype: 'audio/mpeg' };
   }
   if (text.startsWith('OggS')) {
     if (kind === 'video') throw new MediaError('CORRUPT', 'The video provider returned audio instead of video.');
-    return { ext: 'ogg', mimetype: 'audio/ogg; codecs=opus' };
+    return buffer.includes(Buffer.from('OpusHead')) ? { ext: 'ogg', mimetype: 'audio/ogg; codecs=opus' } : { ext: 'ogg', mimetype: 'audio/ogg', asDocument: true };
   }
   if (buffer.toString('ascii', 4, 8) === 'ftyp' && buffer.includes(Buffer.from('moov')) && buffer.includes(Buffer.from('mdat'))) {
     if (!buffer.includes(Buffer.from('soun')) || (kind === 'video' && !buffer.includes(Buffer.from('vide')))) throw new MediaError('CORRUPT', 'The file is missing the requested media stream.');
     if (kind !== 'video' && buffer.includes(Buffer.from('vide'))) throw new MediaError('CORRUPT', 'The audio provider returned a video file.');
-    return kind === 'video' ? { ext: 'mp4', mimetype: 'video/mp4' } : { ext: 'm4a', mimetype: 'audio/mp4' };
+    return kind === 'video' ? { ext: 'mp4', mimetype: 'video/mp4', asDocument: !(buffer.includes(Buffer.from('avc1')) && buffer.includes(Buffer.from('mp4a'))) } : { ext: 'm4a', mimetype: 'audio/mp4' };
   }
   if (buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
     return { ext: 'webm', mimetype: kind === 'video' ? 'video/webm' : 'audio/webm', asDocument: true };
   }
   throw new MediaError('CORRUPT', 'The provider returned unrecognized or corrupt media.');
 }
+function redactDiagnostic(error) {
+  return [error?.message || error || '', error?.code, error?.cause?.code, error?.cause?.message].filter(Boolean).join(' | ').replace(/https?:\/\/[^\s'"<>]+/gi, '[url]')
+    .replace(/(?:authorization|cookie)\s*[:=]\s*(?:Bearer\s+)?[^\r\n,;|]+/gi, '[credential redacted]')
+    .replace(/(?:token|secret|api[_-]?key|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi, '[credential redacted]')
+    .replace(/--cookies\s+\S+/gi, '--cookies [file]').replace(/[\r\n]+/g, ' ').slice(0, 500);
+}
 function createRecoveredProvider(overrides = {}, deps = {}) {
   const options = local.settings(overrides);
   const api = deps.dc || dc, tools = deps.net || net, engine = deps.local || local;
-  const log = deps.log || ((name, error) => console.warn(`[YouTube recovery] provider=${name} code=${error.code || 'PROVIDER_FAILED'}`));
+  const log = deps.log || ((name, error) => console.warn('[YouTube recovery]', JSON.stringify({ provider: name, code: error.code || 'PROVIDER_FAILED', detail: error.diagnostic })));
   const advanced = deps.advanced || (() => createLocalProvider({ ...overrides, autoInstall: false }));
   const providers = deps.cobaltProviders || cobaltProviders;
-  async function apiMedia(result) {
+  async function apiMedia(result, requestOptions) {
     if (!result?.url || result.ok === false) throw result?.error || new MediaError('PROVIDER', 'The provider returned no downloadable URL.');
     const url = new URL(result.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new MediaError('PROVIDER', 'The provider returned an invalid media URL.');
     // Reuse the existing bounded download helper, including incomplete-body,
     // idle timeout and size checks, rather than handing an unchecked URL to WA.
-    const media = await tools.downloadRemoteFile(url.href, options.maxBytes);
+    const media = await tools.downloadRemoteFile(url.href, options.maxBytes, { signal: requestOptions?.signal });
     return { buffer: media.buffer, title: result.title, filename: result.filename };
   }
   async function prepare(media, info, kind, progress) {
@@ -76,17 +86,26 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
         const output = path.join(directory, voice ? 'voice.ogg' : 'audio.mp3');
         await run(ffmpeg.command, ['-nostdin', '-v', 'error', '-xerror', '-protocol_whitelist', 'file,pipe', '-i', file, '-vn',
           ...(voice ? ['-c:a', 'libopus', '-ac', '1', '-ar', '48000', '-b:a', '48k'] : ['-c:a', 'libmp3lame', '-b:a', '128k']),
-          '-fs', String(options.maxBytes + 1), output], options);
+          '-fs', String(options.maxBytes + 1), output], options).catch(error => {
+          if (['TIMEOUT', 'ENGINE', 'SIZE'].includes(error.code)) throw error;
+          throw new MediaError('CONVERSION', 'Media conversion failed.');
+        });
         file = output;
         type = voice ? { ext: 'ogg', mimetype: 'audio/ogg; codecs=opus' } : { ext: 'mp3', mimetype: 'audio/mpeg' };
       }
       if ((await fs.stat(file)).size > options.maxBytes) throw new MediaError('SIZE', 'The prepared file exceeds the configured size limit.');
       if (ffmpeg) {
         await progress('Validating media');
-        await run(ffmpeg.command, ['-nostdin', '-v', 'error', '-xerror', '-protocol_whitelist', 'file,pipe', '-i', file,
-          '-map', '0:a:0', ...(kind === 'video' ? ['-map', '0:v:0'] : ['-vn']), '-f', 'null', '-'], options);
+        const diagnostic = await run(ffmpeg.command, ['-nostdin', '-nostats', '-v', 'info', '-xerror', '-protocol_whitelist', 'file,pipe', '-i', file,
+          '-map', '0:a:0', ...(kind === 'video' ? ['-map', '0:v:0'] : ['-vn']), '-f', 'null', '-'], options).catch(error => {
+          if (['TIMEOUT', 'ENGINE', 'SIZE'].includes(error.code)) throw error;
+          throw new MediaError('CORRUPT', 'The downloaded media could not be decoded.');
+        });
+        const input = diagnostic.split('Stream mapping:')[0];
+        if (kind === 'video') type.asDocument = !(/Video: h264/.test(input) && /Audio: aac/.test(input));
+        if (kind === 'voice' && !/Audio: opus/.test(input)) throw new MediaError('CORRUPT', 'Voice conversion did not produce Opus.');
       }
-      const notice = kind === 'audio' && type.ext !== 'mp3' ? `MP3 conversion unavailable; sending original ${type.ext.toUpperCase()} audio, as supported by the previous downloader.` : type.asDocument ? 'Sending the original WebM as a file, not a mislabeled MP4.' : undefined;
+      const notice = kind === 'audio' && type.ext !== 'mp3' ? `MP3 conversion unavailable; sending original ${type.ext.toUpperCase()} audio, as supported by the previous downloader.` : type.asDocument ? 'Sending the original media as a file for playback compatibility.' : undefined;
       return { file, fileName: `${engine.safeTitle(media.title || info.title)}.${type.ext}`, ...type, notice, cleanup };
     } catch (error) { await cleanup(); throw error; }
   }
@@ -115,12 +134,12 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
         const source = info.advancedInfo || await advanced().inspect(url);
         return advanced().download(source, kind, height, progress);
       }
-      const cobalt = () => providers().map(endpoint => [`cobalt`, async () => apiMedia(await tools.requestCobalt(endpoint, url, { audio: kind !== 'video' }))]);
-      const dcAudio = ['davidcyril-audio', async () => apiMedia(await api.downloadYtAudio(url))];
-      const dcVideo = ['davidcyril-video', async () => apiMedia(await api.downloadYtVideo(url))];
-      const aio = ['davidcyril-aio', async () => {
-        const result = await api.aioDownload(url); const data = result?.data || result;
-        return apiMedia({ url: api.pickUrl(data), title: api.pickTitle(data) });
+      const cobalt = () => providers().map(endpoint => [`cobalt`, async requestOptions => apiMedia(await tools.requestCobalt(endpoint, url, { audio: kind !== 'video', signal: requestOptions.signal, timeoutMs: requestOptions.timeout }), requestOptions)]);
+      const dcAudio = ['davidcyril-audio', async requestOptions => apiMedia(await api.downloadYtAudio(url, requestOptions), requestOptions)];
+      const dcVideo = ['davidcyril-video', async requestOptions => apiMedia(await api.downloadYtVideo(url, requestOptions), requestOptions)];
+      const aio = ['davidcyril-aio', async requestOptions => {
+        const result = await api.aioDownload(url, requestOptions); const data = result?.data || result;
+        return apiMedia({ url: api.pickUrl(data), title: api.pickTitle(data) }, requestOptions);
       }];
       const legacy = ['local-pre61', () => kind === 'video' ? engine.downloadVideo(url, overrides) : engine.downloadAudio(url, overrides)];
       let attempts = kind === 'video' ? [...cobalt(), dcVideo, aio, legacy] : [dcAudio, ...cobalt(), legacy];
@@ -130,12 +149,16 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
       for (const [name, operation] of attempts) {
         try {
           await progress(`Downloading • ${name}`);
-          const media = await operation();
+          const timeout = overrides.providerTimeoutMs || config.downloadsProviderTimeoutMs;
+          const signal = AbortSignal.timeout(timeout);
+          const media = await operation({ signal, timeout, quietLogs: true });
           const ready = await prepare(media, info, kind, progress);
           ready.provider = name;
           return ready;
         } catch (error) {
-          const classified = error instanceof MediaError ? error : classifyError(error.message || '');
+          const status = error.httpStatus || error.response?.status;
+          const classified = error instanceof MediaError ? error : classifyError(`${status ? `HTTP ${status}: ` : ''}${error.message || ''}`);
+          classified.diagnostic = redactDiagnostic(error);
           failures.push({ provider: name, code: classified.code }); log(name, classified);
           // Changing provider before upload is safe; changing source is not.
           if (classified.code === 'SIZE' || (kind === 'voice' && classified.code === 'ENGINE')) throw classified;
@@ -147,4 +170,4 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
     }
   };
 }
-module.exports = { createRecoveredProvider, cobaltProviders, mediaType };
+module.exports = { createRecoveredProvider, cobaltProviders, mediaType, redactDiagnostic };

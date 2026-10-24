@@ -65,6 +65,8 @@ function loadConfig(source = userConfig) {
   const prefix = string(bot.prefix, 'bot.prefix', { required: true });
   if (prefix.length > 4 || /\s/.test(prefix)) throw configurationError('bot.prefix must be 1-4 non-whitespace characters.');
   const downloads = source.downloads || {};
+  const downloadsInteractiveMode = string(downloads.interactiveMode, 'downloads.interactiveMode', { fallback: 'auto' });
+  if (!['auto', 'list', 'text'].includes(downloadsInteractiveMode)) throw configurationError('downloads.interactiveMode must be auto, list or text.');
   // Host-specific path overrides. Render mounts its persistent disk at /var/data,
   // which is outside the checkout, so render.yaml points these two variables at
   // the disk. Every other host keeps using config.js unchanged.
@@ -115,6 +117,9 @@ function loadConfig(source = userConfig) {
     whatsappChannel: url(owner.whatsappChannel, 'owner.whatsappChannel'), commandPrefix: prefix,
     stickerPackname: string(commands.stickerPackname, 'commands.stickerPackname', { required: true }), stickerAuthor: string(commands.stickerAuthor, 'commands.stickerAuthor', { required: true }), publicMode: bool(bot.publicMode, 'bot.publicMode', true),
     downloadsYtDlpPath: string(downloads.ytDlpPath, 'downloads.ytDlpPath', { required: true }), downloadsAutoInstall: bool(downloads.autoInstall, 'downloads.autoInstall', true), downloadsBinDir: downloads.binDir ? runtimePath(downloads.binDir, 'downloads.binDir') : path.join(dataDir, 'bin'), downloadsFfmpegPath: string(downloads.ffmpegPath, 'downloads.ffmpegPath'), downloadsCookiesFile: downloads.cookiesFile ? runtimePath(downloads.cookiesFile, 'downloads.cookiesFile') : '', downloadsMaxFileSizeMb: integer(downloads.maxFileSizeMb, 'downloads.maxFileSizeMb', 50, 1, 512), downloadsTimeoutMs: integer(downloads.timeoutMs, 'downloads.timeoutMs', 180000, 10000, 600000),
+    downloadsInteractiveMode,
+    downloadsMaxConcurrent: integer(downloads.maxConcurrent, 'downloads.maxConcurrent', 2, 1, 8),
+    downloadsProviderTimeoutMs: integer(downloads.providerTimeoutMs, 'downloads.providerTimeoutMs', 45000, 1000, 180000),
     authMethod, authDir, sessionId: string(whatsapp.sessionId, 'whatsapp.sessionId'), sessionOverwrite: bool(whatsapp.sessionOverwrite, 'whatsapp.sessionOverwrite', false),
     dataDir, premiumDbPath: db('premiumDbPath', 'premium.json'), groupSettingsDbPath: db('groupSettingsDbPath', 'groups.json'), modeDbPath: db('modeDbPath', 'mode.json'), sudoDbPath: db('sudoDbPath', 'sudo.json'), warningDbPath: db('warningDbPath', 'warnings.json'), economyDbPath: db('economyDbPath', 'economy.json'), settingsDbPath: db('settingsDbPath', 'settings.json'), automationDbPath: db('automationDbPath', 'automation.json'), chatsDbPath: db('chatsDbPath', 'chats.json'),
     telegramEnabled: enabled, telegramBotToken: PLACEHOLDER.test(token) ? '' : token, telegramBotLink: optionalTelegramLink(telegram.botLink), telegramOwnerIds: Object.freeze(ownerIds), telegramControllerDbPath: optionalPath(telegram.controllerDbPath, path.join(dataDir, 'telegram-controllers.json'), 'telegram.controllerDbPath'), telegramPublicMode, telegramPremiumOnly, telegramRequiredChannels: Object.freeze(telegramRequiredChannels.map((channel) => Object.freeze({ ...channel }))),

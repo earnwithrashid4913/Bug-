@@ -177,6 +177,12 @@ module.exports = {
     cookiesFile: '',
     // Maximum media size sent to WhatsApp, in MB (1-512). OPTIONAL.
     maxFileSizeMb: 50,
+    // Host-wide media jobs, across every connected socket (1-8).
+    maxConcurrent: 2,
+    // auto: native buttons; list: native list; text: last-resort compatibility.
+    interactiveMode: 'auto',
+    // Deadline for each remote provider family, including its fallback pool.
+    providerTimeoutMs: 45000,
     // Hard per-command download timeout in milliseconds. OPTIONAL.
     timeoutMs: 180000
   },

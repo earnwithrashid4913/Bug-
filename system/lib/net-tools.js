@@ -101,13 +101,17 @@ function cobaltResult(result) {
   throw new Error('Download service returned an unsupported response.');
 }
 
-async function requestCobalt(apiBase, url, { audio = false } = {}) {
+async function requestCobalt(apiBase, url, { audio = false, signal, timeoutMs = 45000 } = {}) {
   const endpoint = `${String(apiBase).replace(/\/$/, '')}/`;
   let lastError;
   for (let attempt = 0; attempt < 2; attempt++) {
+    signal?.throwIfAborted();
     try {
-      const response = await fetchWithTimeout(endpoint, {
+      const response = await fetch(endpoint, {
         method: 'POST',
+        // The composed signal remains attached through response.text(), not
+        // just the headers. A second retry cannot outlive its provider family.
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({
           url,
@@ -116,39 +120,47 @@ async function requestCobalt(apiBase, url, { audio = false } = {}) {
           filenameStyle: 'basic',
           disableMetadata: false
         })
-      }, 45_000);
+      });
       const contentType = response.headers.get('content-type') || '';
       const body = await response.text();
       let payload = {};
       try { payload = body ? JSON.parse(body) : {}; }
       catch {
-        if (response.ok) throw new Error('Download service returned malformed data.');
+        if (response.ok) { const error = new Error('Download service returned malformed data.'); error.permanent = true; throw error; }
       }
-      if (response.ok && !contentType.toLowerCase().includes('json')) throw new Error('Download service returned an invalid response.');
-      if (response.ok) return cobaltResult(payload);
+      if (response.ok && !contentType.toLowerCase().includes('json')) { const error = new Error('Download service returned an invalid response.'); error.permanent = true; throw error; }
+      if (response.ok) {
+        try { return cobaltResult(payload); } catch (error) { error.permanent = true; throw error; }
+      }
       const retryable = response.status === 429 || response.status >= 500;
       lastError = new Error(payload.text || payload.error || `Download service failed (${response.status}).`);
+      lastError.httpStatus = response.status;
       console.warn(`[Play] Download provider HTTP ${response.status}${retryable && attempt === 0 ? '; retrying once' : ''}`);
       if (!retryable || attempt === 1) throw lastError;
       const retryAfter = Number(response.headers.get('retry-after'));
-      await new Promise(resolve => setTimeout(resolve, Number.isFinite(retryAfter) ? Math.min(5000, Math.max(250, retryAfter * 1000)) : 500));
+      await require('node:timers/promises').setTimeout(Number.isFinite(retryAfter) ? Math.min(5000, Math.max(250, retryAfter * 1000)) : 500, undefined, { signal });
     } catch (error) {
       lastError = error;
+      if (signal?.aborted) throw signal.reason;
+      if (error.permanent || (error.httpStatus >= 400 && error.httpStatus < 500 && error.httpStatus !== 429)) throw error;
       if (attempt === 1 || (error?.message && /failed \(4\d\d\)/.test(error.message) && !/failed \((429)\)/.test(error.message))) throw error;
       console.warn(`[Play] Download provider request failed; retrying once`);
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await require('node:timers/promises').setTimeout(500, undefined, { signal });
     }
   }
   throw lastError || new Error('Download service unavailable.');
 }
 
-async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES) {
+async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES, { signal } = {}) {
   // The request above is bounded, but the place downloads actually HANG is the
   // body read (a stalled CDN/tunnel sends headers and then goes quiet). This
   // caller owns the abort controller and re-arms an idle deadline on every
   // chunk, so a stalled stream is cancelled after DOWNLOAD_IDLE_TIMEOUT_MS and
   // surfaces as a retryable failure instead of a command stuck mid-air.
   const controller = new AbortController();
+  const onAbort = () => controller.abort(signal.reason);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
   let stalled = false;
   let idleTimer;
   const armIdle = () => {
@@ -177,6 +189,7 @@ async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES) {
     const type = response.headers.get('content-type') || 'application/octet-stream';
     return { buffer, type };
   } catch (error) {
+    if (signal?.aborted) throw signal.reason;
     if (stalled) throw new Error('The download stalled and was stopped. Please try again.');
     // undici reports a connection dropped before the body was complete as a
     // raw "terminated"/premature-close error — surface it as the incomplete
@@ -188,6 +201,7 @@ async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES) {
     throw error;
   } finally {
     clearTimeout(idleTimer);
+    signal?.removeEventListener('abort', onAbort);
     // Never leak the socket when the body was not fully consumed (failed status
     // check, size-limit abort, truncation error, …).
     if (response && !response.bodyUsed) await response.body?.cancel().catch(() => {});

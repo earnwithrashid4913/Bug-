@@ -1,5 +1,8 @@
 # ANIME MD — targeted YouTube regression recovery
 
+> Current native-UI/provider-bounds follow-up: [YOUTUBE-INTERACTIVE-REPAIR.md](YOUTUBE-INTERACTIVE-REPAIR.md).
+> This document retains its historical implementation and test evidence.
+
 Date: 2026-10-24.
 
 ## Status and scope

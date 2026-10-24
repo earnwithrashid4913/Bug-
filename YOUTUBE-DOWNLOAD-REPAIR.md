@@ -1,5 +1,8 @@
 # ANIME MD — YouTube download repair and verification
 
+> Current native-UI/provider-bounds follow-up: [YOUTUBE-INTERACTIVE-REPAIR.md](YOUTUBE-INTERACTIVE-REPAIR.md).
+> This document retains its historical implementation and test evidence.
+
 > Historical PR #61 report. The user reported a production regression after this
 > PR. Its yt-dlp-only defaults and mandatory metadata/converter prerequisites
 > have been superseded by the targeted recovery in
