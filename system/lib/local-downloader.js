@@ -54,7 +54,7 @@ const RELEASE_BASE = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download'
 const FFMPEG_RELEASE_BASE = 'https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0';
 
 const RETRYABLE = /requested format is not available|no such format|unable to extract|signature extraction failed|http error 403|failed to extract|no video formats found|only images are available/i;
-const BOT_CHECK = /sign in to confirm|not a bot|cookies|login required|confirm your age|age-restricted/i;
+const BOT_CHECK = /not a bot|bot.check|sign in to confirm.*bot/i;
 
 class DownloadEngineError extends Error {
   constructor(message, userMessage) {
@@ -372,6 +372,7 @@ async function resolveFfmpeg(options = settings()) {
 
 function resetEngineCache() {
   engineCache.clear();
+  runtimeCapabilities.clear();
   ffmpegEngineCache.clear();
   ffmpegRetryAfter = 0;
   ffmpegState = { value: null, at: 0 };
@@ -398,7 +399,11 @@ function engineError(detail, cause) {
   if (/ffmpeg|avconv/i.test(text)) {
     userMessage = 'The media could not be prepared on the bot host. Please try again in a moment.';
   } else if (BOT_CHECK.test(text)) {
-    userMessage = 'The source site requires a signed-in session. Ask the owner to configure downloads.cookiesFile.';
+    userMessage = 'The source challenged this host as automated traffic. Please try again later.';
+  } else if (/confirm your age|age-restricted|not available in your country/i.test(text)) {
+    userMessage = 'The source reports an age or regional restriction for this video.';
+  } else if (/login required|authentication required|members.only/i.test(text)) {
+    userMessage = 'This source requires authorized access for this video.';
   } else if (/private video|video unavailable|this video is unavailable|removed by the uploader|has been removed/i.test(text)) {
     userMessage = 'This video is unavailable. Please try a different link.';
   } else if (/requested format is not available|no such format/i.test(text)) {
@@ -463,8 +468,25 @@ function mimetypeFor(extension, audio) {
   return 'video/mp4';
 }
 
+// Preserve legacy selectors/configuration. Enable the already-installed Node
+// runtime only when this exact executable advertises support; old yt-dlp builds
+// must not receive an unsupported flag. Capability failure is non-fatal.
+const runtimeCapabilities = new Map();
+async function runtimeOptions(engine, options) {
+  if (options.jsRuntime !== undefined) return options;
+  const key = [engine.command, ...(engine.prefixArgs || []), engine.version].join('|');
+  if (!runtimeCapabilities.has(key)) {
+    if (runtimeCapabilities.size >= 256) runtimeCapabilities.clear();
+    runtimeCapabilities.set(key, spawnEngine(engine, ['--help'], {
+      timeoutMs: Math.min(options.timeoutMs || PROBE_TIMEOUT_MS, 5000), maxBuffer: PROBE_MAX_BUFFER
+    }).then(({ stdout }) => /--js-runtimes\b/.test(stdout)).catch(() => false));
+  }
+  return await runtimeCapabilities.get(key) ? { ...options, jsRuntime: process.execPath } : options;
+}
+
 async function getInfo(url, options = settings()) {
   const engine = await resolveEngine(options);
+  options = await runtimeOptions(engine, options);
   const { stdout } = await spawnEngine(engine, [...baseArgs(options), '-J', url], {
     timeoutMs: options.timeoutMs,
     maxBuffer: INFO_MAX_BUFFER
@@ -485,6 +507,7 @@ async function searchByPrefix(prefix, query, options, limit, label) {
   if (!text) throw new DownloadEngineError('Empty search query.', 'Please send a song or video name.');
   const count = Math.min(Math.max(Number(limit) || 1, 1), 10);
   const engine = await resolveEngine(options);
+  options = await runtimeOptions(engine, options);
   const { stdout } = await spawnEngine(engine, [...baseArgs(options), '--flat-playlist', '-J', `${prefix}${count}:${text}`], {
     timeoutMs: options.timeoutMs,
     maxBuffer: INFO_MAX_BUFFER
@@ -504,7 +527,9 @@ async function searchVideo(query, options = settings(), limit = 1) {
   const entries = await searchByPrefix('ytsearch', query, options, limit, 'YouTube');
   return entries.map((entry) => ({
     title: entry.title || 'media',
-    url: entry.webpage_url || entry.url || `https://www.youtube.com/watch?v=${entry.id}`
+    url: entry.webpage_url || (/^https?:\/\//i.test(entry.url || '') ? entry.url : `https://www.youtube.com/watch?v=${entry.id || entry.url}`),
+    author: entry.uploader || entry.channel || '',
+    duration: Number(entry.duration) || 0
   }));
 }
 
@@ -571,6 +596,7 @@ async function download(url, mode, options = settings()) {
   // Both tools are resolved together so a first-run install of yt-dlp and
   // FFmpeg happens in parallel instead of one after the other.
   const [engine, ffmpeg] = await Promise.all([resolveEngine(options), resolveFfmpeg(options)]);
+  options = await runtimeOptions(engine, options);
   const hasFfmpeg = Boolean(ffmpeg);
   const ffmpegArgs = ffmpeg && !['path', 'assumed'].includes(ffmpeg.source) ? ['--ffmpeg-location', ffmpeg.command] : [];
   const info = await getInfo(url, options);
@@ -601,7 +627,7 @@ async function download(url, mode, options = settings()) {
         if (index === attempts.length - 1) break;
         // Only a format/extractor problem is worth a second attempt; a bot check,
         // an unavailable video or a timeout will fail again immediately.
-        if (!(error instanceof DownloadEngineError) || !RETRYABLE.test(String(error.message || ''))) break;
+        if (!(error instanceof DownloadEngineError) || BOT_CHECK.test(error.message) || !RETRYABLE.test(String(error.message || ''))) break;
         await fs.rm(directory, { recursive: true, force: true });
         await fs.mkdir(directory, { recursive: true });
         console.warn('[Download] Retrying with a relaxed format after:', error.message);
@@ -657,6 +683,7 @@ module.exports = {
   resetEngineCache,
   resolveEngine,
   resolveFfmpeg,
+  runtimeOptions,
   safeTitle,
   searchAudio,
   searchVideo,

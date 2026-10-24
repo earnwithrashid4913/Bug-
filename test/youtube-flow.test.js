@@ -95,7 +95,7 @@ test('unavailable resolution and invalid choice retain the current selector', as
   const f = fixture(); const result = await f.start();
   await f.flow.select(context(`${result.id} 1`));
   await f.flow.select(context(`${result.id} 9`));
-  assert.match(f.sent.at(-1).text, /listed resolution/);
+  assert.match(f.sent.at(-1).text, /latest card/);
   await f.flow.select(context(`${result.id} 1`));
   assert.deepEqual(f.calls.filter(c => c[0] === 'download'), [['download', 'video', 720]]);
 });
@@ -168,7 +168,7 @@ test('WhatsApp upload failure is uncertain, cleaned up, and never retried blindl
   await f.flow.select(context(`${result.id} 2`));
   await f.flow.select(context(`${result.id} retry`));
   assert.equal(f.sent.filter(p => p.audio).length, 1); assert.equal(f.cleanup(), 1);
-  assert.match(f.sent.at(-1).text, /may already have been accepted/);
+  assert.match(f.sent.at(-1).text, /may already have been sent/);
   assert.ok(!JSON.stringify(f.logs).includes('secret'));
 });
 test('missing receipt is not reported as successful delivery; edits may fail without duplicate statuses', async () => {

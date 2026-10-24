@@ -1,6 +1,6 @@
 # ANIME MD Deployment Guide
 
-ANIME MD requires Node.js 20.9 or newer. Install dependencies with `npm ci`
+ANIME MD requires Node.js 20.9 or newer (Node 22 is recommended for the installed Baileys integration). Install dependencies with `npm ci`
 and start it with `npm start`.
 
 ## Pterodactyl
@@ -72,8 +72,11 @@ Set `downloads.ytDlpPath` in `config.js` to the **absolute path** of that yt-dlp
 executable. Set `downloads.ffmpegPath` if FFmpeg is not on PATH. Keep the Python
 environment outside the repository, on executable persistent storage. The optional exact-resolution adapter enables the current Node executable as
 yt-dlp's JavaScript runtime and requires support for `--js-runtimes`. The
-recovered local automatic path restores the older argument list and honors
-host-level yt-dlp configuration again; it does not impose the new JS flag. The verified Python `default` extra includes its matching
+recovered local automatic path retains its historical format selectors and host
+configuration. It now probes `--help` once per executable/version: Node is enabled
+only if `--js-runtimes` is supported. Older binaries receive no unsupported flag;
+explicit runtime settings/opt-out in the helper API are respected. This is runtime
+compatibility, not a guarantee against BOT_CHECK. The Python `default` extra includes its matching
 `yt-dlp-ejs` challenge solver (official standalone releases bundle it). Cookies cannot bypass every bot
 check or regional/age restriction.
 
@@ -99,20 +102,31 @@ Termux installation and WhatsApp delivery were not exercised in the sandbox.
 - `downloads.binDir` defaults to `<database.dataDir>/bin`; keep it persistent.
 - `downloads.maxFileSizeMb` (default 50) caps final media. `downloads.timeoutMs`
   (default 180000) bounds each local subprocess and the Baileys media upload.
-  Historical API helpers retain their own bounded per-endpoint timeouts and
-  fallback pools; a complete failed pool can take longer than one local timeout.
-- Two host-wide extraction/upload slots are used. Temporary disk usage is
+  `downloads.providerTimeoutMs` (default 45000, allowed 1000–180000) cancels each
+  recovered API attempt, including its endpoint pool, retry/backoff and media
+  response body. Each configured Cobalt endpoint is a separate attempt; MP4
+  and AIO pools are separate attempts too. This is not a 45-second whole-job
+  deadline. Local extraction, processing and upload have separate bounds.
+- `downloads.maxConcurrent` defaults to 2 (allowed 1–8); host-wide extraction/upload
+  slots are shared across sockets in this bot process, not across separate workers. Temporary disk usage is
   bounded by the existing local engine and file-size checks for automatic mode;
   strict exact-quality jobs additionally use the storage watchdog. Budget six
-  times the size limit plus headroom for two jobs. The recovered API helper
+  times the size limit per active job plus headroom. The recovered API helper
   buffers at most the configured size before writing the temporary file; budget
   memory accordingly and keep the default 50 MiB on small hosts. The OS temporary
   directory must be writable.
 - Use a private, authorized Netscape cookie file via `downloads.cookiesFile`
   only when appropriate. Do not commit cookies or share signed media URLs.
-- Requests expire after five minutes. Reply **to the media message** with its
-  number, or send the displayed request token and number. Unquoted bare numbers
-  remain reserved for existing bot menus/quizzes. Pending selections do not
+- Requests expire after five minutes. `downloads.interactiveMode: 'auto'`
+  prefers real native HD VIDEO / AUDIO MP3 / VOICE TYPE quick replies, then a
+  native list. Numbered replies are used only if native relay/preparation fails.
+  Set `'list'` to prefer native lists on a host where quick replies do not render;
+  `'text'` explicitly enables last-resort compatibility. A relay acknowledgment
+  cannot detect every unsupported handset, so rendering still needs a real-device
+  check. Callbacks bind chat/sender/socket/request/revision; old taps cannot select
+  a new menu's option. Only in numbered compatibility mode, quote the media
+  message with a number or send its displayed token plus number. Unquoted bare
+  numbers remain reserved for existing menus/quizzes. Pending selections do not
   survive a restart.
 - `play` / `video` and their search aliases open the menu. `ytmp3` / audio
   aliases download directly after showing the thumbnail/menu. `ytmp4` / `mp4`
@@ -131,6 +145,16 @@ Termux installation and WhatsApp delivery were not exercised in the sandbox.
   `<token> sources` action lets the user explicitly choose another result; no
   other YouTube video or SoundCloud track is silently substituted. DavidCyril,
   Cobalt and the historical local downloader are active in their recovered order.
+
+For layered DNS/TCP/TLS and installed-tool evidence, first run
+`node scripts/youtube-host-check.js --media-self-test` from this checkout. It
+never starts WhatsApp or installs binaries; its generated media is synthetic,
+not a YouTube download. A verified root HTTP response does not prove provider
+availability. Share only its structured report and redacted download outcomes.
+Do not disable TLS verification; an operator-approved CA bundle is appropriate
+only after confirming a trust-store issue on the actual deployment. See the
+latest follow-up section of YOUTUBE-INTERACTIVE-REPAIR.md for the sandbox control
+comparison and the explicitly unverified production/device status.
 
 Run these host-side checks before connecting the bot:
 
@@ -155,6 +179,8 @@ provider availability test. `formats` runs optional live quality discovery. Use
 These are CLI diagnostics, not chat-controlled endpoints. Files are deleted
 after checks; **WhatsApp delivery is not verified by this script**. Start with `npm start`, or restart your existing supervisor
 once after deployment. Do not delete the authentication/session directory.
+See [YOUTUBE-INTERACTIVE-REPAIR.md](YOUTUBE-INTERACTIVE-REPAIR.md) for fresh
+network findings, test coverage and the handset checklist.
 Perform an actual `!play`, choose audio, video/quality and voice in WhatsApp,
 and confirm playback and receipt-confirmed completion. Keep yt-dlp current via
 the same package/install method; update the bundled auto-install copy only while

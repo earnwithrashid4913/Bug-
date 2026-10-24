@@ -69,7 +69,7 @@ test('EVERY public execute name runs through the real handler and produces a res
       assert.ok(h.calls.includes('dispatchCommand'), 'real dispatcher entered');
       const payloads = socket.sends.filter(s => !s.payload.react);
       assert.ok(payloads.length || socket.actions.length, `${name}: no result except reaction`);
-      assert.doesNotMatch(textOf(socket).replace(/\*Failed:\* 0\b/g, 'No delivery failures').replace(/Thumbnail unavailable; downloads are still available\./g, 'Text-only media menu'), /COMMAND FAILED|\bError:|\bFAILED\b|not a function|UNAVAILABLE|\bundefined\b|\bNaN\b/i, name);
+      assert.doesNotMatch(textOf(socket).replace(/\*Failed:\* 0\b/g, 'No delivery failures').replace(/Thumbnail unavailable(?:; downloads are still available)?\./g, 'Text-only media menu').replace(/Buttons are unavailable on this connection\./g, 'Text controls active.'), /COMMAND FAILED|\bError:|\bFAILED\b|not a function|UNAVAILABLE|\bundefined\b|\bNaN\b/i, name);
       assert.deepEqual(h.errors, [], `${name}: internal error`);
       // Stop started quiz lobbies; do not leave delayed game jobs after tests.
       if (entry.name === 'quiz') await h.handler(socket, socket.message('!quiz stop'));

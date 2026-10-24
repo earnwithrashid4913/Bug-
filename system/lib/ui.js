@@ -1,6 +1,6 @@
 'use strict';
 
-const { generateWAMessageFromContent, proto } = require('@whiskeysockets/baileys');
+const { generateWAMessageFromContent, prepareWAMessageMedia, proto } = require('@whiskeysockets/baileys');
 
 const { styleHeaders } = require('./presentation');
 
@@ -39,15 +39,18 @@ function listButton(title, sections) {
   };
 }
 
-async function relayInteractive(socket, chatId, { text, footer = '', buttons = [], quoted } = {}) {
+async function relayInteractive(socket, chatId, { text, footer = '', buttons = [], quoted, image } = {}) {
   if (!socket?.relayMessage || typeof socket.relayMessage !== 'function') {
     throw new Error('Interactive relay is not supported by this socket.');
   }
 
+  const media = image ? await prepareWAMessageMedia({ image }, {
+    upload: socket.waUploadToServer, mediaUploadTimeoutMs: 10000
+  }) : {};
   const content = proto.Message.InteractiveMessage.create({
     body: proto.Message.InteractiveMessage.Body.create({ text: cleanText(styleHeaders(text)) }),
     footer: proto.Message.InteractiveMessage.Footer.create({ text: cleanText(footer) }),
-    header: proto.Message.InteractiveMessage.Header.create({ title: '', subtitle: '', hasMediaAttachment: false }),
+    header: proto.Message.InteractiveMessage.Header.create({ title: '', subtitle: '', hasMediaAttachment: Boolean(media.imageMessage), ...media }),
     nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
       buttons: buttons.slice(0, 10),
       messageParamsJson: JSON.stringify({ version: 1 }),

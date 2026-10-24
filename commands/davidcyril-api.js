@@ -182,9 +182,10 @@ function isValidResult(data) {
 
 // ── core fetch ─────────────────────────────────────────────────────────────
 
-async function dcFetch(endpoint, { timeout = TIMEOUT_MS, params, method } = {}) {
+async function dcFetch(endpoint, { timeout = TIMEOUT_MS, params, method, signal } = {}) {
   const url = endpoint.startsWith('http') ? endpoint : DC_BASE + endpoint;
-  const config = { timeout, headers: { 'User-Agent': 'Mozilla/5.0 ANIME-MD' } };
+  signal?.throwIfAborted();
+  const config = { timeout, signal, headers: { 'User-Agent': 'Mozilla/5.0 ANIME-MD' } };
   if (method === 'POST') {
     const res = await axios.post(url, params || {}, config);
     return res.data;
@@ -195,18 +196,20 @@ async function dcFetch(endpoint, { timeout = TIMEOUT_MS, params, method } = {}) 
 
 // ── universal fallback engine ──────────────────────────────────────────────
 
-async function dcFallback(endpoints, { timeout, extractResult } = {}) {
+async function dcFallback(endpoints, { timeout, extractResult, signal, quietLogs } = {}) {
   let lastError;
   for (const ep of endpoints) {
+    signal?.throwIfAborted();
     try {
-      const data = await dcFetch(ep.path || ep, { timeout: timeout || ep.timeout });
+      const data = await dcFetch(ep.path || ep, { timeout: timeout || ep.timeout, signal });
       if (!isValidResult(data)) continue;
       const result = extractResult ? extractResult(data) : { url: pickUrl(data), audioUrl: pickAudioUrl(data), title: pickTitle(data), thumb: pickThumb(data), data };
       const hasMedia = result?.url || result?.audioUrl;
       if (hasMedia) return result;
     } catch (err) {
       lastError = err;
-      console.warn(`[DC-API] ${ep.path || ep} failed: ${err?.message || err}`);
+      if (signal?.aborted) throw signal.reason;
+      if (!quietLogs) console.warn(`[DC-API] ${ep.path || ep} failed: ${err?.message || err}`);
     }
   }
   throw lastError || new Error('All download sources failed.');
@@ -229,7 +232,7 @@ async function dlBuffer(url, timeout = DOWNLOAD_TIMEOUT_MS) {
 
 // ── YouTube MP3 ────────────────────────────────────────────────────────────
 
-async function ytMp3(url) {
+async function ytMp3(url, options = {}) {
   const enc = encodeURIComponent(url);
   return dcFallback([
     `/download/ytmp3?url=${enc}`,
@@ -239,36 +242,36 @@ async function ytMp3(url) {
     `/download/ytmp33?url=${enc}`,
     `/download/ytmp333?url=${enc}`,
     `/download/ytmp3-v2?url=${enc}`,
-  ], { extractResult: (data) => ({ url: pickUrl(data) || pickAudioUrl(data), audioUrl: pickAudioUrl(data), title: pickTitle(data), thumb: pickThumb(data), data }) });
+  ], { ...options, extractResult: (data) => ({ url: pickAudioUrl(data) || pickUrl(data), audioUrl: pickAudioUrl(data), title: pickTitle(data), thumb: pickThumb(data), data }) });
 }
 
 // ── YouTube MP4 ────────────────────────────────────────────────────────────
 
-async function ytMp4(url) {
+async function ytMp4(url, options = {}) {
   const enc = encodeURIComponent(url);
   return dcFallback([
     `/download/ytmp4?url=${enc}`,
     `/youtube/mp444?url=${enc}`,
     `/youtube/mp4?url=${enc}`,
     `/download/ytmp444?url=${enc}`,
-  ], { extractResult: (data) => ({ url: pickUrl(data), title: pickTitle(data), thumb: pickThumb(data), data }) });
+  ], { ...options, extractResult: (data) => ({ url: pickUrl(data), title: pickTitle(data), thumb: pickThumb(data), data }) });
 }
 
 // ── YouTube Generic ────────────────────────────────────────────────────────
 
-async function ytGeneric(url) {
+async function ytGeneric(url, options = {}) {
   const enc = encodeURIComponent(url);
   return dcFallback([
     `/download/yt?url=${enc}`,
     `/download/ytv3?url=${enc}`,
-  ]);
+  ], options);
 }
 
 // ── YTDL Rapid ─────────────────────────────────────────────────────────────
 
-async function ytdlRapid(url) {
+async function ytdlRapid(url, options = {}) {
   const enc = encodeURIComponent(url);
-  return dcFetch(`/download/ytdl-rapid?url=${enc}`);
+  return dcFetch(`/download/ytdl-rapid?url=${enc}`, options);
 }
 
 // ── Y2Mate ─────────────────────────────────────────────────────────────────
@@ -278,24 +281,24 @@ async function y2mateGeneric(url) {
   return dcFetch(`/download/y2mate?url=${enc}`);
 }
 
-async function y2mateMp3(url) {
+async function y2mateMp3(url, options = {}) {
   const enc = encodeURIComponent(url);
-  return dcFetch(`/download/y2mate/mp3?url=${enc}`);
+  return dcFetch(`/download/y2mate/mp3?url=${enc}`, options);
 }
 
-async function y2mateMp4(url) {
+async function y2mateMp4(url, options = {}) {
   const enc = encodeURIComponent(url);
-  return dcFetch(`/download/y2mate/mp4?url=${enc}`);
+  return dcFetch(`/download/y2mate/mp4?url=${enc}`, options);
 }
 
 // ── Play Music ─────────────────────────────────────────────────────────────
 
-async function playMusic(query) {
+async function playMusic(query, options = {}) {
   const enc = encodeURIComponent(query);
   return dcFallback([
     `/play?q=${enc}`,
     `/play-v2?q=${enc}`,
-  ], { extractResult: (data) => ({ url: pickUrl(data) || pickAudioUrl(data), audioUrl: pickAudioUrl(data), title: pickTitle(data), thumb: pickThumb(data), data }) });
+  ], { ...options, extractResult: (data) => ({ url: pickAudioUrl(data) || pickUrl(data), audioUrl: pickAudioUrl(data), title: pickTitle(data), thumb: pickThumb(data), data }) });
 }
 
 // ── Song Download ──────────────────────────────────────────────────────────
@@ -388,9 +391,9 @@ async function gdriveDownload(url) {
 
 // ── HD Video ───────────────────────────────────────────────────────────────
 
-async function hdVideoDownload(url) {
+async function hdVideoDownload(url, options = {}) {
   const enc = encodeURIComponent(url);
-  return dcFetch(`/hdvideo?url=${enc}`);
+  return dcFetch(`/hdvideo?url=${enc}`, options);
 }
 
 // ── SoundCloud ─────────────────────────────────────────────────────────────
@@ -417,13 +420,13 @@ async function teraboxDownload(url) {
 
 // ── AIO Downloader ─────────────────────────────────────────────────────────
 
-async function aioDownload(url) {
+async function aioDownload(url, options = {}) {
   const enc = encodeURIComponent(url);
   return dcFallback([
     `/download/aio?url=${enc}`,
     `/download/aiov2?url=${enc}`,
     `/download/aiov3?url=${enc}`,
-  ]);
+  ], options);
 }
 
 // ── Vibetik ────────────────────────────────────────────────────────────────
@@ -1034,90 +1037,100 @@ async function ephotoEffect(effect, text) {
 
 // Download audio from a YouTube URL using the complete MP3 fallback pool.
 // Returns { ok, url, title, error }.
-async function downloadYtAudio(youtubeUrl) {
+async function downloadYtAudio(youtubeUrl, options = {}) {
   try {
-    const result = await ytMp3(youtubeUrl);
+    const result = await ytMp3(youtubeUrl, options);
     const mediaUrl = result.url || result.audioUrl;
     if (!mediaUrl) throw new Error('No audio URL in response');
     return { ok: true, url: mediaUrl, title: result.title || '', thumb: result.thumb };
   } catch (err1) {
-    console.warn('[DC-API] ytMp3 pool failed, trying playMusic:', err1?.message || err1);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] ytMp3 pool failed, trying playMusic:', err1?.message || err1);
   }
   try {
-    const result = await playMusic(youtubeUrl);
+    const result = await playMusic(youtubeUrl, options);
     const mediaUrl = result.url || result.audioUrl;
     if (!mediaUrl) throw new Error('No audio URL');
     return { ok: true, url: mediaUrl, title: result.title || '', thumb: result.thumb };
   } catch (err2) {
-    console.warn('[DC-API] playMusic failed, trying y2mateMp3:', err2?.message || err2);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] playMusic failed, trying y2mateMp3:', err2?.message || err2);
   }
   try {
-    const data = await y2mateMp3(youtubeUrl);
-    const mediaUrl = pickUrl(data) || pickAudioUrl(data);
+    const data = await y2mateMp3(youtubeUrl, options);
+    const mediaUrl = pickAudioUrl(data) || pickUrl(data);
     if (!mediaUrl) throw new Error('No audio URL');
     return { ok: true, url: mediaUrl, title: pickTitle(data), thumb: pickThumb(data) };
   } catch (err3) {
-    console.warn('[DC-API] y2mateMp3 failed, trying ytdlRapid:', err3?.message || err3);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] y2mateMp3 failed, trying ytdlRapid:', err3?.message || err3);
   }
   try {
-    const data = await ytdlRapid(youtubeUrl);
+    const data = await ytdlRapid(youtubeUrl, options);
     const mediaUrl = pickAudioUrl(data) || pickUrl(data);
     if (!mediaUrl) throw new Error('No audio URL');
     return { ok: true, url: mediaUrl, title: pickTitle(data), thumb: pickThumb(data) };
   } catch (err4) {
-    console.warn('[DC-API] ytdlRapid failed, trying ytGeneric:', err4?.message || err4);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] ytdlRapid failed, trying ytGeneric:', err4?.message || err4);
   }
   try {
-    const result = await ytGeneric(youtubeUrl);
+    const result = await ytGeneric(youtubeUrl, options);
     const mediaUrl = result.url || result.audioUrl;
     if (!mediaUrl) throw new Error('No audio URL');
     return { ok: true, url: mediaUrl, title: result.title || '', thumb: result.thumb };
   } catch (err5) {
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
     return { ok: false, error: err5 };
   }
 }
 
 // Download video from a YouTube URL using the complete MP4 fallback pool.
 // Returns { ok, url, title, error }.
-async function downloadYtVideo(youtubeUrl) {
+async function downloadYtVideo(youtubeUrl, options = {}) {
   try {
-    const result = await ytMp4(youtubeUrl);
+    const result = await ytMp4(youtubeUrl, options);
     const mediaUrl = result.url;
     if (!mediaUrl) throw new Error('No video URL in response');
     return { ok: true, url: mediaUrl, title: result.title || '', thumb: result.thumb };
   } catch (err1) {
-    console.warn('[DC-API] ytMp4 pool failed, trying y2mateMp4:', err1?.message || err1);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] ytMp4 pool failed, trying y2mateMp4:', err1?.message || err1);
   }
   try {
-    const data = await y2mateMp4(youtubeUrl);
+    const data = await y2mateMp4(youtubeUrl, options);
     const mediaUrl = pickUrl(data);
     if (!mediaUrl) throw new Error('No video URL');
     return { ok: true, url: mediaUrl, title: pickTitle(data), thumb: pickThumb(data) };
   } catch (err2) {
-    console.warn('[DC-API] y2mateMp4 failed, trying ytdlRapid:', err2?.message || err2);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] y2mateMp4 failed, trying ytdlRapid:', err2?.message || err2);
   }
   try {
-    const data = await ytdlRapid(youtubeUrl);
+    const data = await ytdlRapid(youtubeUrl, options);
     const mediaUrl = pickUrl(data);
     if (!mediaUrl) throw new Error('No video URL');
     return { ok: true, url: mediaUrl, title: pickTitle(data), thumb: pickThumb(data) };
   } catch (err3) {
-    console.warn('[DC-API] ytdlRapid failed, trying hdVideoDownload:', err3?.message || err3);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] ytdlRapid failed, trying hdVideoDownload:', err3?.message || err3);
   }
   try {
-    const data = await hdVideoDownload(youtubeUrl);
+    const data = await hdVideoDownload(youtubeUrl, options);
     const mediaUrl = pickUrl(data);
     if (!mediaUrl) throw new Error('No video URL');
     return { ok: true, url: mediaUrl, title: pickTitle(data), thumb: pickThumb(data) };
   } catch (err4) {
-    console.warn('[DC-API] hdVideo failed, trying ytGeneric:', err4?.message || err4);
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
+    if (!options.quietLogs) console.warn('[DC-API] hdVideo failed, trying ytGeneric:', err4?.message || err4);
   }
   try {
-    const result = await ytGeneric(youtubeUrl);
+    const result = await ytGeneric(youtubeUrl, options);
     const mediaUrl = result.url;
     if (!mediaUrl) throw new Error('No video URL');
     return { ok: true, url: mediaUrl, title: result.title || '', thumb: result.thumb };
   } catch (err5) {
+    if (options.signal?.aborted) return { ok: false, error: options.signal.reason };
     return { ok: false, error: err5 };
   }
 }

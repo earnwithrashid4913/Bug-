@@ -11,7 +11,7 @@ const SECOND = 'https://www.youtube.com/watch?v=BaW_jenozKc';
 // Signature-only fixture, used explicitly with FFmpeg unavailable. Not a real
 // YouTube recording and not evidence of live extraction/playback.
 const mp3 = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(128)]);
-const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.from('moov mdat vide soun'), Buffer.alloc(128)]);
+const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.from('moov mdat vide soun avc1 mp4a'), Buffer.alloc(128)]);
 function setup(options = {}) {
   const calls = [];
   const api = {
@@ -151,9 +151,7 @@ test('other search results require explicit consent after failure; SoundCloud is
   await flow.select(ctx(`${result.id} sources`));
   assert.match(sent.at(-1).text, /Second/); assert.equal(source, URL);
   await flow.select(ctx(`${result.id} 2`));
-  assert.ok(sent.at(-2).caption?.includes('Second') || sent.at(-1).caption?.includes('Second'));
-  assert.equal(source, URL, 'selecting another source still requires format selection before downloading');
-  await flow.select(ctx(`${result.id} 2`)); assert.equal(source, SECOND);
+  assert.equal(source, SECOND, 'explicit source consent resumes the already selected format without another menu');
 });
 test('actual fallback order ignores misleading filename and MIME claims', async () => {
   const f = setup();

@@ -39,6 +39,7 @@ const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (process.env.FAKE_ARGS_FILE) fs.appendFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify(args) + '\\n');
 if (args.includes('--version')) { console.log('2026.01.01'); process.exit(0); }
+if (args.includes('--help')) { console.log('Legacy fixture help'); process.exit(0); }
 if (args.includes('-J')) {
   if (args.some((arg) => String(arg).startsWith('ytsearch'))) {
     console.log(JSON.stringify({ _type: 'playlist', entries: [{ id: 'abc123', title: 'Local Search Result', url: 'https://www.youtube.com/watch?v=abc123' }] }));
@@ -59,7 +60,7 @@ if (args.includes('-J')) {
   }
   process.exit(0);
 }
-if (process.env.FAKE_FAIL === '1') { console.error('ERROR: Sign in to confirm you\\'re not a bot'); process.exit(1); }
+if (process.env.FAKE_FAIL === '1') { console.error(process.env.FAKE_ERROR || 'ERROR: Sign in to confirm you\\'re not a bot'); process.exit(1); }
 const format = args[args.indexOf('-f') + 1] || '';
 const relaxed = format === 'bestaudio/best' || format === '18/b' || format === 'bv*+ba/b';
 if (process.env.FAKE_FORMAT_FAIL === '1' && !relaxed) { console.error('ERROR: Requested format is not available'); process.exit(1); }
@@ -93,6 +94,14 @@ function withEnv(values, fn) {
         else process.env[key] = value;
       }
     });
+}
+
+// Provisioning tests model a fresh host even when the developer has yt-dlp in Python.
+async function withoutPython(fn) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-no-python-'));
+  fs.symlinkSync(process.execPath, path.join(directory, 'node'));
+  try { return await withEnv({ PATH: directory }, fn); }
+  finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 
 test('audio download returns the produced MP3 buffer, title and safe file name', posixOnly, async () => {
@@ -212,7 +221,7 @@ test('a bundled engine in downloads.binDir is discovered without PATH access', p
   assert.equal(engine.version, '2026.01.01');
 });
 
-test('a fresh host provisions the official engine automatically and then downloads', posixOnly, async () => {
+test('a fresh host provisions the official engine automatically and then downloads', posixOnly, async () => withoutPython(async () => {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-md-provision-'));
   const fetchImpl = async () => new Response(FAKE_SCRIPT, { status: 200 });
   const options = settings({ bin: 'yt-dlp-absent-from-this-host', binDir, autoInstall: true, ffmpeg: true, timeoutMs: 10_000, maxBytes: 1024 * 1024, fetchImpl, minBytes: 8 });
@@ -222,7 +231,7 @@ test('a fresh host provisions the official engine automatically and then downloa
 
   const result = await downloadAudio('https://www.youtube.com/watch?v=abc123', options);
   assert.equal(result.buffer.length, 16);
-});
+}));
 
 test('FFmpeg is provisioned automatically so video can be merged', posixOnly, async () => {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-md-ffmpeg-'));
@@ -242,7 +251,7 @@ test('provisioning refuses an incomplete download and leaves no broken executabl
   assert.ok(!fs.existsSync(path.join(binDir, 'yt-dlp')), 'no partial engine is left behind');
 });
 
-test('a failed automatic setup is retried on the next command instead of being cached', posixOnly, async () => {
+test('a failed automatic setup is retried on the next command instead of being cached', posixOnly, async () => withoutPython(async () => {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-md-retry-'));
   const fetchImpl = async () => new Response('nope', { status: 503 });
   const options = settings({ bin: 'yt-dlp-offline-host', binDir, autoInstall: true, timeoutMs: 10_000, fetchImpl });
@@ -255,7 +264,7 @@ test('a failed automatic setup is retried on the next command instead of being c
   fs.writeFileSync(path.join(binDir, name), FAKE_SCRIPT, { mode: 0o755 });
   const engine = await resolveEngine(options);
   assert.equal(engine.source, 'bundled');
-});
+}));
 
 test('a missing FFmpeg is detected instead of assumed', async () => {
   assert.equal(await detectFfmpeg({ bin: 'definitely-no-ffmpeg-on-this-host' }), false);
@@ -280,13 +289,14 @@ test('a standalone build name is chosen for every supported platform', () => {
   assert.equal(platformFfmpegAsset('freebsd', 'x64'), null);
 });
 
-test('cookies and bot-check failures are surfaced as a clear user message', posixOnly, async () => {
+test('bot-check failures do not assert login or prescribe cookies', posixOnly, async () => {
   const bin = fakeBinary();
   await withEnv({ FAKE_FAIL: '1' }, async () => {
     await assert.rejects(
       downloadVideo('https://www.youtube.com/watch?v=abc123', { bin, ffmpeg: true, maxBytes: 1024 * 1024, timeoutMs: 10_000 }),
       (error) => {
-        assert.match(error.userMessage, /cookies/i);
+        assert.match(error.userMessage, /automated traffic/i);
+        assert.doesNotMatch(error.userMessage, /cookies|signed.in|login/i);
         assert.match(error.message, /Sign in to confirm/);
         return true;
       }
@@ -312,4 +322,24 @@ test('titles are stripped of path separators and control characters', () => {
   assert.equal(safeTitle('a/b\\c:d*e?f"g<h>i|j'), 'a b c d e f g h i j');
   assert.equal(safeTitle('   '), 'media');
   assert.equal(safeTitle('x'.repeat(300)).length, 120);
+});
+
+test('a bot challenge mentioning extraction is not retried with another format', posixOnly, async () => {
+  const bin = fakeBinary();
+  const argsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'anime-botcheck-')), 'args.log');
+  await withEnv({ FAKE_FAIL: '1', FAKE_ERROR: "ERROR: Unable to extract: Sign in to confirm you're not a bot", FAKE_ARGS_FILE: argsFile }, async () => {
+    await assert.rejects(downloadVideo('https://www.youtube.com/watch?v=abc123', { bin, ffmpeg: true, timeoutMs: 1000 }), error => {
+      assert.match(error.userMessage, /automated traffic/); return true;
+    });
+  });
+  const runs = fs.readFileSync(argsFile, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(runs.filter(args => args.includes('-o')).length, 1);
+});
+test('a cookie-file read error is not proof that the video needs login', posixOnly, async () => {
+  const bin = fakeBinary();
+  await withEnv({ FAKE_FAIL: '1', FAKE_ERROR: 'ERROR: Could not read cookies file: Permission denied' }, async () => {
+    await assert.rejects(downloadVideo('https://www.youtube.com/watch?v=abc123', { bin, ffmpeg: true, timeoutMs: 1000 }), error => {
+      assert.doesNotMatch(error.userMessage, /requires.*session|signed.in|configure.*cookies/i); return true;
+    });
+  });
 });
