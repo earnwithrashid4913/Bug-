@@ -524,7 +524,7 @@ async function handleAioCommand(socket, context, argsText, prefix = '!') {
   // DavidCyril pool as fallback) — reuse it instead of duplicating it here.
   if (route?.label === 'YouTube') {
     await socket.sendMessage(context.chatId, { text: '🚀 *AIO* → YouTube' }, { quoted: context.raw });
-    return sourceCommands.download(socket, context, { name: 'video', text: url, args: [url] });
+    return sourceCommands.download(socket, context, { name: 'ytmp4', text: url, args: [url] });
   }
 
   if (route?.handler) {

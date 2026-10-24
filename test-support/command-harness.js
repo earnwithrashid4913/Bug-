@@ -49,6 +49,15 @@ function makeHarness() {
     if (filename === path.join(root, 'config.js')) return config;
     if (cache.has(filename)) return cache.get(filename).exports;
     if (filename === path.join(root, 'system/lib/runtime.js')) return { requestRestart: () => { calls.push('requestRestart'); return 'supervisor'; } };
+    if (filename === path.join(root, 'system/lib/youtube-engine.js')) {
+      const real = nativeRequire(filename);
+      return { ...real, createLocalProvider: () => ({
+        inspect: async url => ({ url, title: 'Fixture', uploader: 'Fixture uploader', duration: 60,
+          thumbnail: '', audio: true, qualities: [{ height: 720, selector: '22' }] }),
+        download: async (info, kind) => ({ file: '/mock/media', fileName: 'Fixture.mp4',
+          mimetype: kind === 'video' ? 'video/mp4' : 'audio/mpeg', cleanup: async () => {} })
+      }) };
+    }
     if (filename === path.join(root, 'system/lib/local-downloader.js')) {
       // The local yt-dlp engine is a process boundary, exactly like the network
       // boundary mocked above. Handler flows get deterministic media without
@@ -56,7 +65,7 @@ function makeHarness() {
       return {
         downloadAudio: async () => ({ buffer: bytes, title: 'Fixture audio', fileName: 'Fixture audio.mp3', mimetype: 'audio/mpeg' }),
         downloadVideo: async () => ({ buffer: bytes, title: 'Fixture video', fileName: 'Fixture video.mp4', mimetype: 'video/mp4' }),
-        searchVideo: async () => [{ url: 'https://youtu.be/fixture', title: 'Fixture' }],
+        searchVideo: async () => [{ url: 'https://youtu.be/dQw4w9WgXcQ', title: 'Fixture' }],
         searchAudio: async () => [{ url: 'https://soundcloud.com/fixture/track', title: 'Fixture track' }]
       };
     }
@@ -80,7 +89,7 @@ function makeHarness() {
     const virtualDir = filename === path.join(root, 'system/lib/otaku.js') ? path.join(directory, 'system/lib') : path.dirname(filename);
     vm.runInNewContext(`(function(require,module,exports,__dirname,__filename){${source}\n})`, globals, { filename })(localRequire, module, module.exports, virtualDir, filename);
     if (filename === path.join(root, 'system/lib/net-tools.js')) Object.assign(module.exports, {
-      youtubeSearch: async () => [{ url: 'https://youtu.be/fixture', title: 'Fixture' }],
+      youtubeSearch: async () => [{ url: 'https://youtu.be/dQw4w9WgXcQ', title: 'Fixture' }],
       spotifySearch: async () => [{ title: 'Fixture', artist: 'Artist', url: 'https://open.spotify.com/track/fixture' }],
       requestCobalt: async () => ({ url: 'https://media.example/file' }),
       downloadRemoteFile: async () => ({ buffer: bytes, type: 'video/mp4' }),

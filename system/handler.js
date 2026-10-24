@@ -1674,6 +1674,10 @@ async function handleMessage(socket, rawMessage) {
   if (antiEnabled) await recovery.storeMessage(socket, rawMessage, { download: downloadMediaBuffer, ownerJid: [...ownerJids(socket)][0] });
   if (!context.fromMe && context.isGroup) await applyGroupProtections(socket, context);
 
+  // Bound media replies run through the same access gate as commands. Plain
+  // unquoted numbers remain available to quizzes and the category menu.
+  if ((publicMode || isOwner(socket, context.sender)) && await sourceCommands.selectDownload(socket, context)) return;
+
   const command = commandFromText(context.text);
   if (!command) {
     // The existing quiz advertises plain "join" and A/B/C/D answers. Keep

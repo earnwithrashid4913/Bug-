@@ -8,7 +8,7 @@ const { styleHeaders } = require('../system/lib/presentation');
 
 const input = {
   fancy: 'Fixture 1', encrypt: 'const x = 1', encrypt2: 'const x = 1', getmail: 'session-id', upload: 'https://example.test/file',
-  request: 'Fixture report', mode: 'public', play: 'https://youtu.be/fixture', ytmp3: 'https://youtu.be/fixture', video: 'https://youtu.be/fixture', spotify: 'Fixture', media: 'https://example.test/video',
+  request: 'Fixture report', mode: 'public', play: 'https://youtu.be/dQw4w9WgXcQ', ytmp3: 'https://youtu.be/dQw4w9WgXcQ', video: 'https://youtu.be/dQw4w9WgXcQ', spotify: 'Fixture', media: 'https://example.test/video',
   ai: 'Fixture question', translate: 'en Bonjour', calc: '2+3', ss: 'https://example.test', short: 'https://example.test', tts: 'Hello', qr: 'Fixture',
   idch: 'https://whatsapp.com/channel/fixture', rps: 'rock', guess: 'start', gname: 'Fixture Group', gdesc: 'Fixture description', add: '15558888888',
   setname: 'Fixture Name', setprefix: '!', broadcast: 'Fixture announcement', sudo: '15558888888', delsudo: '15558888888', addprem: '15558888888 30d', delprem: '15558888888',
@@ -69,7 +69,7 @@ test('EVERY public execute name runs through the real handler and produces a res
       assert.ok(h.calls.includes('dispatchCommand'), 'real dispatcher entered');
       const payloads = socket.sends.filter(s => !s.payload.react);
       assert.ok(payloads.length || socket.actions.length, `${name}: no result except reaction`);
-      assert.doesNotMatch(textOf(socket).replace(/\*Failed:\* 0\b/g, 'No delivery failures'), /COMMAND FAILED|\bError:|\bFAILED\b|not a function|UNAVAILABLE|\bundefined\b|\bNaN\b/i, name);
+      assert.doesNotMatch(textOf(socket).replace(/\*Failed:\* 0\b/g, 'No delivery failures').replace(/Thumbnail unavailable; downloads are still available\./g, 'Text-only media menu'), /COMMAND FAILED|\bError:|\bFAILED\b|not a function|UNAVAILABLE|\bundefined\b|\bNaN\b/i, name);
       assert.deepEqual(h.errors, [], `${name}: internal error`);
       // Stop started quiz lobbies; do not leave delayed game jobs after tests.
       if (entry.name === 'quiz') await h.handler(socket, socket.message('!quiz stop'));

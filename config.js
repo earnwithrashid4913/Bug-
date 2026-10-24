@@ -168,7 +168,8 @@ module.exports = {
     // <database.dataDir>/bin. OPTIONAL.
     binDir: '',
     // Optional FFmpeg binary. Leave blank to let the bot find ffmpeg on PATH or
-    // install a static build into binDir (needed to merge video and make MP3).
+    // install a static build into binDir. Required for repaired YouTube downloads:
+    // MP3/Opus conversion, merging and complete output validation.
     // Example: "/usr/bin/ffmpeg". OPTIONAL.
     ffmpegPath: '',
     // Optional Netscape cookies.txt for sites that require a signed-in session.
