@@ -124,15 +124,19 @@ Termux installation and WhatsApp delivery were not exercised in the sandbox.
   `'text'` explicitly enables last-resort compatibility. A relay acknowledgment
   cannot detect every unsupported handset, so rendering still needs a real-device
   check. Callbacks bind chat/sender/socket/request/revision; old taps cannot select
-  a new menu's option. Only in numbered compatibility mode, quote the media
-  message with a number or send its displayed token plus number. Unquoted bare
-  numbers remain reserved for existing menus/quizzes. Pending selections do not
-  survive a restart.
-- `play` / `video` and their search aliases open the menu. `ytmp3` / audio
-  aliases download directly after showing the thumbnail/menu. `ytmp4` / `mp4`
-  use the previous automatic video selection. Choose HD VIDEO from `play` /
-  `video` for optional manual resolution selection. Automatic mode makes no
-  promise about resolution.
+  a new menu's option and an outdated card is answered as out of date instead of
+  being ignored. The offered options are also printed as body text, so a handset
+  that renders the card without the buttons can still reply with the number.
+  Quoting the media message with a number always works; a bare number is accepted
+  when it can only mean one pending request for that sender in that chat, while a
+  running group quiz keeps priority for the same numbers. Pending selections do
+  not survive a restart.
+- `play` opens the HD VIDEO / AUDIO MP3 / VOICE TYPE menu for a URL or a search
+  query. `video` and its aliases (`yt`, `youtube`, `ytv`, `ytvideo`) open the
+  resolution card instead — never the audio menu. `ytmp3` / audio aliases download
+  directly after showing the thumbnail/menu and also accept a search query.
+  `ytmp4` / `mp4` keep the previous automatic video selection. Automatic mode
+  makes no promise about resolution.
 - Explicit resolutions come from actual compatible local formats. A separate
   automatic option remains available if formats cannot be enumerated. VOICE TYPE
   uses FFmpeg to produce mono Ogg/Opus at 48 kHz; no fabricated voice note is sent

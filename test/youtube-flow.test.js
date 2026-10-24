@@ -82,14 +82,25 @@ for (const [choice, kind] of [['2', 'audio'], ['3', 'voice']]) test(`selecting $
   assert.equal(f.sent[index].mimetype, kind === 'voice' ? 'audio/ogg; codecs=opus' : 'audio/mpeg');
   assert.equal(f.cleanup(), 1); assert.match(f.sent.at(-1).text, /delivery confirmed/);
 });
-test('HD VIDEO reveals real resolutions then downloads the chosen quality, not the menu again', async () => {
+test('!video opens the real resolution list (never the audio menu) and downloads the chosen quality', async () => {
   const f = fixture(); const result = await f.start('video');
-  await f.flow.select(context(`${result.id} 1`));
-  assert.match(f.sent.at(-1).text, /720p[\s\S]*360p/); assert.doesNotMatch(f.sent.at(-1).text, /1080p/);
+  // `!video` is a video request: its card is the quality list, not AUDIO MP3.
+  const card = f.sent.find(p => p.image);
+  assert.match(card.caption, /VIDEO QUALITY[\s\S]*720p[\s\S]*360p/);
+  assert.doesNotMatch(card.caption, /AUDIO MP3|VOICE TYPE/);
+  assert.equal(f.sent.filter(p => p.image).length, 1);
   await f.flow.select(context(`${result.id} 2`));
   assert.deepEqual(f.calls.filter(c => c[0] === 'download'), [['download', 'video', 360]]);
-  assert.equal(f.sent.filter(p => p.image).length, 1);
   assert.match(f.sent.find(p => p.video).caption, /360p/);
+});
+test('HD VIDEO inside the play menu reveals real resolutions, not 1080p', async () => {
+  const f = fixture(); const result = await f.start();
+  await f.flow.select(context(`${result.id} 1`));
+  const quality = f.sent.filter(p => p.image).at(-1).caption;
+  assert.match(quality, /720p[\s\S]*360p/); assert.doesNotMatch(quality, /1080p/);
+  await f.flow.select(context(`${result.id} 2`));
+  assert.deepEqual(f.calls.filter(c => c[0] === 'download'), [['download', 'video', 360]]);
+  assert.equal(f.sent.filter(p => p.image).length, 2);
 });
 test('unavailable resolution and invalid choice retain the current selector', async () => {
   const f = fixture(); const result = await f.start();
@@ -115,12 +126,26 @@ test('unrelated users and other chats cannot consume a pending selection', async
   assert.equal(f.calls.filter(c => c[0] === 'download').length, 0);
   await f.flow.select(context(`${result.id} 2`)); assert.ok(f.sent.some(p => p.audio));
 });
-test('numbered reply must quote its menu; unquoted numbers never steal quiz or category replies', async () => {
+test('a numbered reply selects the only pending card, quoted or not, and never steals idle numbers', async () => {
+  // No pending media request: numbers stay available to the menu/quiz paths.
+  const idle = fixture();
+  assert.equal(await idle.flow.select(context('2')), false);
+
+  // Quoted reply to the card.
   const f = fixture(); await f.start();
-  assert.equal(await f.flow.select(context('2')), false);
   const quoted = f.sent.findIndex(p => p.image) + 1;
   const ctx = context('2'); ctx.raw.message = { extendedTextMessage: { text: '2', contextInfo: { stanzaId: `sent-${quoted}` } } };
   assert.equal(await f.flow.select(ctx), true); assert.ok(f.sent.some(p => p.audio));
+
+  // Bare "2" after one card (a handset whose buttons did not render).
+  const bare = fixture(); await bare.start();
+  assert.equal(await bare.flow.select(context('2')), true);
+  assert.equal(bare.calls.filter(c => c[0] === 'download').length, 1);
+
+  // Two pending requests make a bare number ambiguous: it is not guessed.
+  const two = fixture(); await two.start(); await two.start('play', URL, context());
+  assert.equal(await two.flow.select(context('2')), false);
+  assert.equal(two.calls.filter(c => c[0] === 'download').length, 0);
 });
 test('expired and unknown selections give a clear response and do not download', async () => {
   const f = fixture(); const result = await f.start(); f.expire();

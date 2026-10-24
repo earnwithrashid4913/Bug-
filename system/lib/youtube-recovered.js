@@ -164,7 +164,14 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
           if (classified.code === 'SIZE' || (kind === 'voice' && classified.code === 'ENGINE')) throw classified;
         }
       }
-      const error = new MediaError('PROVIDERS', `All download providers failed (${failures.map(f => `${f.provider}: ${f.code}`).join('; ')}). No different video or SoundCloud track was substituted.`);
+      // When every source failed for the SAME actionable reason (e.g. YouTube's
+      // bot check for this host), keep that code so the chat shows the real
+      // cause instead of a generic "no source" message. Mixed/unclear
+      // failures stay aggregated, and the per-provider summary is always logged.
+      const actionable = new Set(['BOT_CHECK', 'AUTH', 'RESTRICTED', 'UNAVAILABLE', 'QUALITY', 'TIMEOUT', 'NETWORK']);
+      const codes = [...new Set(failures.map(failure => failure.code))];
+      const sole = codes.length === 1 && actionable.has(codes[0]) ? codes[0] : 'PROVIDERS';
+      const error = new MediaError(sole, `All download providers failed (${failures.map(f => `${f.provider}: ${f.code}`).join('; ')}). No different video or SoundCloud track was substituted.`);
       error.failures = failures;
       throw error;
     }

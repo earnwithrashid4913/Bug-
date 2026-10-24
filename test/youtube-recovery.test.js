@@ -131,8 +131,11 @@ test('HD optional lookup failure offers previous auto-video path; direct ytmp4 n
   const f = setup(), { socket, sent, ctx } = socketFixture();
   const flow = createFlow(socket, { provider: f.provider, thumbnail: async () => Buffer.from('mock'), confirm: async () => true, log: () => {}, withSlot: createBudget() });
   const result = await flow.start(ctx(), { name: 'video', text: URL });
-  await flow.select(ctx(`${result.id} 1`));
-  assert.match(sent.at(-1).text, /Automatic video/);
+  // `!video` opens the resolution card directly; when formats cannot be
+  // enumerated it offers the previous automatic-video path (never AUDIO MP3).
+  const card = sent.map(p => p.caption || p.text || '').join('\n');
+  assert.match(card, /Automatic video/);
+  assert.doesNotMatch(card, /AUDIO MP3|VOICE TYPE/);
   await flow.select(ctx(`${result.id} 1`));
   assert.ok(sent.some(p => p.video?.url));
   const before = f.calls.filter(c => c[0] === 'advanced').length;
