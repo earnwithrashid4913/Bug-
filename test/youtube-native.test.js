@@ -58,7 +58,7 @@ function fixture(options = {}) {
     start: (user, chat) => flow.start(ctx(undefined, user, chat), { name: 'play', text: 'Song with spaces' }) };
 }
 
-test('rc14 emits an actual image-header native card with three quick replies, not reply instructions', async () => {
+test('rc14 emits an actual image-header native card with three quick replies plus a visible numbered fallback', async () => {
   const f = fixture(); await f.start();
   const message = f.last();
   assert.ok(message.interactiveMessage.header.hasMediaAttachment);
@@ -67,7 +67,9 @@ test('rc14 emits an actual image-header native card with three quick replies, no
   assert.deepEqual(controls(message).map(c => c.label), ['HD VIDEO', 'AUDIO MP3', 'VOICE TYPE']);
   const text = message.interactiveMessage.body.text.normalize('NFKC');
   assert.match(text, /Song with spaces[\s\S]*Channel[\s\S]*1:01/);
-  assert.doesNotMatch(text, /Reply|\b1\.|\b2\.|\b3\./);
+  // The same options are readable text, so a handset that does not render the
+  // buttons can still answer with a number (reported "only Choose a format").
+  assert.match(text, /1\. HD VIDEO[\s\S]*2\. AUDIO MP3[\s\S]*3\. VOICE TYPE[\s\S]*Reply with a number/);
   const decoded = proto.Message.decode(proto.Message.encode(message).finish());
   assert.equal(controls(decoded).length, 3);
   for (const item of controls(decoded)) assert.match(item.id, /^yt:[a-f0-9]{12}:1:[123]$/);
