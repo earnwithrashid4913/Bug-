@@ -120,9 +120,9 @@ module.exports = {
     groqApiKey: 'YOUR_GROQ_API_KEY',
     // Groq model for !ai. OPTIONAL. Example: "openai/gpt-oss-20b".
     groqModel: 'openai/gpt-oss-20b',
-    // Optional Cobalt server used only by the generic !media/!aio fallback.
-    // !play and !video no longer call it: they use the local yt-dlp engine
-    // configured in `downloads` below. OPTIONAL HTTPS URL.
+    // Existing Cobalt provider for !play / !video and generic media fallback.
+    // Recovered alongside DavidCyril; local yt-dlp remains a fallback.
+    // OPTIONAL HTTPS URL.
     cobaltApiUrl: 'https://cobalt-api.kwiatekmiki.com',
     // Catbox endpoint for !tourl uploads. OPTIONAL HTTPS URL.
     uploadApiUrl: 'https://catbox.moe/user/api.php'
@@ -153,8 +153,8 @@ module.exports = {
   },
 
   // ==================================== DOWNLOAD ENGINE SETTINGS ===========
-  // Audio/video downloads run on YOUR host through the yt-dlp executable.
-  // No third-party download API is used for !play and !video.
+  // Recovered local yt-dlp fallback. Ordinary API downloads do not require it.
+  // Manual exact-quality selection still uses the optional strict adapter.
   downloads: {
     // yt-dlp command name (when it is on PATH) or an absolute path. OPTIONAL:
     // when nothing is found the engine installs itself (see autoInstall).
@@ -168,8 +168,8 @@ module.exports = {
     // <database.dataDir>/bin. OPTIONAL.
     binDir: '',
     // Optional FFmpeg binary. Leave blank to let the bot find ffmpeg on PATH or
-    // install a static build into binDir. Required for repaired YouTube downloads:
-    // MP3/Opus conversion, merging and complete output validation.
+    // install a static build into binDir for the local fallback. Optional for
+    // ordinary API downloads; required for voice notes and exact-quality merging.
     // Example: "/usr/bin/ffmpeg". OPTIONAL.
     ffmpegPath: '',
     // Optional Netscape cookies.txt for sites that require a signed-in session.

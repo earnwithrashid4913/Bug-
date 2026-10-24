@@ -32,17 +32,28 @@ will silently start from an empty session and an empty database.
 
 ## Command media requirements
 
-`!play`, `!video` and their aliases download media **on your host** through
-[yt-dlp](https://github.com/yt-dlp/yt-dlp). No third-party download API or API
-key is used.
+The regression recovery restores the historical provider chains rather than
+requiring the strict PR #61 yt-dlp adapter before any download can start:
 
-The repaired commands require **both yt-dlp and FFmpeg**. The existing engine
-can find tools on PATH, use `downloads.ytDlpPath` / `downloads.ffmpegPath`, or
-attempt automatic installation when `downloads.autoInstall` is true. Automatic
-installation is best-effort, **not a guarantee**: executable mounts, architecture,
-release download access and host permissions must permit it. FFmpeg is required
-to make genuine MP3/Opus and validate the full output; these commands do not
-silently relabel M4A as MP3 or WebM as MP4.
+- Audio: existing DavidCyril MP3 pool → existing Cobalt servers → the local
+  downloader from pre-PR #61 commit `be909d2`.
+- Automatic video: existing Cobalt servers → DavidCyril MP4 → DavidCyril AIO →
+  the same pre-PR #61 local downloader.
+
+A successful API download does **not** require yt-dlp metadata or FFmpeg. Search
+uses the existing page helper with yt-dlp search fallback. Direct URLs do not
+require a local extractor merely to open the menu. Search metadata is displayed
+when present; a direct URL can show honest unknown title/uploader/duration labels.
+Original API endpoints/helpers and dependency versions are unchanged.
+
+FFmpeg is optional for ordinary downloads and required for voice-note conversion.
+When it is present, final files are decoded before upload. Without it, signature,
+stream-marker, nonempty and byte-limit checks still run; this is **not** equivalent
+to a full decoder check. The older M4A fallback is retained with a visible notice
+and correct MIME instead of being mislabeled MP3. WebM is sent as a file, not a
+mislabeled MP4. Exact-resolution downloads use the retained strict adapter only
+when explicitly chosen; failed optional format discovery leaves the previous
+**Automatic video** path available and does not claim HD resolution.
 
 ### Install and verify tools
 
@@ -59,9 +70,10 @@ ffmpeg -version
 
 Set `downloads.ytDlpPath` in `config.js` to the **absolute path** of that yt-dlp
 executable. Set `downloads.ffmpegPath` if FFmpeg is not on PATH. Keep the Python
-environment outside the repository, on executable persistent storage. The repaired adapter explicitly enables the current Node executable as
-yt-dlp's JavaScript runtime; use a current yt-dlp release supporting
-`--js-runtimes`. The verified Python `default` extra includes its matching
+environment outside the repository, on executable persistent storage. The optional exact-resolution adapter enables the current Node executable as
+yt-dlp's JavaScript runtime and requires support for `--js-runtimes`. The
+recovered local automatic path restores the older argument list and honors
+host-level yt-dlp configuration again; it does not impose the new JS flag. The verified Python `default` extra includes its matching
 `yt-dlp-ejs` challenge solver (official standalone releases bundle it). Cookies cannot bypass every bot
 check or regional/age restriction.
 
@@ -86,11 +98,16 @@ Termux installation and WhatsApp delivery were not exercised in the sandbox.
   Tool installation may additionally require GitHub release asset hosts / PyPI.
 - `downloads.binDir` defaults to `<database.dataDir>/bin`; keep it persistent.
 - `downloads.maxFileSizeMb` (default 50) caps final media. `downloads.timeoutMs`
-  (default 180000) bounds each subprocess and the Baileys media upload.
+  (default 180000) bounds each local subprocess and the Baileys media upload.
+  Historical API helpers retain their own bounded per-endpoint timeouts and
+  fallback pools; a complete failed pool can take longer than one local timeout.
 - Two host-wide extraction/upload slots are used. Temporary disk usage is
-  monitored at three times the final-size limit per job (source, output and
-  merge intermediates). Budget at least six times the size limit plus operating
-  headroom for two jobs. The OS temp directory must be writable and have room.
+  bounded by the existing local engine and file-size checks for automatic mode;
+  strict exact-quality jobs additionally use the storage watchdog. Budget six
+  times the size limit plus headroom for two jobs. The recovered API helper
+  buffers at most the configured size before writing the temporary file; budget
+  memory accordingly and keep the default 50 MiB on small hosts. The OS temporary
+  directory must be writable.
 - Use a private, authorized Netscape cookie file via `downloads.cookiesFile`
   only when appropriate. Do not commit cookies or share signed media URLs.
 - Requests expire after five minutes. Reply **to the media message** with its
@@ -99,16 +116,21 @@ Termux installation and WhatsApp delivery were not exercised in the sandbox.
   survive a restart.
 - `play` / `video` and their search aliases open the menu. `ytmp3` / audio
   aliases download directly after showing the thumbnail/menu. `ytmp4` / `mp4`
-  download the highest compatible available resolution, explicitly announced.
-  Choose HD VIDEO from `play` / `video` for manual resolution selection.
-- Only real H.264/AAC MP4 qualities are offered, with merging when necessary.
-  Audio is transcoded to MP3; VOICE TYPE is mono Ogg/Opus at 48 kHz.
+  use the previous automatic video selection. Choose HD VIDEO from `play` /
+  `video` for optional manual resolution selection. Automatic mode makes no
+  promise about resolution.
+- Explicit resolutions come from actual compatible local formats. A separate
+  automatic option remains available if formats cannot be enumerated. VOICE TYPE
+  uses FFmpeg to produce mono Ogg/Opus at 48 kHz; no fabricated voice note is sent
+  if the converter is unavailable.
 - A receipt is required for “Completed”. Upload acceptance alone is shown as
   unconfirmed after a 45-second receipt wait. No upload is retried blindly.
 - Search failure can use yt-dlp's search instead of the page scraper. Download
   failure never silently changes to another video or a SoundCloud track.
-  Existing unrelated API helpers remain intact. The provider-chain interface
-  permits trusted replacement adapters; only yt-dlp is enabled in this checkout.
+  Search retrieves up to five results as before. If a download fails, the
+  `<token> sources` action lets the user explicitly choose another result; no
+  other YouTube video or SoundCloud track is silently substituted. DavidCyril,
+  Cobalt and the historical local downloader are active in their recovered order.
 
 Run these host-side checks before connecting the bot:
 
@@ -119,12 +141,19 @@ npm test
 npm run smoke
 node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' info
 node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' audio
-node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' video 144
+node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' video
+node scripts/youtube-check.js 'New FunkS Latest 10 minutes' audio
+node scripts/youtube-check.js 'memories hasan' audio
+node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' audio --provider=cobalt
+node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' formats
 ```
 
-The example clip's qualities can change: use the `info` output to choose an
-available height. The check deletes its temporary outputs and **does not verify
-WhatsApp delivery**. Start with `npm start`, or restart your existing supervisor
+`info` prepares the request and reports the metadata source; it is **not** a
+provider availability test. `formats` runs optional live quality discovery. Use
+`audio`, `video` or `voice` to actually attempt a download. `--provider=davidcyril`,
+`--provider=cobalt` or `--provider=local` isolates one provider family on the host.
+These are CLI diagnostics, not chat-controlled endpoints. Files are deleted
+after checks; **WhatsApp delivery is not verified by this script**. Start with `npm start`, or restart your existing supervisor
 once after deployment. Do not delete the authentication/session directory.
 Perform an actual `!play`, choose audio, video/quality and voice in WhatsApp,
 and confirm playback and receipt-confirmed completion. Keep yt-dlp current via

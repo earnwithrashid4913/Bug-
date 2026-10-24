@@ -1,5 +1,11 @@
 # ANIME MD — YouTube download repair and verification
 
+> Historical PR #61 report. The user reported a production regression after this
+> PR. Its yt-dlp-only defaults and mandatory metadata/converter prerequisites
+> have been superseded by the targeted recovery in
+> [YOUTUBE-ROLLBACK-REPORT.md](YOUTUBE-ROLLBACK-REPORT.md). The old test counts and
+> architecture claims below describe that PR, not the current recovered defaults.
+
 Audit date: 2026-10-24. Branch: `arena/fcb80884-bug`.
 
 ## Verification status — read this first

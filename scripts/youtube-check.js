@@ -1,26 +1,45 @@
 'use strict';
-// Host-side provider check. Does not start the bot, change auth, or upload to
-// WhatsApp. No credentials or signed media URLs are printed.
+// Uses the SAME recovered provider/search path as the bot, but never connects to
+// WhatsApp. Query resolution and provider success are reported separately.
 const fs = require('node:fs/promises');
-const { createProviderChain, createLocalProvider, youtubeUrl } = require('../system/lib/youtube-engine');
+const net = require('../system/lib/net-tools');
+const local = require('../system/lib/local-downloader');
+const { youtubeUrl, classifyError, MediaError } = require('../system/lib/youtube-engine');
+const { createRecoveredProvider } = require('../system/lib/youtube-recovered');
 async function main() {
-  const [input, kind = 'info', resolution] = process.argv.slice(2);
-  if (!input || !['info', 'audio', 'voice', 'video'].includes(kind) || (resolution && !/^\d{2,4}$/.test(resolution))) {
-    console.error('Usage: node scripts/youtube-check.js <YouTube URL> [info|audio|voice|video] [video-height]');
+  const argv = process.argv.slice(2);
+  const selected = argv.find(arg => arg.startsWith('--provider='))?.split('=')[1] || 'auto';
+  const [input, kind = 'info', resolution] = argv.filter(arg => !arg.startsWith('--provider='));
+  if (!input || !['info', 'formats', 'audio', 'voice', 'video'].includes(kind) ||
+      !['auto', 'davidcyril', 'cobalt', 'local'].includes(selected) || (resolution && !/^\d{2,4}$/.test(resolution))) {
+    console.error('Usage: node scripts/youtube-check.js "<YouTube URL or query>" [info|formats|audio|voice|video] [height] [--provider=auto|davidcyril|cobalt|local]');
     process.exitCode = 1; return;
   }
-  const provider = createProviderChain([createLocalProvider()]);
+  const provider = createRecoveredProvider({}, { onlyProvider: selected === 'auto' ? undefined : selected });
   let media;
   try {
-    const info = await provider.inspect(youtubeUrl(input));
-    console.log(JSON.stringify({ metadata: true, title: info.title, duration: info.duration, audio: info.audio, qualities: info.qualities.map(q => q.height) }));
-    if (kind !== 'info') {
-      const height = resolution ? Number(resolution) : info.qualities[0]?.height;
-      media = await provider.download(info, kind, height, async stage => console.log(stage));
-      console.log(JSON.stringify({ downloadedAndValidated: true, kind, bytes: (await fs.stat(media.file)).size, mimetype: media.mimetype, whatsappDeliveryTested: false }));
+    let url, seed = {};
+    if (/^[a-z][a-z\d+.-]*:/i.test(input)) url = youtubeUrl(input);
+    else {
+      let results;
+      try { results = await net.youtubeSearch(input, 5); }
+      catch { results = await local.searchVideo(input, undefined, 5); }
+      if (!results?.[0]?.url) throw new MediaError('SEARCH', 'No YouTube results found.');
+      seed = results[0]; url = youtubeUrl(seed.url);
+    }
+    const info = await provider.inspect(url, seed);
+    console.log(JSON.stringify({ requestPrepared: true, metadataSource: seed.title ? 'search' : 'fallback labels; extractor not called', title: info.title, url: info.url, whatsappDeliveryTested: false }));
+    if (kind === 'formats') {
+      const qualities = await provider.qualities(info);
+      console.log(JSON.stringify({ qualities: qualities.map(q => q.height), automaticVideoStillAvailable: true }));
+    } else if (kind !== 'info') {
+      media = await provider.download(info, kind, resolution ? Number(resolution) : undefined, async stage => console.log(stage));
+      console.log(JSON.stringify({ downloaded: true, provider: media.provider || 'exact-quality-local', kind,
+        bytes: (await fs.stat(media.file)).size, mimetype: media.mimetype, notice: media.notice, whatsappDeliveryTested: false }));
     }
   } catch (error) {
-    console.error(JSON.stringify({ ok: false, code: error.code || 'CHECK_FAILED', message: error.code ? error.message : 'Provider check failed. Check the engine and network configuration.' }));
+    const safe = error instanceof MediaError ? error : classifyError(error.message);
+    console.error(JSON.stringify({ ok: false, code: safe.code, message: safe.message, whatsappDeliveryTested: false }));
     process.exitCode = 1;
   } finally { if (media) await media.cleanup(); }
 }
