@@ -28,7 +28,7 @@ async function main() {
       seed = results[0]; url = youtubeUrl(seed.url);
     }
     const info = await provider.inspect(url, seed);
-    console.log(JSON.stringify({ requestPrepared: true, metadataSource: seed.title ? 'search' : 'fallback labels; extractor not called', title: info.title, url: info.url, whatsappDeliveryTested: false }));
+    console.log(JSON.stringify({ requestPrepared: true, metadataSource: info.metadataSource || (seed.title ? 'search' : 'fallback labels; extractor not called'), title: info.title, url: info.url, whatsappDeliveryTested: false }));
     if (kind === 'formats') {
       const qualities = await provider.qualities(info);
       console.log(JSON.stringify({ qualities: qualities.map(q => q.height), automaticVideoStillAvailable: true }));

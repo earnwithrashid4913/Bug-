@@ -1,5 +1,7 @@
 # ANIME MD — YouTube download repair and verification
 
+> Current branch follow-up: [PLAY-VIDEO-REBUILD-REPORT.md](PLAY-VIDEO-REBUILD-REPORT.md). Earlier test counts and buffering descriptions below are historical.
+
 > Current native-UI/provider-bounds follow-up: [YOUTUBE-INTERACTIVE-REPAIR.md](YOUTUBE-INTERACTIVE-REPAIR.md).
 > This document retains its historical implementation and test evidence.
 

@@ -1,5 +1,7 @@
 # Scoped download repair + native selections
 
+> Current branch follow-up: [PLAY-VIDEO-REBUILD-REPORT.md](PLAY-VIDEO-REBUILD-REPORT.md). Earlier test counts and buffering descriptions below are historical.
+
 Date: 2026-10-24. Branch: `arena/25f7c45e-bug`.
 
 ## Latest PR follow-up verification

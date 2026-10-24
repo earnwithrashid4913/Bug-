@@ -117,7 +117,8 @@ test('only complete native rejection uses the numbered compatibility fallback', 
   const f = fixture({ noNative: true }); const result = await f.start();
   assert.equal(f.cards.length, 0); const card = f.sends.find(p => p.image);
   assert.match(card.caption, /Buttons are unavailable/);
-  const ctx = f.ctx(); ctx.text = `${result.id} 2`; await f.flow.select(ctx);
+  assert.doesNotMatch(card.caption, new RegExp(result.id));
+  const ctx = f.ctx(); ctx.text = '2'; await f.flow.select(ctx);
   assert.equal(f.jobs[0].kind, 'audio');
 });
 for (const code of ['BOT_CHECK', 'NETWORK', 'PROVIDERS', 'TIMEOUT']) test(`${code} stays in diagnostics, with one clean error/retry card and no repeated media menus`, async () => {
@@ -193,4 +194,17 @@ test('a native tap during direct-command progress cannot race the automatic down
   };
   const result = await f.flow.start(f.ctx(), { name: 'ytmp3', text: URL });
   assert.equal(result.ok, true); assert.equal(f.jobs.length, 1); assert.equal(f.cleaned(), 1);
+});
+
+
+test('video resolution native list retains the prepared image header', async () => {
+  const f = fixture();
+  await f.flow.start(f.ctx(), { name: 'video', text: 'Song with spaces' });
+  assert.equal(f.last().interactiveMessage.nativeFlowMessage.buttons[0].name, 'single_select');
+  assert.equal(f.last().interactiveMessage.header.hasMediaAttachment, true);
+  assert.ok(f.imageUploads() > 0);
+});
+test('chat errors never prescribe cookies for automation challenges or aggregate failures', () => {
+  const { safeError } = require('../system/lib/youtube-flow');
+  for (const code of ['BOT_CHECK', 'NETWORK', 'PROVIDERS']) assert.doesNotMatch(safeError({ code }), /cookies|local-pre61|stack|signed.in|session credentials/i);
 });

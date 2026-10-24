@@ -91,11 +91,14 @@ function isPathLike(value) {
   return path.isAbsolute(value) || value.includes('/') || value.includes('\\');
 }
 
-function spawnEngine(engine, args, { timeoutMs, maxBuffer }) {
+function spawnEngine(engine, args, { timeoutMs, maxBuffer, directory, maxBytes }) {
   const command = engine.command;
   const fullArgs = [...(engine.prefixArgs || []), ...args];
   return new Promise((resolve, reject) => {
-    execFile(command, fullArgs, { timeout: timeoutMs, maxBuffer, windowsHide: true }, (error, stdout, stderr) => {
+    let watchdog, storageError, complete = false, checking = false;
+    const child = execFile(command, fullArgs, { timeout: timeoutMs, maxBuffer, windowsHide: true }, (error, stdout, stderr) => {
+      complete = true; clearInterval(watchdog);
+      if (storageError) { reject(storageError); return; }
       if (!error) {
         resolve({ stdout, stderr });
         return;
@@ -116,6 +119,26 @@ function spawnEngine(engine, args, { timeoutMs, maxBuffer }) {
       }
       reject(engineError(String(stderr || error.message || '').trim()));
     });
+    if (directory && maxBytes) {
+      watchdog = setInterval(async () => {
+        if (complete || checking) return;
+        checking = true;
+        try {
+          let bytes = 0;
+          for (const name of await fs.readdir(directory)) bytes += (await fs.stat(path.join(directory, name))).size;
+          if (!complete && bytes > maxBytes) {
+            storageError = new DownloadEngineError('Temporary media exceeded the storage size limit.', 'That media is too large to prepare. Choose a shorter video.');
+            child.kill('SIGKILL');
+          }
+        } catch (error) {
+          if (!complete && error.code !== 'ENOENT') {
+            storageError = new DownloadEngineError('Temporary media storage is unavailable.', 'Temporary storage is unavailable. Please try again later.');
+            child.kill('SIGKILL');
+          }
+        } finally { checking = false; }
+      }, 250);
+      watchdog.unref?.();
+    }
   });
 }
 
@@ -602,6 +625,7 @@ async function download(url, mode, options = settings()) {
   const info = await getInfo(url, options);
   const title = safeTitle(info.title || info.fulltitle);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'anime-md-dl-'));
+  let handedOff = false;
   try {
     const outputTemplate = path.join(directory, 'media.%(ext)s');
     const attempts = [
@@ -619,7 +643,7 @@ async function download(url, mode, options = settings()) {
         url
       ];
       try {
-        await spawnEngine(engine, args, { timeoutMs: options.timeoutMs, maxBuffer: RUN_MAX_BUFFER });
+        await spawnEngine(engine, args, { timeoutMs: options.timeoutMs, maxBuffer: RUN_MAX_BUFFER, directory, maxBytes: options.maxBytes * 3 });
         lastError = null;
         break;
       } catch (error) {
@@ -630,7 +654,7 @@ async function download(url, mode, options = settings()) {
         if (!(error instanceof DownloadEngineError) || BOT_CHECK.test(error.message) || !RETRYABLE.test(String(error.message || ''))) break;
         await fs.rm(directory, { recursive: true, force: true });
         await fs.mkdir(directory, { recursive: true });
-        console.warn('[Download] Retrying with a relaxed format after:', error.message);
+        console.warn('[Download] Retrying once with a relaxed format after a format/extractor failure.');
       }
     }
     if (lastError) throw lastError;
@@ -644,6 +668,11 @@ async function download(url, mode, options = settings()) {
       );
     }
     const extension = path.extname(file).slice(1).toLowerCase() || (audio ? 'mp3' : 'mp4');
+    if (options.fileBacked) {
+      handedOff = true;
+      return { file, title, fileName: `${title}.${extension}`, mimetype: mimetypeFor(extension, audio),
+        cleanup: () => fs.rm(directory, { recursive: true, force: true }) };
+    }
     return {
       buffer: await fs.readFile(file),
       title,
@@ -651,7 +680,7 @@ async function download(url, mode, options = settings()) {
       mimetype: mimetypeFor(extension, audio)
     };
   } finally {
-    await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
+    if (!handedOff) await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
   }
 }
 

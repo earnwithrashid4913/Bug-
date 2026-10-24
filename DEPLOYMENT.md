@@ -32,6 +32,13 @@ will silently start from an empty session and an empty database.
 
 ## Command media requirements
 
+Current scoped implementation/test evidence: [PLAY-VIDEO-REBUILD-REPORT.md](PLAY-VIDEO-REBUILD-REPORT.md).
+Direct links attempt bounded watch-page metadata (4 seconds / 2 MiB), without
+making it a prerequisite for download APIs. Missing metadata is labeled unknown,
+not fabricated. Native video quality lists retain their image header. Text
+compatibility uses quoted option numbers, not visible request/debug tokens.
+
+
 The regression recovery restores the historical provider chains rather than
 requiring the strict PR #61 yt-dlp adapter before any download can start:
 
@@ -111,10 +118,13 @@ Termux installation and WhatsApp delivery were not exercised in the sandbox.
   slots are shared across sockets in this bot process, not across separate workers. Temporary disk usage is
   bounded by the existing local engine and file-size checks for automatic mode;
   strict exact-quality jobs additionally use the storage watchdog. Budget six
-  times the size limit per active job plus headroom. The recovered API helper
-  buffers at most the configured size before writing the temporary file; budget
-  memory accordingly and keep the default 50 MiB on small hosts. The OS temporary
-  directory must be writable.
+  times the size limit per active job plus headroom. Recovered play/video API
+  downloads now stream into private temporary files; the local fallback hands
+  off its existing file instead of returning a whole-file Buffer. Shared legacy
+  helper callers retain their buffer API. Header/stream-marker checks read 64 KiB
+  chunks, followed by full FFmpeg decode when available. The local extractor
+  additionally watches aggregate intermediate disk use (three times the file
+  limit) and kills/cleans oversized jobs. Keep the OS temporary directory writable.
 - Use a private, authorized Netscape cookie file via `downloads.cookiesFile`
   only when appropriate. Do not commit cookies or share signed media URLs.
 - Requests expire after five minutes. `downloads.interactiveMode: 'auto'`

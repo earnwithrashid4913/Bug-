@@ -41,9 +41,29 @@ function mediaType(buffer, kind) {
     return kind === 'video' ? { ext: 'mp4', mimetype: 'video/mp4', asDocument: !(buffer.includes(Buffer.from('avc1')) && buffer.includes(Buffer.from('mp4a'))) } : { ext: 'm4a', mimetype: 'audio/mp4' };
   }
   if (buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
-    return { ext: 'webm', mimetype: kind === 'video' ? 'video/webm' : 'audio/webm', asDocument: true };
+    const matroska = buffer.includes(Buffer.from('matroska'));
+    return { ext: matroska ? 'mkv' : 'webm', mimetype: matroska ? (kind === 'video' ? 'video/x-matroska' : 'audio/x-matroska') : (kind === 'video' ? 'video/webm' : 'audio/webm'), asDocument: true };
   }
   throw new MediaError('CORRUPT', 'The provider returned unrecognized or corrupt media.');
+}
+// Inspect signatures/stream markers with bounded chunks, not fs.readFile on
+// a whole download. FFmpeg below remains the full integrity/codec validator.
+async function mediaTypeFile(file, kind, maxBytes) {
+  const stat = await fs.lstat(file);
+  if (!stat.isFile() || !stat.size) throw new MediaError('CORRUPT', 'The downloaded file is empty or invalid.');
+  if (stat.size > maxBytes) throw new MediaError('SIZE', 'The downloaded file exceeds the configured limit.');
+  const markers = ['moov', 'mdat', 'soun', 'vide', 'avc1', 'mp4a', 'OpusHead', 'matroska'];
+  const found = new Set(); let head, tail = Buffer.alloc(0), bytes = 0;
+  for await (const chunk of require('node:fs').createReadStream(file, { highWaterMark: 64 * 1024 })) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) throw new MediaError('SIZE', 'The downloaded file exceeds the configured limit.');
+    head ||= chunk.subarray(0, 512);
+    const scan = Buffer.concat([tail, chunk]);
+    for (const marker of markers) if (scan.includes(Buffer.from(marker))) found.add(marker);
+    tail = scan.subarray(-16);
+  }
+  if (!head || bytes !== stat.size) throw new MediaError('CORRUPT', 'The downloaded file changed during validation.');
+  return mediaType(Buffer.concat([head, ...[...found].map(value => Buffer.from(value))]), kind);
 }
 function redactDiagnostic(error) {
   return [error?.message || error || '', error?.code, error?.cause?.code, error?.cause?.message].filter(Boolean).join(' | ').replace(/https?:\/\/[^\s'"<>]+/gi, '[url]')
@@ -63,19 +83,33 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new MediaError('PROVIDER', 'The provider returned an invalid media URL.');
     // Reuse the existing bounded download helper, including incomplete-body,
     // idle timeout and size checks, rather than handing an unchecked URL to WA.
+    if (tools.downloadRemoteFile === net.downloadRemoteFile) {
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'anime-recovered-'));
+      const cleanup = () => fs.rm(directory, { recursive: true, force: true });
+      try {
+        const file = path.join(directory, 'source.bin');
+        await tools.downloadRemoteFile(url.href, options.maxBytes, { signal: requestOptions?.signal, file });
+        return { file, cleanup, title: result.title };
+      } catch (error) { await cleanup(); throw error; }
+    }
     const media = await tools.downloadRemoteFile(url.href, options.maxBytes, { signal: requestOptions?.signal });
     return { buffer: media.buffer, title: result.title, filename: result.filename };
   }
   async function prepare(media, info, kind, progress) {
     const buffer = media.buffer;
-    if (!Buffer.isBuffer(buffer) || !buffer.length) throw new MediaError('CORRUPT', 'The provider returned an empty file.');
-    if (buffer.length > options.maxBytes) throw new MediaError('SIZE', 'The file exceeds the configured media size limit.');
-    let type = mediaType(buffer, kind);
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'anime-recovered-'));
-    const cleanup = () => fs.rm(directory, { recursive: true, force: true });
+    if (media.file && typeof media.cleanup !== 'function') throw new MediaError('MEDIA', 'File ownership is missing.');
+    const directory = media.file ? path.dirname(media.file) : await fs.mkdtemp(path.join(os.tmpdir(), 'anime-recovered-'));
+    const cleanup = media.cleanup || (() => fs.rm(directory, { recursive: true, force: true }));
     try {
-      let file = path.join(directory, `media.${type.ext}`);
-      await fs.writeFile(file, buffer, { mode: 0o600 });
+      let type, file;
+      if (media.file) { file = media.file; type = await mediaTypeFile(file, kind, options.maxBytes); }
+      else {
+        if (!Buffer.isBuffer(buffer) || !buffer.length) throw new MediaError('CORRUPT', 'The provider returned an empty file.');
+        if (buffer.length > options.maxBytes) throw new MediaError('SIZE', 'The file exceeds the configured media size limit.');
+        type = mediaType(buffer, kind);
+        file = path.join(directory, `media.${type.ext}`);
+        await fs.writeFile(file, buffer, { mode: 0o600 });
+      }
       // No first-use binary installation or metadata extraction on a successful
       // API download. FFmpeg is optional for ordinary audio/video, as before.
       const ffmpeg = await engine.resolveFfmpeg(engine.settings({ ...overrides, autoInstall: false }));
@@ -102,20 +136,26 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
           throw new MediaError('CORRUPT', 'The downloaded media could not be decoded.');
         });
         const input = diagnostic.split('Stream mapping:')[0];
-        if (kind === 'video') type.asDocument = !(/Video: h264/.test(input) && /Audio: aac/.test(input));
+        if (kind === 'video') type.asDocument = type.ext !== 'mp4' || !(/Video: h264[^\n]*\byuv420p(?:[,(\s])/.test(input) && /Audio: aac/.test(input));
         if (kind === 'voice' && !/Audio: opus/.test(input)) throw new MediaError('CORRUPT', 'Voice conversion did not produce Opus.');
       }
       const notice = kind === 'audio' && type.ext !== 'mp3' ? `MP3 conversion unavailable; sending original ${type.ext.toUpperCase()} audio, as supported by the previous downloader.` : type.asDocument ? 'Sending the original media as a file for playback compatibility.' : undefined;
-      return { file, fileName: `${engine.safeTitle(media.title || info.title)}.${type.ext}`, ...type, notice, cleanup };
+      return { file, fileName: `${engine.safeTitle(info.metadataSource && info.metadataSource !== 'fallback' ? info.title : media.title || info.title)}.${type.ext}`, ...type, notice, cleanup };
     } catch (error) { await cleanup(); throw error; }
   }
   return {
     name: 'recovered-api-and-local',
     async inspect(input, seed = {}) {
       const url = youtubeUrl(input);
+      let metadataSource = seed.title ? 'search' : 'fallback';
+      const metadata = deps.metadata || (!deps.local && tools.youtubeMetadata);
+      if (!seed.title && metadata) {
+        try { seed = { ...seed, ...await metadata(url) }; metadataSource = 'watch-page'; }
+        catch (error) { log('metadata', { code: 'METADATA_UNAVAILABLE', diagnostic: redactDiagnostic(error) }); }
+      }
       // IMPORTANT: yt-dlp refusal is not a prerequisite for reaching an API.
       // Use existing search metadata, with honest text defaults for direct URLs.
-      return { url, title: engine.safeTitle(seed.title || 'YouTube media'),
+      return { url, metadataSource, title: engine.safeTitle(seed.title || 'YouTube media'),
         uploader: seed.author || seed.uploader || 'Unknown uploader', duration: Number(seed.duration) || 0,
         durationText: seed.length || '', thumbnail: `https://i.ytimg.com/vi/${new URL(url).searchParams.get('v')}/hqdefault.jpg`,
         audio: true, qualities: [], autoVideo: true };
@@ -124,6 +164,8 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
       // Optional feature only. Failure must leave the old auto-video route usable.
       const source = await advanced().inspect(info.url);
       info.advancedInfo = source;
+      // Successful format discovery also refreshes direct-link metadata.
+      for (const field of ['title', 'uploader', 'duration']) if (source[field]) info[field] = source[field];
       return source.qualities;
     },
     async download(info, kind, height, progress = async () => {}) {
@@ -141,7 +183,7 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
         const result = await api.aioDownload(url, requestOptions); const data = result?.data || result;
         return apiMedia({ url: api.pickUrl(data), title: api.pickTitle(data) }, requestOptions);
       }];
-      const legacy = ['local-pre61', () => kind === 'video' ? engine.downloadVideo(url, overrides) : engine.downloadAudio(url, overrides)];
+      const legacy = ['local-pre61', () => kind === 'video' ? engine.downloadVideo(url, { ...overrides, fileBacked: true }) : engine.downloadAudio(url, { ...overrides, fileBacked: true })];
       let attempts = kind === 'video' ? [...cobalt(), dcVideo, aio, legacy] : [dcAudio, ...cobalt(), legacy];
       if (deps.onlyProvider) attempts = attempts.filter(([name]) => name.startsWith(deps.onlyProvider));
       if (!attempts.length) throw new MediaError('PROVIDER', 'The selected provider does not support this media kind.');
@@ -177,4 +219,4 @@ function createRecoveredProvider(overrides = {}, deps = {}) {
     }
   };
 }
-module.exports = { createRecoveredProvider, cobaltProviders, mediaType, redactDiagnostic };
+module.exports = { createRecoveredProvider, cobaltProviders, mediaType, mediaTypeFile, redactDiagnostic };
