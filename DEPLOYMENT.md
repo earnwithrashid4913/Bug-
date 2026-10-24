@@ -36,53 +36,100 @@ will silently start from an empty session and an empty database.
 [yt-dlp](https://github.com/yt-dlp/yt-dlp). No third-party download API or API
 key is used.
 
-**Nothing has to be installed by hand.** On a fresh panel the bot provisions
-itself on the first download command:
+The repaired commands require **both yt-dlp and FFmpeg**. The existing engine
+can find tools on PATH, use `downloads.ytDlpPath` / `downloads.ffmpegPath`, or
+attempt automatic installation when `downloads.autoInstall` is true. Automatic
+installation is best-effort, **not a guarantee**: executable mounts, architecture,
+release download access and host permissions must permit it. FFmpeg is required
+to make genuine MP3/Opus and validate the full output; these commands do not
+silently relabel M4A as MP3 or WebM as MP4.
 
-1. `downloads.ytDlpPath` when it points at a real binary,
-2. `yt-dlp` on PATH,
-3. the copy already stored in `downloads.binDir`,
-4. a Python installation that already has the `yt_dlp` module,
-5. otherwise the official standalone build for this platform is downloaded once
-   into `downloads.binDir` and verified with `--version`.
+### Install and verify tools
 
-FFmpeg is handled the same way: it is taken from PATH or `downloads.ffmpegPath`,
-otherwise a static build is downloaded into `downloads.binDir`. That binary is
-what extracts MP3 and merges video, so `!play` and `!video` work out of the box.
-When FFmpeg genuinely cannot be obtained, `!play` still returns a ready-to-play
-M4A and `!video` asks for a progressive MP4 instead of failing.
-
-`downloads.binDir` defaults to `<database.dataDir>/bin`, which sits on the
-persistent disk on Render and Pterodactyl, so the binaries survive a redeploy.
-If a host cannot reach GitHub, point `ANIME_MD_YTDLP_URL` and
-`ANIME_MD_FFMPEG_URL` at a mirror, or install both packages yourself:
+Debian/Ubuntu, with a user-owned Python environment (no global pip override):
 
 ```sh
-# Debian/Ubuntu (optional — the bot installs these itself when missing)
-sudo apt-get update && sudo apt-get install -y ffmpeg
-sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-sudo chmod a+rx /usr/local/bin/yt-dlp
-yt-dlp --version
+sudo apt-get update
+sudo apt-get install -y python3-venv ffmpeg
+python3 -m venv "$HOME/.venvs/anime-media"
+"$HOME/.venvs/anime-media/bin/pip" install --upgrade 'yt-dlp[default]'
+"$HOME/.venvs/anime-media/bin/yt-dlp" --version
+ffmpeg -version
 ```
 
-Set `downloads.autoInstall` to `false` to forbid all automatic downloads.
-`downloads.maxFileSizeMb` (default 50) and `downloads.timeoutMs` (default
-180000) bound each download. Sites that demand a signed-in session can use an
-optional private Netscape cookie file through `downloads.cookiesFile`; never
-commit that file.
+Set `downloads.ytDlpPath` in `config.js` to the **absolute path** of that yt-dlp
+executable. Set `downloads.ffmpegPath` if FFmpeg is not on PATH. Keep the Python
+environment outside the repository, on executable persistent storage. The repaired adapter explicitly enables the current Node executable as
+yt-dlp's JavaScript runtime; use a current yt-dlp release supporting
+`--js-runtimes`. The verified Python `default` extra includes its matching
+`yt-dlp-ejs` challenge solver (official standalone releases bundle it). Cookies cannot bypass every bot
+check or regional/age restriction.
 
-When YouTube answers a name search with its bot check, `!play` skips the
-blocked results and can take the track from SoundCloud through the same local
-engine (no API, no key). Only a title that really matches the query is accepted,
-so the bot never sends a different song; if nothing matches, the reply explains
-that cookies are needed. Video commands stay on YouTube, because the other
-local sources carry no video.
+Termux: use native packages rather than a Linux/glibc static binary:
 
-Keep yt-dlp up to date: source sites change their internals, and an outdated
-binary is the usual reason a download starts failing. Delete `downloads.binDir`
-to force a fresh copy. The engine is **not** a fallback to a web API — when the
-binary is missing and cannot be installed, the commands say so instead of
-calling a hosted service.
+```sh
+pkg update
+pkg install nodejs-lts python ffmpeg
+python -m pip install --upgrade 'yt-dlp[default]'
+yt-dlp --version
+ffmpeg -version
+```
+
+Use the absolute paths reported by `command -v yt-dlp` and `command -v ffmpeg`
+in `config.js`, and set `downloads.autoInstall: false`. This avoids the existing
+auto-installer choosing a Linux standalone build incompatible with Android.
+Termux installation and WhatsApp delivery were not exercised in the sandbox.
+
+### Hosting, limits, and verification
+
+- Outbound access must include YouTube, its thumbnail/media CDNs, and WhatsApp.
+  Tool installation may additionally require GitHub release asset hosts / PyPI.
+- `downloads.binDir` defaults to `<database.dataDir>/bin`; keep it persistent.
+- `downloads.maxFileSizeMb` (default 50) caps final media. `downloads.timeoutMs`
+  (default 180000) bounds each subprocess and the Baileys media upload.
+- Two host-wide extraction/upload slots are used. Temporary disk usage is
+  monitored at three times the final-size limit per job (source, output and
+  merge intermediates). Budget at least six times the size limit plus operating
+  headroom for two jobs. The OS temp directory must be writable and have room.
+- Use a private, authorized Netscape cookie file via `downloads.cookiesFile`
+  only when appropriate. Do not commit cookies or share signed media URLs.
+- Requests expire after five minutes. Reply **to the media message** with its
+  number, or send the displayed request token and number. Unquoted bare numbers
+  remain reserved for existing bot menus/quizzes. Pending selections do not
+  survive a restart.
+- `play` / `video` and their search aliases open the menu. `ytmp3` / audio
+  aliases download directly after showing the thumbnail/menu. `ytmp4` / `mp4`
+  download the highest compatible available resolution, explicitly announced.
+  Choose HD VIDEO from `play` / `video` for manual resolution selection.
+- Only real H.264/AAC MP4 qualities are offered, with merging when necessary.
+  Audio is transcoded to MP3; VOICE TYPE is mono Ogg/Opus at 48 kHz.
+- A receipt is required for “Completed”. Upload acceptance alone is shown as
+  unconfirmed after a 45-second receipt wait. No upload is retried blindly.
+- Search failure can use yt-dlp's search instead of the page scraper. Download
+  failure never silently changes to another video or a SoundCloud track.
+  Existing unrelated API helpers remain intact. The provider-chain interface
+  permits trusted replacement adapters; only yt-dlp is enabled in this checkout.
+
+Run these host-side checks before connecting the bot:
+
+```sh
+npm ci
+npm run lint
+npm test
+npm run smoke
+node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' info
+node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' audio
+node scripts/youtube-check.js 'https://www.youtube.com/watch?v=BaW_jenozKc' video 144
+```
+
+The example clip's qualities can change: use the `info` output to choose an
+available height. The check deletes its temporary outputs and **does not verify
+WhatsApp delivery**. Start with `npm start`, or restart your existing supervisor
+once after deployment. Do not delete the authentication/session directory.
+Perform an actual `!play`, choose audio, video/quality and voice in WhatsApp,
+and confirm playback and receipt-confirmed completion. Keep yt-dlp current via
+the same package/install method; update the bundled auto-install copy only while
+the bot is stopped. Never delete the entire data directory to update a tool.
 
 The source-compatible `sticker` (video input), `tovid` and `sticker2vid`
 commands still require an **FFmpeg executable on PATH**, with `libwebp` and
