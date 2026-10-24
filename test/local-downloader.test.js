@@ -63,7 +63,7 @@ if (args.includes('-J')) {
 if (process.env.FAKE_FAIL === '1') { console.error(process.env.FAKE_ERROR || 'ERROR: Sign in to confirm you\\'re not a bot'); process.exit(1); }
 const format = args[args.indexOf('-f') + 1] || '';
 const relaxed = format === 'bestaudio/best' || format === '18/b' || format === 'bv*+ba/b';
-if (process.env.FAKE_FORMAT_FAIL === '1' && !relaxed) { console.error('ERROR: Requested format is not available'); process.exit(1); }
+if (process.env.FAKE_FORMAT_FAIL === '1' && !relaxed) { console.error(process.env.FAKE_FORMAT_ERROR || 'ERROR: Requested format is not available'); process.exit(1); }
 const outIndex = args.indexOf('-o');
 const template = args[outIndex + 1];
 const extract = args.includes('--extract-audio');
@@ -71,6 +71,7 @@ const ext = extract ? 'mp3' : String(format).startsWith('bestaudio') ? 'm4a' : '
 const file = template.replace('%(ext)s', ext);
 fs.writeFileSync(file, Buffer.alloc(Number(process.env.FAKE_SIZE || 16), 7));
 console.log('done');
+if (process.env.FAKE_STALL === '1') setTimeout(() => {}, 10000);
 `;
 
 function fakeBinary(name = 'yt-dlp') {
@@ -155,10 +156,16 @@ test('format selection depends on FFmpeg availability', () => {
 test('a vanished format is retried once with a relaxed selector', posixOnly, async () => {
   const bin = fakeBinary();
   const argsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'anime-md-args-')), 'args.log');
-  await withEnv({ FAKE_FORMAT_FAIL: '1', FAKE_ARGS_FILE: argsFile }, async () => {
-    const result = await downloadAudio('https://www.youtube.com/watch?v=abc123', { bin, ffmpeg: true, maxBytes: 1024 * 1024, timeoutMs: 10_000 });
-    assert.equal(result.buffer.length, 16);
-  });
+  const warning = console.warn; const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    await withEnv({ FAKE_FORMAT_FAIL: '1', FAKE_FORMAT_ERROR: 'ERROR: Requested format is not available https://cdn.example/private?token=SECRET', FAKE_ARGS_FILE: argsFile }, async () => {
+      const result = await downloadAudio('https://www.youtube.com/watch?v=abc123', { bin, ffmpeg: true, maxBytes: 1024 * 1024, timeoutMs: 10_000 });
+      assert.equal(result.buffer.length, 16);
+    });
+  } finally { console.warn = warning; }
+  assert.match(warnings.join(' '), /relaxed format/);
+  assert.doesNotMatch(warnings.join(' '), /SECRET|cdn.example/);
   const runs = fs.readFileSync(argsFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   const downloads = runs.filter((args) => args.includes('-o'));
   assert.equal(downloads.length, 2, 'one retry after the format failure');
@@ -342,4 +349,19 @@ test('a cookie-file read error is not proof that the video needs login', posixOn
       assert.doesNotMatch(error.userMessage, /requires.*session|signed.in|configure.*cookies/i); return true;
     });
   });
+});
+
+test('file-backed local download keeps the private output until caller cleanup', posixOnly, async () => {
+  const result = await downloadAudio('https://www.youtube.com/watch?v=abc123', { bin: fakeBinary(), ffmpeg: true, fileBacked: true, maxBytes: 1024, timeoutMs: 1000 });
+  assert.equal(result.buffer, undefined); assert.equal(typeof result.cleanup, 'function');
+  assert.equal(fs.statSync(result.file).size, 16);
+  await result.cleanup(); assert.equal(fs.existsSync(result.file), false);
+});
+test('local storage watchdog kills oversized in-progress output and cleans its directory', posixOnly, async () => {
+  const bin = fakeBinary(), argsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'anime-storage-')), 'args.log');
+  await withEnv({ FAKE_STALL: '1', FAKE_SIZE: '20000', FAKE_ARGS_FILE: argsFile }, async () => {
+    await assert.rejects(downloadVideo('https://www.youtube.com/watch?v=abc123', { bin, ffmpeg: false, fileBacked: true, maxBytes: 1024, timeoutMs: 5000 }), /storage size limit/);
+  });
+  const args = fs.readFileSync(argsFile, 'utf8').trim().split('\n').map(JSON.parse).find(args => args.includes('-o'));
+  assert.equal(fs.existsSync(path.dirname(args[args.indexOf('-o') + 1])), false);
 });

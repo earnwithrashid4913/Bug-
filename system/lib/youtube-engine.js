@@ -119,7 +119,7 @@ async function validateFile(file, kind, ffmpeg, options) {
   const diagnostic = await run(ffmpeg.command, ['-nostdin', '-nostats', '-v', 'info', '-xerror', '-protocol_whitelist', 'file,pipe', '-i', file,
     '-map', '0:a:0', ...(kind === 'video' ? ['-map', '0:v:0'] : ['-vn']), '-f', 'null', '-'], options);
   const input = diagnostic.split('Stream mapping:')[0];
-  const codec = kind === 'video' ? /Video: h264/ : kind === 'voice' ? /Audio: opus/ : /Audio: mp3/;
+  const codec = kind === 'video' ? /Video: h264[^\n]*\byuv420p(?:[,(\s])/ : kind === 'voice' ? /Audio: opus/ : /Audio: mp3/;
   if (!codec.test(input) || (kind === 'video' && !/Audio: aac/.test(input))) throw new MediaError('CORRUPT', 'The output codecs are not compatible with the selected WhatsApp format.');
   if (options.expectedHeight && !new RegExp(`Video: h264[^\n]*\\b\\d+x${options.expectedHeight}\\b`).test(input)) {
     throw new MediaError('QUALITY', 'The output resolution did not match the requested quality.');

@@ -19,27 +19,24 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS)
   timer.unref?.();
   // A caller-supplied signal is honoured too: either signal aborts the request.
   const upstream = options.signal;
-  const onUpstreamAbort = () => controller.abort(upstream.reason);
-  if (upstream) {
-    if (upstream.aborted) controller.abort(upstream.reason);
-    else upstream.addEventListener('abort', onUpstreamAbort, { once: true });
-  }
+  const signal = upstream ? AbortSignal.any([upstream, controller.signal]) : controller.signal;
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal });
   } catch (error) {
     // Header-phase timeout: normalise to the same readable sentence the
     // body-phase abort already carries. A caller-supplied signal that fired
     // keeps its own reason.
     if (error?.name === 'AbortError' && !upstream?.aborted) throw new Error(timeoutMessage);
     throw error;
-  } finally {
-    if (upstream) upstream.removeEventListener('abort', onUpstreamAbort);
   }
 }
 
 async function readLimitedBuffer(response, maxBytes = MAX_DOWNLOAD_BYTES, onProgress) {
   const total = Number(response.headers.get('content-length') || 0);
-  if (total > maxBytes) throw new Error(`File is too large (${Math.ceil(total / 1024 / 1024)} MB). Limit is ${Math.floor(maxBytes / 1024 / 1024)} MB.`);
+  if (total > maxBytes) {
+    await response.body?.cancel?.().catch(() => {});
+    throw new Error(`File is too large (${Math.ceil(total / 1024 / 1024)} MB). Limit is ${Math.floor(maxBytes / 1024 / 1024)} MB.`);
+  }
 
   const chunks = [];
   let size = 0;
@@ -59,6 +56,32 @@ function decodeHtmlEntities(value) {
     .replace(/&#39;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>');
+}
+
+// Best-effort watch-page metadata, never a prerequisite for the old download
+// APIs. Same canonical source/host; no new extraction provider or credentials.
+async function youtubeMetadata(input) {
+  const url = require('./youtube-engine').youtubeUrl(input);
+  const response = await fetchWithTimeout(url, { redirect: 'error', headers: { 'user-agent': 'Mozilla/5.0 ANIME-MD' } }, 4000);
+  if (!response.ok) { await response.body?.cancel(); throw new Error('Watch metadata unavailable.'); }
+  const html = (await readLimitedBuffer(response, 2 * 1024 * 1024)).toString('utf8');
+  const match = /\bytInitialPlayerResponse\s*=\s*(\{)/.exec(html);
+  if (!match) throw new Error('Watch metadata unavailable.');
+  const start = match.index + match[0].length - 1;
+  let depth = 0, quoted = false, escaped = false, data;
+  for (let i = start; i < html.length; i++) {
+    const char = html[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === '{') depth++;
+    else if (char === '}' && --depth === 0) { data = JSON.parse(html.slice(start, i + 1)); break; }
+  }
+  const detail = data?.videoDetails;
+  if (detail?.videoId !== new URL(url).searchParams.get('v') || typeof detail.title !== 'string' || !detail.title.trim()) throw new Error('Watch metadata did not match the requested video.');
+  return { title: detail.title, author: detail.author || '', duration: Number(detail.lengthSeconds) || 0 };
 }
 
 async function youtubeSearch(query, limit = 5) {
@@ -151,7 +174,7 @@ async function requestCobalt(apiBase, url, { audio = false, signal, timeoutMs = 
   throw lastError || new Error('Download service unavailable.');
 }
 
-async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES, { signal } = {}) {
+async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES, { signal, file } = {}) {
   // The request above is bounded, but the place downloads actually HANG is the
   // body read (a stalled CDN/tunnel sends headers and then goes quiet). This
   // caller owns the abort controller and re-arms an idle deadline on every
@@ -171,24 +194,42 @@ async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES, { signal }
     }, DOWNLOAD_IDLE_TIMEOUT_MS);
     idleTimer.unref?.();
   };
-  let response;
+  let response, handle, owned = false;
   armIdle();
   try {
     response = await fetch(url, { signal: controller.signal });
     if (!response.ok) throw new Error(`Download failed (${response.status}).`);
     armIdle();
-    const buffer = await readLimitedBuffer(response, maxBytes, armIdle);
+    const declared = Number(response.headers.get('content-length') || 0);
+    if (declared > maxBytes) throw new Error('Download exceeded the safe size limit.');
+    let buffer, size = 0;
+    if (file) {
+      // Caller supplies a filename in its private temporary directory. Never
+      // overwrite or delete an existing file if exclusive creation fails.
+      handle = await require('node:fs/promises').open(file, 'wx', 0o600);
+      owned = true;
+      const { Readable, Transform } = require('node:stream');
+      const gate = new Transform({ transform(chunk, encoding, callback) {
+        size += chunk.length; armIdle();
+        callback(size > maxBytes ? new Error('Download exceeded the safe size limit.') : null, chunk);
+      } });
+      await require('node:stream/promises').pipeline(Readable.from(response.body), gate, handle.createWriteStream(), { signal: controller.signal });
+    } else {
+      buffer = await readLimitedBuffer(response, maxBytes, armIdle);
+      size = buffer.length;
+    }
     // A zero-byte or truncated body would otherwise be sent to WhatsApp as an
     // unopenable file. Fail here so the user gets a message instead of a
     // corrupt attachment.
-    if (buffer.length === 0) throw new Error('The download service returned an empty file.');
-    const declared = Number(response.headers.get('content-length') || 0);
-    if (declared > 0 && buffer.length < declared) {
+    if (size === 0) throw new Error('The download service returned an empty file.');
+    if (declared > 0 && size < declared) {
       throw new Error('The download was incomplete. Please try again.');
     }
     const type = response.headers.get('content-type') || 'application/octet-stream';
-    return { buffer, type };
+    return file ? { file, bytes: size, type } : { buffer, type };
   } catch (error) {
+    await handle?.close().catch(() => {});
+    if (owned) await require('node:fs/promises').rm(file, { force: true });
     if (signal?.aborted) throw signal.reason;
     if (stalled) throw new Error('The download stalled and was stopped. Please try again.');
     // undici reports a connection dropped before the body was complete as a
@@ -200,6 +241,7 @@ async function downloadRemoteFile(url, maxBytes = MAX_DOWNLOAD_BYTES, { signal }
     if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') throw new Error('The download timed out. Please try again.');
     throw error;
   } finally {
+    await handle?.close().catch(() => {});
     clearTimeout(idleTimer);
     signal?.removeEventListener('abort', onAbort);
     // Never leak the socket when the body was not fully consumed (failed status
@@ -445,5 +487,6 @@ module.exports = {
   textToSpeech,
   translateText,
   uploadToCatbox,
-  youtubeSearch
+  youtubeSearch,
+  youtubeMetadata
 };

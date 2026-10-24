@@ -49,9 +49,9 @@ const safeError = error => ({
   AUTH: 'This source requires an authorized session. Try another accessible video.',
   // No source answered. Short and actionable, so a real host problem is not
   // hidden behind "try again shortly" forever.
-  PROVIDERS: 'No download source could deliver this video. If it keeps happening, the owner should check downloads.cookiesFile and the host diagnostics.',
-  BOT_CHECK: 'YouTube challenged this bot host. The owner can set downloads.cookiesFile to authorize downloads from this connection.',
-  NETWORK: 'The bot host could not reach the video source (network/DNS). Please try again in a moment.',
+  PROVIDERS: 'No source could deliver this video right now. Please try again later.',
+  BOT_CHECK: 'YouTube challenged this connection. Please try again later.',
+  NETWORK: 'The video source could not be reached. Please try again later.',
   TRANSIENT: 'The video source is rate-limiting or temporarily unavailable. Please try again in a minute.',
   TIMEOUT: 'The download took too long and was stopped. Please try again or pick a smaller quality.',
   CORRUPT: 'The source returned an unusable file. Please try another video or quality.',
@@ -69,7 +69,7 @@ function progressStage(text) {
   if (/^Failed/i.test(text)) return ['❌', 'Download failed'];
   if (/^Upload outcome/i.test(text)) return ['❌', 'Upload not confirmed • no automatic resend'];
   if (/Uploaded|accepted|Direct video/i.test(text)) return ['📤', 'Sent • awaiting delivery confirmation'];
-  if (/Uploading/i.test(text)) return ['📤', 'Uploading'];
+  if (/Uploading/i.test(text)) return ['📤', 'Sending'];
   return ['🎵', 'Preparing download'];
 }
 

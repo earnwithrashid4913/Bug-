@@ -31,7 +31,7 @@ async function selection(socket, ctx, { text, image, actions, token, revision, l
     try { return { message: await relay(buttons), native: true }; }
     catch { log('QUICK_REPLY_UNAVAILABLE', 'interface'); }
   }
-  try { if (mode !== 'text') return { message: await relay([single], false), native: true }; }
+  try { if (mode !== 'text') return { message: await relay([single]), native: true }; }
   catch { log('NATIVE_LIST_UNAVAILABLE', 'interface'); }
   // Media preparation can fail independently of interactive transport. Keep
   // real native controls with an explicit thumbnail warning in that case.
@@ -40,7 +40,8 @@ async function selection(socket, ctx, { text, image, actions, token, revision, l
     catch { log('TEXT_NATIVE_UNAVAILABLE', 'interface'); }
   }
   const compatibility = mode === 'text' ? 'Text selection mode.' : 'Buttons are unavailable on this connection.';
-  const fallback = `${text}\n\n${actions.map(action => `${action.value}. ${action.label}`).join('\n')}\n\n${compatibility} Reply to this message with an option, or send ${token} ${(actions.find(action => action.value === '2') || actions[0]).value}.`;
+  const reply = numbered ? 'Reply to this message with an option number.' : 'Reply to this message with “retry” to try again' + (actions.some(action => action.value === 'sources') ? ' or “sources” to choose another result.' : '.');
+  const fallback = `${text}\n\n${optionLines}\n\n${compatibility} ${reply}`;
   const sendOptions = { quoted: ctx.raw, mediaUploadTimeoutMs: 10000 };
   let message;
   if (image) {
